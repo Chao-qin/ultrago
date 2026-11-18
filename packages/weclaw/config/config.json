@@ -1,0 +1,40 @@
+{
+  "default_agent": "opencode",
+  "api_addr": "127.0.0.1:18011",
+  "agents": {
+    "claude": {
+      "type": "cli",
+      "command": "claude",
+      "model": "sonnet"
+    },
+    "codex": {
+      "type": "acp",
+      "command": "/root/.nvm/versions/node/v22.22.1/bin/codex",
+      "args": [
+        "app-server",
+        "--listen",
+        "stdio://"
+      ]
+    },
+    "copilot": {
+      "type": "acp",
+      "command": "/root/.vscode-server/data/User/globalStorage/github.copilot-chat/copilotCli/copilot",
+      "args": [
+        "--acp",
+        "--stdio"
+      ]
+    },
+    "noop": {
+      "type": "cli",
+      "command": "weclaw-noop.sh"
+    },
+    "opencode": {
+      "type": "acp",
+      "command": "opencode",
+      "args": [
+        "acp"
+      ],
+      "external_delivery": true
+    }
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "name": "@bcp/weclaw",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "WeClaw — WeChat AI agent bridge packaged as a managed sidecar + MCP tool provider for the ultrago backend.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./manager": {
+      "types": "./dist/weclaw-manager.d.ts",
+      "import": "./dist/weclaw-manager.js",
+      "default": "./dist/weclaw-manager.js"
+    },
+    "./client": {
+      "types": "./dist/weclaw-client.d.ts",
+      "import": "./dist/weclaw-client.js",
+      "default": "./dist/weclaw-client.js"
+    },
+    "./mcp": {
+      "types": "./dist/weclaw-mcp.d.ts",
+      "import": "./dist/weclaw-mcp.js",
+      "default": "./dist/weclaw-mcp.js"
+    },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "import": "./dist/config.js",
+      "default": "./dist/config.js"
+    }
+  },
+  "scripts": {
+    "install:bin": "bash scripts/install.sh",
+    "update:bin": "bash scripts/update.sh",
+    "ensure-login": "tsx src/ensure-login.ts",
+    "check-session": "tsx src/check-session.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "verify": "tsx -e \"import('./src/weclaw-manager.js').then(m => console.log(JSON.stringify(m.getManager().status(), null, 2))).catch(e => { console.error(e); process.exit(1); })\"",
+    "test": "tsx --test src/**/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

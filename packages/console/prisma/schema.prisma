@@ -1,0 +1,1031 @@
+// Prisma schema for the @bcp/console SQLite database. Stores MANAGEMENT data
+// only — playbook files still live on disk under `resource/playbooks/*.json` and are
+// read-only from the console's perspective (see filesync.service.ts).
+//
+// SQLite + WAL mode handles the "single book cannot run twice at once"
+// serialization we need: every enqueue() wraps the read-then-insert in a
+// BEGIN IMMEDIATE transaction so two concurrent trigger sources (manual /
+// schedule / API) for the SAME book can never both insert a `pending` row.
+// Different books don't contend; SQLite's writer lock is global but only
+// held for the brief transactional window, so it scales fine for a few
+// concurrent books.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Book {
+  id              String   @id @default(cuid())
+  name            String   @unique
+  description     String?
+  goal            String
+  /// Longer implementation notes behind `goal` (what/first-run notes, A/B
+  /// findings, windowing decisions). Only expanded in the detail view; lists
+  /// and search use the short `goal`. null = no notes.
+  goalDetail      String?
+  filePath        String
+  fileMtime       DateTime
+  fileHash        String
+  /// The full playbook JSON content, so the backend can execute without
+  /// reading the file. Set by FilesyncService on scan; null if the book
+  /// was created manually or the file was deleted.
+  playbookJson    String?
+  /// JSON: Array<shared ParamSpec>.
+  ///
+  /// 缓存，不是真相源：`paramSchemaRef` 存在时这一列是从 `Schema` 注册表 resolve
+  /// 出来的结果，filesync 每次扫描重算，改它不会改变任何 book 的实际契约。
+  /// 无 ref 时才回退为内联真相源（playbook 文件里的 `params` / 旧版 `paramNames`）。
+  paramSchema     String
+  /// JSON Schema fragment: the shape this book promises to produce. This is the
+  /// OUT side of the same contract `paramSchema` describes going IN — which is
+  /// what makes "can book A's output feed book B's input" a decidable question.
+  ///
+  /// 与 `paramSchema` 同样是缓存：真相源是 `outputSchemaRef`，无 ref 时才回退为
+  /// playbook 文件里内联的 `outputSchema`。
+  ///
+  /// null = the book declares no output contract (its run record IS the
+  /// product) — distinct from "{}", which promises any object.
+  outputSchema    String?
+  /// `"name@version"` —— 指向 `Schema` 注册表里这本书的入参 / 出参契约。
+  ///
+  /// 真相源是 playbook 文件里的同名字段，filesync 同步过来；上面两个内联列
+  /// （`paramSchema` / `outputSchema`）在 ref 存在时降级为「从注册表 resolve 出的缓存」。
+  ///
+  /// **版本必须钉死。** 注册表同 `name+version` 不可变（`schemas.service.ts` 拒绝
+  /// 改内容），历史 run 的契约靠这条不变量守住。改了 playbook 的 params 就把 ref
+  /// 从 `@1` 改成 `@2` 重新登记，旧 run 仍解析到 `@1`。
+  ///
+  /// null = 这本书还没收敛，仍走内联列。
+  paramSchemaRef  String?
+  outputSchemaRef String?
+  /// JSON: the book's declared delivery contract.
+  deliveriesJson  String   @default("[]")
+  stepsCount      Int
+
+  /// When false, the book is "dormant": manual runs blocked, schedules won't
+  /// fire. Per-schedule `enabled` is independent (a paused schedule on an
+  /// enabled book just stops firing, the book itself stays runnable).
+  enabled Boolean @default(true)
+  /// Comma-separated tag chips, lower-cased.
+  tags    String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  /// 逻辑删除时间，null = 未删除。列表查询默认 `WHERE deletedAt IS NULL`。
+  deletedAt DateTime?
+
+  runs      Run[]
+  schedules Schedule[]
+
+  @@index([enabled])
+  @@index([deletedAt])
+}
+
+/// An inline, user-written script that a schedule can fire as a standalone
+/// target (no Book, no Flow graph). The body runs in the SAME sandboxed
+/// interpreter the flow script-node uses (`runScriptProcess`) — reusing the
+/// console's one script execution path rather than minting a second one.
+model Script {
+  id           String  @id @default(cuid())
+  name         String
+  description  String?
+  /// "javascript" | "typescript" | "python" — P0 ships js/ts; language is
+  /// validated at the runner, and `python` is reserved but not yet executable.
+  language     String  @default("javascript")
+  /// The user-authored body. Only the body is stored; the stdin/stdout
+  /// contracts derive the wrapper (see buildScriptSource in @bcp/shared).
+  source       String  @default("")
+  /// stdin contract: JSON Schema fragment. `"null"` = no declared input.
+  inputSchema  String  @default("null")
+  /// stdout contract: JSON Schema fragment. `"null"` = any output accepted.
+  outputSchema String  @default("null")
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  /// Soft-delete time; null = live. Deleting a script disables its schedules.
+  deletedAt DateTime?
+
+  schedules Schedule[]
+  runs      Run[]
+
+  @@index([deletedAt])
+  @@index([updatedAt])
+}
+
+/// A scheduled trigger for a book. A book can have many schedules
+/// (e.g. "daily 9am" + "weekly Monday 0am"); each runs independently and
+/// keeps its own history (lastFired*) and stats. The book is the
+/// "what runs"; the schedule is "when and how it runs".
+model Schedule {
+  id String @id @default(cuid())
+
+  /// User-friendly label shown in the UI. Required — schedules without a
+  /// name become indistinguishable in lists. Default to book name on create.
+  name        String
+  /// Optional longer description ("why this schedule exists").
+  description String?
+
+  // ── 关联 ──
+  /// What this schedule fires: "book" | "flow" | "script". A schedule targets
+  /// exactly one, so the matching id column is set and the others are null.
+  targetType String  @default("book")
+  bookId     String?
+  book       Book?   @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  flowId     String?
+  flow       Flow?   @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  scriptId   String?
+  script     Script? @relation(fields: [scriptId], references: [id], onDelete: Cascade)
+  /// script target only: execution timeout ms, default 60000. flow/book reuse
+  /// the RUN's own timeout. null = use the 60s default.
+  timeoutMs  Int?
+  /// "<kind>:<id>", e.g. "book:b-1" | "flow:f-1" | "script:s-1", maintained by
+  /// SchedulesService alongside the pair above.
+  ///
+  /// It exists so the duplicate guard keeps working now that the id columns are
+  /// nullable. A unique index over nullable columns does not do what it looks
+  /// like it does — SQL treats NULLs as distinct from each other, so
+  /// (NULL, "flow-1", cron, params) could be inserted twice without ever
+  /// tripping the constraint. Rather than reason about that, the guard is put
+  /// on a column that is never null.
+  targetKey  String  @default("")
+
+  // ── 触发配置 ──
+  /// Standard 5-field cron expression (e.g. "0 9 * * *").
+  cronExpr              String
+  /// IANA timezone name, e.g. "Asia/Shanghai". Affects cron interpretation
+  /// (9am here = 9am Beijing time, not UTC).
+  timezone              String  @default("Asia/Shanghai")
+  /// "auto" | "assisted" — same semantics as Run.mode. Independent of any
+  /// other schedule on the same book.
+  mode                  String  @default("auto")
+  /// JSON of a plain Record<string,unknown> parameter map — the params passed
+  /// when this schedule fires. Stored as a string to avoid SQLite's lack of
+  /// native JSON.
+  paramsJson            String  @default("{}")
+  /// JSON: optional resolved delivery overrides for this schedule. null means
+  /// use the book's declared deliveries.
+  deliveryOverridesJson String?
+
+  // ── 状态 ──
+  /// false = paused (won't fire but is preserved). true = active.
+  enabled Boolean @default(true)
+
+  // ── 审计 ──
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  /// 逻辑删除时间，null = 未删除。列表查询默认 `WHERE deletedAt IS NULL`。
+  ///
+  /// 与 `enabled` 的分工同 Schema.active/deletedAt：`enabled=false` 是暂停
+  /// （这条排期还想要，只是先别触发），`deletedAt != null` 是删除（这条排期
+  /// 当初就不该建）。暂停的排期仍出现在列表里，删除的不出现。
+  deletedAt DateTime?
+
+  // ── 上次执行（反范式，加速列表展示） ──
+  lastFiredAt     DateTime?
+  lastFiredRunId  String?
+  lastFiredRun    Run?      @relation("ScheduleLastFiredRun", fields: [lastFiredRunId], references: [id], onDelete: SetNull)
+  /// Mirror of Run.status at the time lastFiredRun finished: "success" |
+  /// "failed" | "cancelled" | "running" | "needsConfirm" | "needsJudge" |
+  /// "escalated" | "noAction". null if never fired or Run was deleted.
+  lastFiredStatus String?
+
+  // ── 统计（反范式） ──
+  totalFired   Int @default(0)
+  totalSuccess Int @default(0)
+
+  // ── 反向关联 ──
+  runs Run[] @relation("ScheduleRuns")
+
+  /// Prevent exact duplicates: same target + same cron + same params.
+  /// Different params (or different cron) on the same target is allowed.
+  /// Keyed on `targetKey` rather than the nullable id columns — see its note.
+  @@unique([targetKey, cronExpr, paramsJson])
+  @@index([enabled])
+  @@index([bookId])
+  @@index([flowId])
+  @@index([scriptId])
+  @@index([deletedAt])
+}
+
+model Run {
+  id         String  @id @default(cuid())
+  /// Target resource. `bookId` is nullable because a run may target a script
+  /// or a flow (which have no book). Exactly one of bookId/flowId/scriptId is
+  /// set, mirroring `targetType` (`targetKey` `<kind>:<id>`). Historical runs
+  /// only ever have bookId.
+  bookId     String?
+  book       Book?   @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  flowId     String?
+  flow       Flow?   @relation(fields: [flowId], references: [id], onDelete: SetNull)
+  scriptId   String?
+  script     Script? @relation(fields: [scriptId], references: [id], onDelete: SetNull)
+  /// Denormalised from targetKey/the set id column — "book" | "flow" | "script".
+  /// Defaults to "book" for rows predating the expansion.
+  targetType String  @default("book")
+  /// "<kind>:<id>", e.g. "book:b-1" | "flow:f-1" | "script:s-1". Loose ref for
+  /// list/detail display; kept in step with the id columns at write time.
+  targetKey  String  @default("")
+
+  /// "manual" | "schedule" | "api" — note: "cron" is now "schedule".
+  trigger String
+  /// "assisted" | "auto"
+  mode    String
+
+  /// Lifecycle: pending -> queued -> starting -> running -> terminal, with
+  /// needsConfirm/needsJudge/noAction as resumable pauses.
+  status String
+
+  /// Backend start lease. `starting` is recoverable after a process crash; the
+  /// dispatcher only retries it after the lease expires.
+  startAttempts      Int       @default(0)
+  startNextAttemptAt DateTime?
+  startClaimToken    String?
+  startClaimUntil    DateTime?
+
+  /// The backend internal-runner planId. null if the run never started (still pending/queued).
+  planId                String?
+  /// Snapshot of {name: value} at trigger time — parameters can drift over runs.
+  paramsJson            String
+  /// `"name@version"` into the `Schema` registry — the contract these params
+  /// were collected under. Copied from `Book.paramSchemaRef` at enqueue.
+  ///
+  /// It replaces the old `paramsTypeJson`, which inlined a copy of
+  /// `Book.paramSchema` per run (105 rows, 9 distinct values, 11.7x redundant).
+  /// The ref is not just smaller, it is the only one of the two that keeps
+  /// working: `Book.paramSchema` is a filesync-owned cache rewritten on every
+  /// scan, so re-deriving a historical run's contract from it would let editing
+  /// a playbook rewrite what past runs meant. The registry holds `name+version`
+  /// immutable, which is what makes the pin safe to follow.
+  ///
+  /// null = the run's book had not been converged onto the registry (or the run
+  /// predates this column). Its param contract is then simply not recorded.
+  paramSchemaRef        String?
+  /// JSON: optional delivery configuration selected for this run.
+  deliveryOverridesJson String?
+  /// Canonical resolved delivery snapshot from the terminal ingest. Retries
+  /// consume this snapshot instead of re-reading current book defaults.
+  deliverySnapshotJson  String?
+
+  /// 进入队列的时刻，是**调度语义**的时间戳：dispatcher 排序、"等了多久"
+  /// 都读它，retry() 会重写它（重排到队尾），所以它不是"这行何时被创建"。
+  /// 审计用 `createdAt` —— 那个永不重写。两者初值相同但会分叉，都不冗余。
+  queuedAt   DateTime  @default(now())
+  startedAt  DateTime?
+  finishedAt DateTime?
+  durationMs Int?
+
+  errorMessage String?
+  failedStep   Int?
+
+  /// Set by the durable ingest endpoint when a terminal snapshot was accepted.
+  terminalIngestedAt DateTime?
+  /// Actual steps run (from the backend snapshot), for delivery templates.
+  ranSteps           Int?
+  /// Total steps in the book, for delivery templates.
+  totalSteps         Int?
+
+  /// 1 for the first try; bumped by retry().
+  attempt     Int     @default(1)
+  /// Previous run if this is a retry — for chain display.
+  parentRunId String?
+
+  /// Idempotency / dedup key. Two enqueues with the same (bookId, dedupeKey)
+  /// are coalesced as long as an active run for that key still exists.
+  ///
+  /// Conventions:
+  ///   - manual trigger: the console UI passes NO key (TriggerDialog.tsx sends
+  ///     `undefined`), so what makes the "Trigger" button survive double-clicks
+  ///     is the server-derived default
+  ///     `manual:<bookId>:<sha1(params)[:8]>:<5s window index>`. An API caller
+  ///     may supply its own; if it does, it wins.
+  ///   - schedule trigger: `schedule:<scheduleId>:<fireTimeMs>` — one per
+  ///     fire-time, so a missed tick that gets re-evaluated won't double-enqueue.
+  ///   - retry: NULL, not `retry:<parentRunId>`. A caller-supplied key still
+  ///     wins if one is passed (enqueue.service.ts checks that first); absent
+  ///     one, `deriveDedupeKey` returns null for a run carrying `parentRunId`,
+  ///     so a retry is deliberately never collapsed onto the attempt it retries.
+  ///     No caller does both today.
+  ///
+  /// The unique index below is what the DB actually enforces — and it is NOT
+  /// partial. Read the WARNING there before assuming a finished run frees its
+  /// key: it does not.
+  dedupeKey String?
+
+  /// Set when this run is a node inside a flow run, so the run detail page can
+  /// say "this belongs to flow X, node Y". A loose reference rather than a
+  /// foreign key: the FlowNodeRun already points here, and a second relation
+  /// between the two would make deleting either side an ordering puzzle for no
+  /// gain. With flows unused this stays null and nothing about single-book runs
+  /// changes — that is the whole cost of the feature on this table.
+  flowNodeRunId String?
+
+  /// Set when this run was triggered by a Schedule (cron-style fire). null
+  /// for manual / API / retry runs. Survives if the schedule is later
+  /// deleted (onDelete: SetNull preserves the run's history).
+  scheduleId String?
+  schedule   Schedule? @relation("ScheduleRuns", fields: [scheduleId], references: [id], onDelete: SetNull)
+
+  /// 纯审计时间戳：这一行何时被 INSERT。与上面的 `queuedAt` 并存且都不冗余 ——
+  /// `queuedAt` 是调度语义（retry 会重写它），`createdAt` 是行的出生时间，
+  /// 永不重写。要问"这次执行排了多久"读 queuedAt，要问"这条记录多老"读 createdAt。
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  /// 逻辑删除时间，null = 未删除。列表查询默认 `WHERE deletedAt IS NULL`。
+  deletedAt DateTime?
+
+  steps      StepRun[]
+  deliveries DeliveryRun[]
+
+  /// Back-relation: a Schedule.lastFiredRunId may point at this run. Prisma
+  /// needs both sides of the relation declared.
+  lastFiredFor Schedule[] @relation("ScheduleLastFiredRun")
+
+  /// A dedupeKey is taken FOREVER, not just while a run is active: the index
+  /// below has no WHERE clause, so a terminal run keeps occupying its key and a
+  /// second INSERT with the same one is refused.
+  ///
+  /// This used to open by saying the opposite — "only ACTIVE runs share a
+  /// dedupeKey, terminal runs are free to be re-inserted (e.g. the same
+  /// schedule fires next day)" — with the correction three lines below it. A
+  /// reader who stops at the first sentence gets the wrong answer, so the
+  /// sentences are the other way round now.
+  ///
+  /// WARNING: the index actually built by `0_init/migration.sql:301` is
+  /// `CREATE UNIQUE INDEX "uniq_book_active_dedupe" ON "Run"("bookId","dedupeKey")`
+  /// with NO WHERE clause, so the "terminal runs free the key"半句并未兑现 ——
+  /// 终态 run 依旧占着键位。这是一处待修的假承诺，**不要把它当范式抄**
+  /// （`uniq_active_record_source` 才是 partial index 的正确写法）。改索引本身
+  /// 需要一次 migration，超出本次改动范围。
+  @@unique([bookId, dedupeKey], name: "uniq_book_active_dedupe", map: "uniq_book_active_dedupe")
+  @@index([bookId, queuedAt])
+  @@index([targetType, queuedAt])
+  @@index([flowId])
+  @@index([scriptId])
+  @@index([status])
+  @@index([flowNodeRunId])
+  @@index([startNextAttemptAt])
+  @@index([startClaimUntil])
+  @@index([scheduleId])
+  @@index([deletedAt])
+}
+
+model StepRun {
+  id    String @id @default(cuid())
+  runId String
+  run   Run    @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  stepIndex     Int
+  goal          String
+  actionMethod  String?
+  /// JSON: the step's resolved action params (post-slot fill).
+  actionParams  String?
+  /// One-line description of which verify predicates were used.
+  verifySummary String?
+  /// pending | running | success | failed | skipped
+  status        String
+
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  durationMs   Int?
+  /// Truncated to ~4KB so the DB row stays light; full result lives in run.results.
+  valuePreview String?
+  errorMessage String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  /// 逻辑删除时间，null = 未删除。列表查询默认 `WHERE deletedAt IS NULL`。
+  deletedAt DateTime?
+
+  @@index([runId, stepIndex])
+  @@index([deletedAt])
+}
+
+/// A post-run delivery task, persisted so a crash between "run finished" and
+/// "delivered" doesn't lose it. The dispatcher re-runs pending/errored rows on
+/// the next tick (redelivery loop). One row per (run, deliveryIndex).
+model DeliveryRun {
+  id    String @id @default(cuid())
+  runId String
+  run   Run    @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  /// Position in the book's delivery list, and the key this row's payload is
+  /// read back by: the resolved delivery is `Run.deliverySnapshotJson`
+  /// [deliveryIndex]. Also a component of the Idempotency-Key.
+  ///
+  /// There is deliberately no `payloadJson` column any more. It held a second
+  /// copy of that same array element — verified byte-identical for all 31 rows
+  /// whose run has a snapshot — and the snapshot is the SSOT because it is
+  /// immutable per run. (`Book.deliveriesJson` is NOT a substitute: filesync
+  /// overwrites it on every scan, so re-deriving history from it would let
+  /// editing a playbook rewrite what a past delivery was.)
+  deliveryIndex Int
+  /// file | print | webhook | message
+  kind          String
+  /// success | failure | cancelled | any — the `on` gate at delivery time.
+  on            String
+
+  /// pending | running | ok | skipped | error
+  status         String    @default("pending")
+  detail         String?
+  attempts       Int       @default(0)
+  /// `running` is protected by a lease so a second dispatcher cannot execute
+  /// the same external delivery concurrently. Expired leases are reclaimable.
+  claimToken     String?
+  claimUntil     DateTime?
+  nextAttemptAt  DateTime?
+  lastError      String?
+  deadLettered   Boolean   @default(false)
+  /// planId:deliveryIndex — passed to webhook as Idempotency-Key.
+  idempotencyKey String?
+
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  /// 逻辑删除时间，null = 未删除。列表查询默认 `WHERE deletedAt IS NULL`。
+  deletedAt  DateTime?
+  finishedAt DateTime?
+
+  @@unique([runId, deliveryIndex])
+  @@index([status])
+  @@index([status, nextAttemptAt])
+  @@index([nextAttemptAt])
+  @@index([claimUntil])
+  @@index([deletedAt])
+}
+
+/// Distributed scheduler lease. Only one instance holds the lock at any time.
+/// `id` is always `"singleton"` — a single row, upserted atomically.
+/// `expiresAt` acts as TTL; expired leases are cleaned before each acquire.
+///
+/// 逻辑删除的**唯一例外**：本表没有 `deletedAt`（project maintainer 2026-08-28 决定）。
+///
+/// "所有表都有逻辑删除"这条统一要求对锁不成立。这是单行锁，`id` 恒为 `"singleton"`，
+/// 软删之后那一行**仍然占着这个主键**，upsert 照样命中它 —— 所以软删既释放不了锁，
+/// 也表达不了任何锁状态，纯粹是一个只会误导读者的惰性列。
+///
+/// 更危险的是它会引诱后来者在 acquire 里加 `WHERE deletedAt IS NULL`，那等于凭空
+/// 造出"锁被软删后永远无人能获取"的死锁。收益为零、风险不为零，故不加。
+///
+/// 释放锁的正确方式：让 `expiresAt` 过期，或 upsert 换 holder。
+/// `createdAt` / `updatedAt` 照常有 —— 它们是审计信息，与锁语义无冲突。
+model CronLease {
+  id         String   @id @default("singleton")
+  holder     String
+  acquiredAt DateTime
+  expiresAt  DateTime
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  // 无 deletedAt —— 见上方说明，锁不适用逻辑删除。
+}
+
+/// The registry for every JSON Schema in the system — book input/output
+/// contracts, the canonical product shape, per-platform projections of it,
+/// shop configuration, and whatever entity contracts come next.
+///
+/// Why this table exists: schemas were living in two places that could not see
+/// each other. `Book.paramSchema` / `Book.outputSchema` are inline strings, so
+/// N books declaring the same contract each store their own copy — no reuse, no
+/// way to ask "do these two agree". File-backed schemas — the .schema.json
+/// documents kept under the skills directory — were not registered anywhere at
+/// all. Neither carried a version or a pointer to the upstream authority it
+/// mirrors.
+///
+/// NOTE for future editors: triple-slash comments are copied verbatim into the
+/// JSDoc of the generated Prisma client. An asterisk immediately followed by a
+/// slash anywhere in here closes that JSDoc block early and corrupts the whole
+/// generated .d.ts. Writing a glob path is the easy way to do it by accident.
+/// The resulting errors point deep into node_modules, nowhere near the cause.
+///
+/// Referencing is deliberately LOOSE — consumers cite `name` + `version` as
+/// strings rather than holding a foreign key. Consumers are spread across many
+/// entities and across process boundaries (the Python preprocessing scripts read
+/// these schemas without touching this database at all); making each one carry
+/// an FK would let this table dictate their storage. A registry should be
+/// discoverable, not load-bearing.
+model Schema {
+  id          String  @id @default(cuid())
+  /// Stable kebab-case slug, e.g. "canonical-product", "doudian-addv2",
+  /// "shop-profile". Together with `version` this is what consumers cite.
+  name        String
+  /// Bumped on any incompatible change. Old versions stay queryable so historic
+  /// records remain interpretable under the schema they were written against.
+  version     Int     @default(1)
+  /// "canonical" — platform-neutral intermediate shape
+  /// "projection" — one platform's wire format derived from a canonical
+  /// "config" — operator-supplied settings (shop profile etc.)
+  /// "book_input" / "book_output" — a playbook's param / output contract
+  /// "entity" — anything else with a structural contract
+  /// String rather than an enum: the SQLite provider has no enum support.
+  kind        String
+  /// Domain this schema describes, e.g. "product", "book", "shop". Null for
+  /// schemas that aren't scoped to one entity.
+  entity      String?
+  /// Human-readable name, mirrored from the JSON Schema's own `title`.
+  title       String?
+  description String?
+  /// The JSON Schema document itself, verbatim.
+  jsonSchema  String
+  /// sha256 of `jsonSchema`. Lets a sync pass detect that a file-backed schema
+  /// drifted from what was registered without diffing the whole document.
+  contentHash String
+  /// Provenance: "file:<repo-relative path>" for file-backed schemas,
+  /// "inline:book:<book name>" for contracts lifted out of a playbook,
+  /// "api" for ones created through the console.
+  source      String
+  /// The external authority this schema mirrors, e.g. the Doudian
+  /// /product/addV2 documentation URL. Null when there is no upstream — the
+  /// point is that a projection schema should never be silently hand-authored.
+  ///
+  /// A "canonical" schema is BY DEFINITION ours to design, so it has no
+  /// external authority and this stays null. Pointing a canonical at one
+  /// platform's docs would quietly make it that platform's alias rather than
+  /// the neutral shape it claims to be.
+  upstreamRef String?
+  /// Internal lineage: which canonical this schema was projected from, cited
+  /// the same loose way as everything else here — "name@version", or bare
+  /// "name" for whichever version is active. Null for canonical and config
+  /// schemas, which are not derived from anything.
+  ///
+  /// Distinct from the two neighbouring fields, and the three answer different
+  /// questions: `source` is where the DOCUMENT lives, `upstreamRef` is whose
+  /// definition it MIRRORS, `derivesFrom` is which of OUR shapes it projects.
+  /// Without this, "is doudian-addv2 a projection of canonical-product" can
+  /// only be guessed at from the two rows sharing an `entity`.
+  derivesFrom String?
+  /// 退休标记 —— 与下面的 `deletedAt` 是**两件不同的事**，不要合并、不要互相替代：
+  ///
+  ///   `active = false`   →  退休：这行的内容**仍然有效**，只是不再是当前版本
+  ///                         （被 version+1 取代）。历史记录还在引用它，读取时
+  ///                         必须能解释，所以它永远查得到，只是掉出默认列表。
+  ///   `deletedAt != null`→  删除：这行**当初就不该存在**（登错库、名字打错、
+  ///                         重复登记）。它没有解释任何历史数据的义务。
+  ///
+  /// 判据一句话：**"还有数据是按它写的吗？"** —— 有 → 只能 active=false；
+  /// 没有 → 才可以 deletedAt。
+  ///
+  /// 查询侧的固定写法，别自己发挥：
+  ///   - 默认列表（选当前版本）  ：`WHERE active = 1 AND deletedAt IS NULL`
+  ///   - 解释历史数据（按 name+version 精确取）：`WHERE deletedAt IS NULL`
+  ///     —— 这里**不能**带 `active = 1`，否则老版本一退休，历史记录就变成
+  ///     不可解释的孤儿，而这恰恰是 `active` 存在的理由。
+  active      Boolean @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  /// 逻辑删除时间，null = 未删除。列表查询默认 `WHERE deletedAt IS NULL`。
+  /// 与 `active` 的分工见上 —— 退休用 active，误登记才用 deletedAt。
+  deletedAt DateTime?
+
+  @@unique([name, version])
+  @@index([kind])
+  @@index([entity])
+  @@index([active])
+  @@index([deletedAt])
+}
+
+/// A flow: an orchestration graph over ENDPOINTS. A book is one kind of
+/// endpoint (the browser-automation kind); scripts, HTTP calls, declarative
+/// transforms, deliveries and other flows are the rest. Because a flow declares
+/// its own input/output contract it satisfies the same interface an endpoint
+/// does, which is what lets one flow appear as a node inside another.
+///
+/// Unlike books, a flow lives ONLY here — there is no file on disk to sync
+/// with. A canvas edit is a high-frequency small write, and a file mirror would
+/// buy a "which side wins" problem for a portability nobody needs (project maintainer,
+/// 2026-08-26). The trade accepted with it: flow definitions are not in git, so
+/// they cannot be diffed or reviewed, and an accidental delete is a restore
+/// from a DB backup.
+model Flow {
+  id           String    @id @default(cuid())
+  /// 唯一性由部分唯一索引 `uniq_active_flow_name` 保证（见 migration.sql），约束只
+  /// 落在存活行上。用 `@unique` 时它不认软删：删掉「A」之后再建一个「A」，create 会
+  /// 撞 P2002，而 `remove()` 只写 deletedAt、不改名，那条占着名字的行在列表里又被
+  /// 正确地过滤掉了 —— 用户看到「已经有一条流程叫 A 了」却哪儿都找不到它。
+  ///
+  /// Book 没有这个毛病：它只能由 filesync 按 name upsert 产生，撞上软删行是复活而
+  /// 不是报错。Schema 也没跟着改 —— 那边的 `findUnique({ name_version })` 依赖复合
+  /// 唯一键存在，且「重新注册是否该复活软删行」是一个还没做的产品决策
+  /// （见 schemas.service.ts 的说明），不在这次改动的射程里。
+  name         String
+  description  String?
+  /// JSON: { nodes, edges, viewport } — the canvas itself, and the truth.
+  graphJson    String    @default("{\"nodes\":[],\"edges\":[]}")
+  /// JSON: ParamSpec[], summarised from the flowInput nodes. Same dialect as
+  /// `Book.paramSchema`, so ParamForm and the schedule dialog render it without
+  /// knowing a flow from a book.
+  inputSchema  String    @default("[]")
+  /// JSON Schema fragment or null, summarised from the flowOutput nodes.
+  outputSchema String?
+  enabled      Boolean   @default(true)
+  tags         String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  /// 逻辑删除时间，null = 未删除。列表查询默认 `WHERE deletedAt IS NULL`。
+  deletedAt    DateTime?
+
+  runs       FlowRun[]
+  schedules  Schedule[]
+  runRecords Run[]
+
+  @@index([name])
+  @@index([enabled])
+  @@index([deletedAt])
+}
+
+/// One execution of a flow.
+model FlowRun {
+  id     String @id @default(cuid())
+  flowId String
+  flow   Flow   @relation(fields: [flowId], references: [id], onDelete: Cascade)
+
+  /// Immutable copy of the graph as it was when this run started. Editing the
+  /// flow afterwards must not rewrite what a past run means — the same reason
+  /// Run stores paramsJson instead of re-reading the book.
+  graphSnapshot   String
+  /// manual | schedule | api | flow (a subflow node started it)
+  trigger         String
+  /// assisted | auto — passed through to every book node.
+  mode            String  @default("auto")
+  /// pending | running | success | failed | cancelled | paused
+  status          String  @default("pending")
+  paramsJson      String  @default("{}")
+  /// No `outputsJson` column: a flow run's product is a payload like any other
+  /// and lands as its own `SchemaRecord` row, keyed `source = "flow:<id>"`.
+  errorMessage    String?
+  /// Graph id of the node that ended the run, for the canvas to highlight.
+  failedNodeId    String?
+  scheduleId      String?
+  /// Set when a subflow node started this run; also the retry/resume chain.
+  parentFlowRunId String?
+
+  /// 进入队列的时刻，**调度语义**，retry/resume 会重写它。审计读 `createdAt`。
+  /// 同 Run.queuedAt 的分工，两者初值相同但会分叉，都不冗余。
+  queuedAt   DateTime  @default(now())
+  startedAt  DateTime?
+  finishedAt DateTime?
+  durationMs Int?
+
+  /// 纯审计时间戳：这一行何时被 INSERT，永不重写。与上面的 `queuedAt` 并存 ——
+  /// 问"排了多久"读 queuedAt，问"这条记录多老"读 createdAt。
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  /// 逻辑删除时间，null = 未删除。列表查询默认 `WHERE deletedAt IS NULL`。
+  deletedAt DateTime?
+
+  /// Written on every flow-run start and never used as a lookup key — despite
+  /// the name there is NO coalescing here, unlike Run.dedupeKey.
+  /// `FlowsService.trigger` does a plain `create` with no pre-insert lookup and
+  /// no P2002 catch, and the only key it ever writes is
+  /// `<trigger>:<flowId>:<Date.now()>`, unique per call by construction — so the
+  /// index can never fire and a duplicated start is never collapsed.
+  /// The index below is the same FULL unique index Run has
+  /// (`FlowRun_flowId_dedupeKey_key`, no WHERE clause); `uniq_flow_active_dedupe`
+  /// is the Prisma client alias for the compound key, not an active-only filter.
+  /// Do not rely on this column to make starting a flow idempotent.
+  dedupeKey String?
+
+  nodes FlowNodeRun[]
+
+  @@unique([flowId, dedupeKey], name: "uniq_flow_active_dedupe")
+  @@index([status])
+  @@index([flowId, queuedAt])
+  @@index([parentFlowRunId])
+  @@index([deletedAt])
+}
+
+/// One node's execution within a flow run.
+model FlowNodeRun {
+  id        String  @id @default(cuid())
+  flowRunId String
+  flowRun   FlowRun @relation(fields: [flowRunId], references: [id], onDelete: Cascade)
+
+  /// Node id within the graph snapshot.
+  nodeId         String
+  /// book | script | http | transform | flow | delivery | flowInput | flowOutput
+  nodeType       String
+  /// Which iteration a map node expanded; null for ordinary nodes. Part of the
+  /// unique key so an expanded node keeps one row per item.
+  iteration      Int?
+  /// pending | ready | running | success | failed | skipped
+  status         String  @default("pending")
+  /// For a book node: the real Run this became. The flow does not execute
+  /// books — it enqueues them and reads the result, so every existing capability
+  /// (start lease, dedupe, StepRun history, delivery retries, the run detail
+  /// page) is inherited rather than reimplemented. A deliberately loose
+  /// reference, not a foreign key: a Run outlives the flow bookkeeping and may
+  /// be cascaded away with its book.
+  runId          String?
+  /// For a subflow node: the child FlowRun. Loose for the same reason.
+  childFlowRunId String?
+
+  /// JSON: the node's resolved inputs, for audit.
+  inputJson    String?
+  /// JSON: what the node produced. Above the size threshold this holds
+  /// {"$ref":"<relative path>","bytes":N} instead of the payload, so a 2MB
+  /// product blob doesn't get re-read on every 200ms dispatcher tick.
+  outputJson   String?
+  errorMessage String?
+
+  startedAt  DateTime?
+  finishedAt DateTime?
+  durationMs Int?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  /// 逻辑删除时间，null = 未删除。列表查询默认 `WHERE deletedAt IS NULL`。
+  deletedAt DateTime?
+
+  @@unique([flowRunId, nodeId, iteration])
+  @@index([flowRunId, status])
+  @@index([runId])
+  @@index([deletedAt])
+}
+
+/// 全系统唯一的数据载荷表 —— 原先散在 7 处的载荷都收敛到这里。
+///
+/// 一行 = 一份载荷，走 JSON 分支或文件分支之一。
+///
+/// **分支判据是「字节塞不塞得进 TEXT 列」，而契约身份是另一条独立的轴。**
+/// 落地时 `runs/output-type.ts` 的 `planOutputRecord` 分开回答三个问题：
+///
+///   - 这串字节怎么解码  → `contentType`，两支都记
+///   - 它守哪一份契约    → `schemaName` / `schemaVersion`，**两支都记**
+///   - 字节存在哪        → 有契约 **且** ≤ `INLINE_OUTPUT_LIMIT`（256KB）→ `data`；
+///                        否则字节落 `resource/records/`，库里只留 `fileName` + `url`
+///   - **例外：零字节载荷一律走 `data`（存空串）**。文件支存在的意义是别把兆级
+///     内容塞进 TEXT 列，零字节没有这个问题；而 `RecordsService` 拒收空 body，
+///     真去建一个 0 字节文件反而是比空列更差的"什么都没产出"的记录。
+///
+/// 这三条轴被合并过两次，两次都被实测反例推翻（project maintainer 2026-08-28 裁决）：
+///   1. v1 拿 `contentType` 当唯一判据 → 28.6MB 的**无契约** JSON 会进 `data` 列。
+///   2. 改成「`schemaName` 非空 ⇒ `data` 支」，是同一个错误低一层再来一次：让
+///      **契约身份**决定**存储位置**，于是有 ref 的书产出多大都进 TEXT 列。
+///      反例就在本库里 —— `doudian-category-tree` 带
+///      `outputSchemaRef = book-output-nonempty-string@1`，产出 1,171,535 字节。
+/// 拆开后两条不变量同时成立：契约仍然已知（文件支照样记 `schemaName`），
+/// 兆字节仍然出得了 TEXT 列。
+///
+/// 非 JSON 天然不可能有结构契约，所以永远落在文件支 —— 走的是尺寸那条规则，
+/// 不是给它开的例外。
+///
+/// `data` 与 `url` 互斥由 DB 层 CHECK 约束保证，见本次 migration.sql ——
+/// Prisma schema 语言表达不了 CHECK，所以那段是手写的，**改这张表时别把它丢了**。
+model SchemaRecord {
+  id String @id @default(cuid())
+
+  // ── 媒体类型：两支都记，不决定存哪 ──
+  /// IANA media type，回答"这串字节怎么解码"。
+  /// **不要拿它判分支** —— 判分支的是载荷尺寸，见模型头部说明。
+  /// 实测语料里 16/18 个文件支的载荷 contentType 都是 application/json
+  /// （另 1 个 application/octet-stream、1 个 text/markdown）。口径：
+  /// `SELECT contentType, COUNT(*) FROM SchemaRecord WHERE fileName IS NOT NULL GROUP BY 1`
+  /// —— 2026-08-28 复算，原写的 14/16 两个数都偏小。
+  contentType String
+
+  // ── 契约身份：两支都记，不决定存哪 ──
+  /// 引用 Schema.name / version，不建外键（沿用本表既有的松耦合设计）。
+  ///
+  /// **不要拿它判分支。** 它非 null 只说明"这份载荷有已登记的契约"，不说明字节
+  /// 存在哪 —— 超过 `INLINE_OUTPUT_LIMIT` 的有契约载荷照样走 `url` 支，而且
+  /// `schemaName` 会照常写上。反方向也不成立：零字节载荷走 `data` 支但
+  /// `schemaName` 为 null。判分支只能看 `data`（那才是 CHECK 约束管的东西）。
+  schemaName    String?
+  schemaVersion Int?
+  /// 载荷本体，仅 `data` 支非空。互斥由本表的 CHECK 约束保证，见模型头部说明。
+  data          String?
+  /// 三态：null=无契约或未检查, "[]"=检查通过, 非空=违约但已收录。
+  ///
+  /// **两支都写**，和 `schemaName` / `schemaVersion` 一样 —— 契约这条轴整体与
+  /// 存储位置无关。校验跑的是 book 的**内联** `outputSchema`，一本书可以声明了
+  /// 出参契约却还没被收敛进注册表（六本里有四本是这个状态），所以这一列非空的
+  /// 行会明显多于 `schemaName` 非空的行。只在 `data` 支记的话，flow runner 的
+  /// "违约即致命"规则会对全系统的 run 静默失效。
+  schemaErrors  String?
+
+  // ── 文件分支 ──
+  /// resource/records/ 下的文件名 <sha256 前 16 位>-<清洗后原名>。
+  fileName String?
+  /// 下载地址 /api/records/<fileName>。文件被删后死链，这是接受的。
+  url      String?
+
+  // ── 两支共有 ──
+  /// 字节数。**故意不给默认值**，写入方必须自己算出来。
+  ///
+  /// 反面教材是已删除的 `Artifact.size`：实测库里 6 行全是 0，因为
+  /// `backend/src/delivery-executor.ts` 的 `extractArtifacts()` 直接
+  /// 硬编码 `size: 0`，两个 console 写入点又用 `a.size ?? 0` 兜了一层 ——
+  /// 于是"没人去 stat 这个文件"被静默记成了"这个文件是空的"，而这两件事
+  /// 在读侧完全无法区分。
+  ///
+  /// 注意成因是**写入路径的 0 兜底**，不是 schema 默认值：`Artifact.size`
+  /// 在 schema 和 0_init DDL 里都只是 `Int` / `INTEGER NOT NULL`，并没有
+  /// `@default(0)`。所以这里不给默认值只能挡住一半 —— 另一半得靠写入方
+  /// 别再用 `?? 0` 把"未知"翻译成 0。产出落地路径现在从磁盘实读字节
+  /// （`OutputLandingService.landArtifact`），`extractArtifacts` 报的
+  /// `size` 一概不采信 —— 这一半也补上了。
+  bytes  Int
+  /// 溯源兼幂等键。null = 手工创建（没有"重放"概念，不需要幂等）。
+  /// 机器写入必须是可重现的字符串，当前四种形态：
+  ///   "run:<runId>"                      —— 一次 book 运行的产出
+  ///   "run:<runId>:artifact:<报告相对路径>" —— 该次运行写进 reports/ 的文件；
+  ///                                        file 投递的归属校验读的就是它
+  ///   "flow:<flowRunId>"                 —— 一次 flow 运行的产出
+  ///   "file:<repo 相对路径>"              —— 仓库里已有文件的登记
+  /// 唯一性由部分唯一索引 `uniq_active_record_source` 保证（见 migration.sql）。
+  source String?
+
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([schemaName])
+  @@index([contentType])
+  @@index([source])
+  @@index([deletedAt])
+}
+
+// ==================== 文件资产（图床索引） ====================
+
+/// 图床文件索引。
+///
+/// 真相源仍然是 GitHub 仓库本身，这张表是**索引**不是存储：它存在的唯一理由
+/// 是 GitHub 的 contents API 给不了的东西——按上传时间倒序翻页、按文件名搜索、
+/// 打标签、以及"这个文件是谁在什么时候传的"。所以：
+///   - 上传成功后写一行；
+///   - 删除默认是软删（与全仓一致），`purge=true` 才真的去 GitHub 删文件；
+///   - `POST /api/files/sync` 用远端列表把缺的行补回来，用于换机器 / 清库后重建。
+model FileAsset {
+  id        String  @id @default(cuid())
+  /// 文件名（不含目录），界面显示用。
+  name      String
+  /// 仓库内的完整相对路径，例如 images/articles/2026-09/a.png。同一路径只应有
+  /// 一行活跃记录，见下面的部分唯一索引。
+  path      String
+  /// jsDelivr（或自定义域名）直链。
+  cdnUrl    String
+  /// raw.githubusercontent 直链。
+  githubUrl String
+  /// GitHub 文件页，可点开看提交历史。
+  htmlUrl   String?
+  mimeType  String
+  /// 字节数。
+  size      Int
+  /// GitHub blob sha，覆盖上传时需要它。
+  sha       String?
+  /// 来源：api（接口上传）/ upload（前端页面）/ local（upload-local）/ sync（同步补录）。
+  source    String  @default("api")
+  /// 逗号分隔标签，页面筛选用。
+  tags      String?
+
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([path])
+  @@index([createdAt])
+  @@index([deletedAt])
+}
+
+// ==================== 浏览器事件通知（backend webhook 落库） ====================
+
+/// backend 经 `BCP_EVENT_WEBHOOK` 推来的浏览器事件，落库存档。
+///
+/// 为什么要这张表：推送端（`packages/backend/src/event-webhook.ts`）是**一次投递、
+/// 无队列、无重试**的设计，理由写在那个文件头上——"撞上验证码"的价值就在当下，
+/// 十分钟后补送成功的提醒对应的验证码早过期了。那条纪律解决的是"及时"，代价是
+/// "没人接就等于没发生过"：没有 agent 连着的时候，事件连同它的截图一起蒸发。
+/// 这张表接的正是被丢掉的那一半——**事后可查**。两者不冲突：推送仍然只发一次，
+/// 这里只是让那一次有个落点。
+///
+/// 与 `Run` / `DeliveryRun` 的分工：那两张表记录**console 自己发起**的工作，
+/// 这张表记录**外部推给 console 的观测**。所以本表没有状态机、没有重试列、
+/// 没有认领字段——一条事件落库即终态，唯一会变的是"人有没有处理过它"
+/// （`acknowledgedAt`）。
+model BrowserEvent {
+  id             String    @id @default(cuid())
+  /// 事件类型，取值来自 `@bcp/shared` 的 `BrowserEventKind`
+  /// （captcha_appeared / captcha_cleared / browser_offline …）。
+  ///
+  /// 刻意**不做枚举约束**，与推送端保持同一个立场：event-webhook.ts 的文件头明说
+  /// "往 NOTIFY_KINDS 里加一种就是开始通知它所需的全部改动"。在这里加一层枚举
+  /// 会让"后端加了一种事件"变成"接收端 500"，把一个加法改成一次联动发版。
+  kind           String
+  /// 推事件的浏览器实例 id（instanceId，路由键不是展示名）。后端在 ingest 时盖章，
+  /// 所以理论上总有；仍留 nullable，因为它在 wire 类型里就是可选的。
+  browser        String?
+  /// 事件来源 tab。-1 = 不绑定 tab（browser_offline 就是 -1）。
+  tabId          Int
+  /// 事件在页面 / service worker 里**被观测到**的时刻。
+  ///
+  /// 与 `receivedAt` 是两个时钟，不要互相冒充：这个来自浏览器所在机器，
+  /// receivedAt 来自 console 进程。正常相差几十毫秒，但 SW 被回收又复活、
+  /// 或机器时钟不同步时可以差得很远，排查时序问题时差值本身就是线索。
+  /// 原始 wire 格式是 epoch ms；存成 DateTime 而不是 BigInt，是因为 BigInt
+  /// 过不了 `JSON.stringify`，会在 controller 返回时炸掉整个响应。
+  occurredAt     DateTime
+  /// 后端 EventStore 的单调序号。**只在同一个 backend 进程内有序**——backend
+  /// 重启后从头开始，所以它可以重复，不能当去重键或全局游标用。
+  seq            Int?
+  /// 一句话摘要，推送端已经渲染好，列表直接显示这个。
+  summary        String
+  /// kind 相关的结构化 detail，**原样存 JSON 文本，不拆列**。
+  /// kind 不同 detail 形状就不同（captcha 的是 CaptchaSignal，browser_offline
+  /// 几乎是空的），而推送端承诺"给 detail 加字段不需要改接收方"——拆成列就等于
+  /// 把那个承诺作废。null = 这条事件没带 detail。
+  detail         String?
+  /// 截图在 `resource/records/` 里的文件名（内容哈希前缀 + 安全名）。
+  screenshotName String?
+  /// 截图的访问路径（`/api/records/<name>`），前端直接当 img src 用。
+  ///
+  /// null 有三种原因，都不是错误：事件本就不带图（captcha_cleared /
+  /// browser_offline，推送端的 CAPTURE_KINDS 只含 captcha_appeared）、
+  /// 后端截图失败、或后端拍到的是**同窗口里另一个 tab**而主动丢弃
+  /// （宁可不给图也不给错图，见 event-webhook.ts 的 `shot.warning` 分支）。
+  screenshotUrl  String?
+  /// 人工处理过的时刻，null = 未处理。这是本表唯一会被更新的字段。
+  acknowledgedAt DateTime?
+  /// 落库时刻（console 本机时钟）。列表默认按它倒序。
+  receivedAt     DateTime  @default(now())
+  /// 逻辑删除时间，null = 未删除。列表查询默认 `WHERE deletedAt IS NULL`。
+  deletedAt      DateTime?
+
+  @@index([kind])
+  @@index([browser])
+  @@index([receivedAt])
+  @@index([acknowledgedAt])
+  @@index([deletedAt])
+}
+
+/// 网关（@bcp/llm）服务过的每一次请求。
+///
+/// 摄入口 `POST /internal/llm-calls/hook`，与 browser-events 同一形状、同一理由：
+/// 机器对机器的边界。推送端是 fire-and-forget —— 不 await、不重试，console 挂了
+/// 也绝不能让一次 LLM 调用失败。所以这张表**允许有洞**：丢几条日志无所谓，
+/// 拖慢或搞挂网关才是事故。
+model LlmCall {
+  id               String    @id @default(cuid())
+  /// 渠道 id —— 调用方在 `model` 字段里填的那个路由键。
+  channel          String
+  /// 实际服务它的适配器（openai / ollama / lmstudio / opencode / 自定义）。
+  /// 与 kind 同理**不做枚举约束**：加一个自定义适配器不应该让接收端 500。
+  adapter          String
+  /// 上游自己的模型标识，和 channel 是两回事（channel=local 时它可能是 qwen3.5:4b）。
+  model            String
+  stream           Boolean   @default(false)
+  /// "ok" | "error"。
+  status           String
+  /// 网关回给调用方的 HTTP 状态码。
+  httpStatus       Int?
+  /// invalid_request_error / upstream_error —— 对齐 OpenAI 的错误信封。
+  errorKind        String?
+  errorMessage     String?
+  /// 收到请求到响应结束的墙钟时间。
+  latencyMs        Int?
+  /// 流式首帧耗时；非流式调用为 null，**不要填 0**——0 会让 p95 失真。
+  ttfbMs           Int?
+  /// token 计数全部 nullable：不是每个上游都报 usage（opencode CLI 一个都不报）。
+  /// 缺失必须保持缺失，变成 0 会悄悄把所有均值往下拽。
+  promptTokens     Int?
+  completionTokens Int?
+  totalTokens      Int?
+  /// 截断后的请求 / 响应文本，回答「它到底说了什么」。存文本不拆结构：
+  /// 不同渠道的 body 形状不同，拆列等于给每个新适配器加一次迁移。
+  requestPreview   String?
+  responsePreview  String?
+  /// 谁打的这一发 —— 请求头 `X-BCP-Caller`，认证开启时回落到那把 key 的名字。
+  /// 这是整张表里唯一能回答「**哪条流程**在超时 / 在烧钱」的字段：channel 和
+  /// model 回答的是「打给谁」，而 captcha 校验 / 商品预处理 / console 流程三类
+  /// 调用在它之前是混在一起的。nullable：老调用方不报，不该因此被拒之门外。
+  caller           String?
+  /// 花费，单位是**货币的百万分之一**（micro）。整数而非浮点——金额求和是这张
+  /// 表最主要的聚合方式，浮点在几万行之后会开始漂。
+  /// null = 算不出来（没声明单价，或上游没报 usage），**不是 0**。
+  costMicros       Int?
+  /// 上面那个数字的货币。没有它就不能求和：USD 和 CNY 加出来的数看着完全正常
+  /// 却没有意义，而汇率不是这个系统该知道的东西。
+  costCurrency     String?
+  /// 第几次尝试（1 起）。failover 每换一条渠道就单独记一条，靠它串起来。
+  /// 不记的话，一个「一半时间 429、另一半被重试救回来」的上游看着完全健康。
+  attempt          Int?
+  /// 网关时钟。与 receivedAt 是两个时钟，不要互相冒充——差值本身是排查线索。
+  startedAt        DateTime
+  /// 落库时刻（console 本机时钟）。列表默认按它倒序。
+  receivedAt       DateTime  @default(now())
+  /// 逻辑删除时间，null = 未删除。列表默认 `WHERE deletedAt IS NULL`。
+  deletedAt        DateTime?
+
+  @@index([channel])
+  @@index([adapter])
+  @@index([status])
+  @@index([receivedAt])
+  @@index([deletedAt])
+  /// 调用方是列表和统计都会筛的维度，和 channel 同等对待。
+  @@index([caller])
+  /// 保留策略按 startedAt 删（「这次调用什么时候发生的」），不按 receivedAt。
+  @@index([startedAt])
+}

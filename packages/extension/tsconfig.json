@@ -1,0 +1,18 @@
+{
+  // Extend WXT's generated config: it wires the auto-import globals
+  // (defineBackground, browser), the srcDir path aliases, and includes the whole
+  // package. @types/chrome stays in scope (no `types` restriction) so the `cx`
+  // alias and the chrome.* type annotations keep resolving.
+  "extends": "./.wxt/tsconfig.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    // Match the pre-migration strictness (CRXJS tsconfig had neither of these);
+    // WXT turns them on by default, which would flag unrelated existing code.
+    "noUncheckedIndexedAccess": false,
+    "verbatimModuleSyntax": false,
+    "paths": {
+      "react": ["./node_modules/@types/react"],
+      "react/*": ["./node_modules/@types/react/*"]
+    }
+  }
+}

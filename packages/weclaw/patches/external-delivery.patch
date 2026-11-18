@@ -1,0 +1,118 @@
+diff --git a/cmd/start.go b/cmd/start.go
+index 48fc818..5ca1e38 100644
+--- a/cmd/start.go
++++ b/cmd/start.go
+@@ -121,6 +121,7 @@ func runStart(cmd *cobra.Command, args []string) error {
+ 			Type:    agCfg.Type,
+ 			Command: command,
+ 			Model:   agCfg.Model,
++			ExternalDelivery: agCfg.ExternalDelivery,
+ 		})
+ 		if agCfg.Cwd != "" {
+ 			workDirs[name] = agCfg.Cwd
+diff --git a/config/config.go b/config/config.go
+index 53fc148..9109b59 100644
+--- a/config/config.go
++++ b/config/config.go
+@@ -30,6 +30,7 @@ type AgentConfig struct {
+ 	APIKey       string            `json:"api_key,omitempty"`       // API key (http type)
+ 	Headers      map[string]string `json:"headers,omitempty"`       // extra HTTP headers (http type)
+ 	MaxHistory   int               `json:"max_history,omitempty"`   // max history (http type)
++	ExternalDelivery bool          `json:"external_delivery,omitempty"` // reply is delivered by an external transport
+ }
+ 
+ // BuildAliasMap builds a map from custom alias to agent name from all agent configs.
+diff --git a/messaging/handler.go b/messaging/handler.go
+index dcfee34..1f63b78 100644
+--- a/messaging/handler.go
++++ b/messaging/handler.go
+@@ -27,6 +27,7 @@ type AgentMeta struct {
+ 	Type    string // "acp", "cli", "http"
+ 	Command string // binary path or endpoint
+ 	Model   string
++	ExternalDelivery bool
+ }
+ 
+ // Handler processes incoming WeChat messages and dispatches replies.
+@@ -36,6 +37,7 @@ type Handler struct {
+ 	agents        map[string]agent.Agent // name -> running agent
+ 	agentMetas    []AgentMeta            // all configured agents (for /status)
+ 	agentWorkDirs map[string]string      // agent name -> configured/runtime cwd
++	externalDelivery map[string]bool     // agent name -> Gateway owns user-visible delivery
+ 	customAliases map[string]string      // custom alias -> agent name (from config)
+ 	factory       AgentFactory
+ 	saveDefault   SaveDefaultFunc
+@@ -49,6 +51,7 @@ func NewHandler(factory AgentFactory, saveDefault SaveDefaultFunc) *Handler {
+ 	return &Handler{
+ 		agents:        make(map[string]agent.Agent),
+ 		agentWorkDirs: make(map[string]string),
++		externalDelivery: make(map[string]bool),
+ 		factory:       factory,
+ 		saveDefault:   saveDefault,
+ 	}
+@@ -82,6 +85,10 @@ func (h *Handler) SetAgentMetas(metas []AgentMeta) {
+ 	h.mu.Lock()
+ 	defer h.mu.Unlock()
+ 	h.agentMetas = metas
++	h.externalDelivery = make(map[string]bool, len(metas))
++	for _, meta := range metas {
++		h.externalDelivery[meta.Name] = meta.ExternalDelivery
++	}
+ }
+ 
+ // SetAgentWorkDirs sets the configured working directory for each agent.
+@@ -422,8 +429,8 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ilink.Client,
+ 
+ 	ag := h.getDefaultAgent()
+ 	var reply string
++	var err error
+ 	if ag != nil {
+-		var err error
+ 		reply, err = h.chatWithAgent(ctx, ag, msg.FromUserID, text)
+ 		if err != nil {
+ 			reply = fmt.Sprintf("Error: %v", err)
+@@ -433,6 +440,10 @@ func (h *Handler) sendToDefaultAgent(ctx context.Context, client *ilink.Client,
+ 		reply = "[echo] " + text
+ 	}
+ 
++	if h.isExternalDelivery(defaultName) {
++		log.Printf("[handler] external delivery owns reply for agent %q", defaultName)
++		return
++	}
+ 	h.sendReplyWithMedia(ctx, client, msg, defaultName, reply, clientID)
+ }
+ 
+@@ -450,6 +461,10 @@ func (h *Handler) sendToNamedAgent(ctx context.Context, client *ilink.Client, ms
+ 	if err != nil {
+ 		reply = fmt.Sprintf("Error: %v", err)
+ 	}
++	if h.isExternalDelivery(name) {
++		log.Printf("[handler] external delivery owns reply for agent %q", name)
++		return
++	}
+ 	h.sendReplyWithMedia(ctx, client, msg, name, reply, clientID)
+ }
+ 
+@@ -482,12 +497,22 @@ func (h *Handler) broadcastToAgents(ctx context.Context, client *ilink.Client, m
+ 	// Send replies as they arrive
+ 	for range names {
+ 		r := <-ch
++		if h.isExternalDelivery(r.name) {
++			log.Printf("[handler] external delivery owns reply for agent %q", r.name)
++			continue
++		}
+ 		reply := fmt.Sprintf("[%s] %s", r.name, r.reply)
+ 		clientID := NewClientID()
+ 		h.sendReplyWithMedia(ctx, client, msg, r.name, reply, clientID)
+ 	}
+ }
+ 
++func (h *Handler) isExternalDelivery(name string) bool {
++	h.mu.RLock()
++	defer h.mu.RUnlock()
++	return h.externalDelivery[name]
++}
++
+ // sendReplyWithMedia sends a text reply and any extracted image URLs.
+ func (h *Handler) sendReplyWithMedia(ctx context.Context, client *ilink.Client, msg ilink.WeixinMessage, agentName, reply, clientID string) {
+ 	imageURLs := ExtractImageURLs(reply)

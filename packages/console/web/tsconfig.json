@@ -1,0 +1,35 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "useDefineForClassFields": true,
+    "allowImportingTsExtensions": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    // Pin the React type identity for this project. The workspace also contains
+    // React 19 (packages/extension, and the @prisma/studio-core iframe needs it),
+    // so pnpm hoists react@19 / @types/react@19 into node_modules/.pnpm/node_modules.
+    // antd's .d.ts resolves bare `react` from ITS OWN location, hits that hoisted
+    // copy, and ends up mixing React 19's ReactNode with our React 18 one — which
+    // surfaces as ~1255 TS2786 "cannot be used as a JSX component". mapping `react`
+    // here (paths apply to every file in the program, node_modules included) makes
+    // the whole type graph resolve React 18, matching what Vite actually bundles.
+    "paths": {
+      "react": ["./node_modules/@types/react"],
+      "react/*": ["./node_modules/@types/react/*"],
+      "react-dom": ["./node_modules/@types/react-dom"],
+      "react-dom/*": ["./node_modules/@types/react-dom/*"]
+    }
+  },
+  "include": ["src"]
+}

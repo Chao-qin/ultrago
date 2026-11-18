@@ -1,0 +1,26 @@
+{
+  "name": "@bcp/llm",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "LLM gateway: one OpenAI-protocol endpoint in front of local runtimes (Ollama / LM Studio), url+apikey vendors, and developer-written adapters. Starts with `pnpm start` and stops with `pnpm kill` (同启同关). Not an importable library — it is reached over HTTP.",
+  "type": "module",
+  "scripts": {
+    "start": "bash scripts/local-llm.sh start",
+    "stop": "bash scripts/local-llm.sh stop",
+    "status": "bash scripts/local-llm.sh status",
+    "pull": "bash scripts/local-llm.sh pull",
+    "setup": "bash scripts/local-llm.sh setup",
+    "migrate": "bash scripts/local-llm.sh migrate",
+    "ensure": "bash scripts/local-llm.sh ensure",
+    "dev": "bash scripts/local-llm.sh start",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test src/*.test.ts src/adapters/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

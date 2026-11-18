@@ -1,0 +1,2527 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    /* React 挂载前的那一帧没有 --c-* 变量可取，这里用字面量兜底——
+       值必须与 theme.tsx 的 palette.bg 同源，改色时两处一起动。 */
+    background: #05070f;
+  }
+  html[data-theme="light"] {
+    background: #f3f5fa;
+  }
+  body {
+    font-feature-settings: "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+/* Everything that used to live here as `!important` font-size patches —
+   statistic, table cell, tag, button, descriptions, timeline — is gone: they
+   were all compensating for a base `fontSize` left at antd's 14. theme.tsx sets
+   it to 13 and the component tokens carry the rest (Table.cellPadding*,
+   Card.bodyPadding, Statistic.*FontSize), so the values now live in one place
+   and the theme is actually themeable. Two rules survive, both for reasons that
+   have no token: */
+
+/* 1. Table headers want to sit a step below the body text. antd has no
+   header-font-size token, so this is CSS — but it beats antd's own
+   `.ant-table-wrapper .ant-table-thead >tr>th` on specificity (three classes to
+   its two) instead of on `!important`, which makes it deterministic rather than
+   a race with the runtime-injected stylesheet. */
+.ant-table-wrapper .ant-table-thead > tr > th.ant-table-cell {
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+/* 2. Digits in a column have to line up, and a proportional font will not do
+   that on its own. Cheap everywhere, essential in 耗时 / token / 成功率. */
+.ant-table-cell,
+.ant-statistic-content,
+.ant-pagination {
+  font-variant-numeric: tabular-nums;
+}
+
+/* All long dialogs scroll inside the dialog instead of moving the page. */
+.ant-modal .ant-modal-body {
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 12px;
+}
+
+.ant-popover.ant-popover,
+.ant-select-dropdown.ant-select-dropdown,
+.ant-dropdown.ant-dropdown {
+  max-width: calc(100vw - 24px) !important;
+  max-width: calc(100dvw - 24px) !important;
+}
+
+.ant-tooltip.ant-tooltip {
+  max-width: min(250px, calc(100dvw - 24px)) !important;
+}
+
+@media (max-width: 284px) {
+  .ant-select-dropdown.ant-select-dropdown { min-width: 0 !important; }
+}
+
+.ant-tooltip .ant-tooltip-container,
+.ant-popover .ant-popover-container,
+.ant-dropdown .ant-dropdown-menu {
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  overflow-wrap: anywhere;
+}
+
+.ant-select-dropdown .ant-select-dropdown-list-holder {
+  max-height: min(256px, calc(100dvh - 80px)) !important;
+  overscroll-behavior: contain;
+}
+
+.ant-tooltip pre,
+.ant-popover pre {
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.contract-preview.ant-popover {
+  width: 440px;
+}
+
+.contract-preview-code {
+  margin: 0;
+  max-height: min(440px, calc(100dvh - 112px));
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 10px;
+  border: 1px solid var(--c-line);
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.port-type-trigger {
+  border: 0;
+  padding: 0;
+  color: var(--c-ink-3);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.port-type-trigger:hover { color: var(--c-accent); }
+.port-type-trigger:focus-visible,
+.contract-preview-code:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 2px; }
+
+.contract-field-editor {
+  padding: 10px;
+  border: 1px solid var(--c-line);
+  border-radius: 8px;
+  background: var(--c-subtle);
+}
+.contract-field-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.contract-field-name { grid-area: 1 / 1; min-width: 0; }
+.contract-field-type { grid-area: 2 / 1; min-width: 0; width: 100%; }
+.contract-field-required { grid-area: 2 / 2; }
+.contract-field-delete { grid-area: 1 / 2; justify-self: end; }
+
+.console-content {
+  padding: 24px;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* List pages are fixed-height flex columns: toolbar and search stay pinned,
+   and the ONLY scrollbar is the table body's (PageTable feeds its height to
+   antd's scroll.y). Pages never stretch the content area anymore. */
+.page-fill {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* PageTable: the table flexes to fill the space left in the page column, and
+   ONLY the body scrolls (the header and pagination keep their natural height).
+   antd needs scroll.y truthy to render the fixed-header body division — the
+   component passes a dummy 1px — so the real sizing happens here, with max
+   height overridden. No JS measurement, no observer feedback loop. */
+.page-table-fill {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* antd v6 renders the loading wrapper as .ant-spin (v5 called it
+   .ant-spin-nested-loading) — both are covered so the flex chain from the
+   wrapper down to .ant-table-container never breaks. */
+.page-table-fill > .ant-spin,
+.page-table-fill > .ant-spin-nested-loading,
+.page-table-fill .ant-spin-container {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.page-table-fill .ant-table {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.page-table-fill .ant-table-container {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.page-table-fill .ant-table-header,
+.page-table-fill .ant-pagination {
+  flex: none;
+}
+.page-table-fill .ant-table-body {
+  flex: 1;
+  min-height: 0;
+  max-height: none !important;
+}
+
+/* 收起按钮是一条 position:fixed、48px 高的横条，钉在侧栏底部，而 antd 不给
+   内容预留这段高度——菜单最后一项（设置）就压在它下面，看起来像"菜单滚不动"。
+
+   在底部垫 padding 不解决问题：那只是把空白加在菜单**下面**，最后一项的位置
+   分毫未动，照样被盖住。要让滚动区本身就止步于触发条上沿——所以滚动的是
+   children（高度扣掉触发条），而不是 Sider 自己（它的 overflow 已改为
+   hidden，见 App.tsx）。48px 与 theme.tsx 里显式钉住的 Layout.triggerHeight
+   同源，两边不会漂。 */
+.ant-layout-sider-children {
+  height: calc(100% - 48px);
+  /* flex column：Menu 内部滚动，toggle bar 钉底可见 */
+  display: flex;
+  flex-direction: column;
+  /* 顶多 8px 让 Logo 呼吸；底不动，toggle bar 贴紧 trigger */
+  padding-top: 8px;
+  box-sizing: border-box;
+  /* 禁止横向滚动：菜单文本不会溢出，但 ::before/::after 伪元素如果太宽
+     会把容器撑出横向滚动条——这里一刀切掐掉。 */
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+
+/* 空态占满表体并居中，而不是吊在顶部、下面拖一条横线假装表格到此为止。
+   表体本来就是撑满页面的 flex 子项，这里只是让唯一那一行跟着长。
+   :has 不支持时退回原来的顶部对齐，不会坏。 */
+.page-table-fill .ant-table-body table:has(.ant-table-placeholder) {
+  height: 100%;
+}
+.page-table-fill .ant-table-placeholder > .ant-table-cell {
+  border-bottom: 0;
+  vertical-align: middle;
+}
+
+/* Typography 的省略号只约束自身；内容列里的链接也必须成为可截断的块，否则
+   超长请求会按链接的固有宽度把整列撑开。 */
+.llm-call-preview,
+.llm-call-preview > a {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Bento 栅格。
+   此前用的是 antd Row/Col：每一行都是一条独立的横带，带内卡片等高、带与带之间
+   边界对齐——那是规则栅格，读起来像一张方格表，每块都在说「我一样重要」。
+   这里改成 12 列显式网格，块跨不同的行数，于是趋势图（跨 4 行）旁边能并排两块
+   2 行的小牌子。边界互相咬合而不是对齐成横带，尺寸差本身就是「先看哪个」。
+
+   行高 92px + gap 16px 是基本单位：跨 N 行 = 92N + 16(N-1)。
+
+   **列数三档都是 12**，只换每块跨几列（--col / --col-md / --col-sm）。第一版
+   在窄屏用 `grid-column: span 6 !important` 一刀切，结果每块都变成整宽、堆成
+   一列到底——比规则栅格还差。塌缩要按块重新分配跨度，不是把所有块拉满。
+   `dense` 让小块回填大块留下的空隙，避免出现整行空白。 */
+.bento {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-auto-rows: 92px;
+  grid-auto-flow: row dense;
+  gap: 16px;
+}
+.bento > * {
+  min-width: 0;
+  min-height: 0;
+  grid-column: span var(--col);
+  grid-row: span var(--row);
+}
+/* 1200 而不是 1500：侧栏占 200px，1254px 的窗口内容区还有 ~1030px，12 列每列
+   ~72px——7 列的图仍有 600px，完全够用。断点定高了就会在还宽敞的时候提前塌成
+   横带，那正是第一版的问题。 */
+@media (max-width: 1200px) {
+  .bento > * { grid-column: span var(--col-md, var(--col)); }
+}
+@media (max-width: 820px) {
+  .bento > * { grid-column: span 12; }
+}
+
+/* 卡片撑满自己的格子，否则跨行只是留白 */
+.bento > * > .ant-card {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.bento > * > .ant-card > .ant-card-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.bento > * > a {
+  display: block;
+  height: 100%;
+}
+.bento > * > .kpi-tile,
+.bento > * > a > .kpi-tile {
+  height: 100%;
+  justify-content: center;
+}
+
+/* 段落标题：两个子系统之间的界。
+   一条水平线加一个标签——不是装饰，是告诉读的人「换话题了，下面这些指标
+   要用另一套判断去读」。 */
+.section-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 28px 0 12px;
+}
+.section-title::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--c-line);
+  transform: translateY(-3px);
+}
+.section-title-text {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  color: var(--c-ink-1);
+  flex: none;
+}
+.section-title-hint {
+  font-size: 12px;
+  color: var(--c-ink-3);
+  flex: none;
+}
+
+/* 顶部状态条：四个二元事实（后端 / 库 / 网关 / 队列）。做成一条而不是四张卡，
+   是因为它们回答的是同一个问题「现在还能不能跑」，而且答案通常全是绿的——
+   常年全绿的东西不该占据四张卡的版面，但缺了它你又不知道该不该相信下面的数字。 */
+.status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  border: 1px solid var(--c-line);
+  border-radius: 8px;
+  background: var(--c-surface);
+  padding: 2px 4px;
+}
+.status-chip {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 9px 16px;
+}
+.status-strip > .status-chip + .status-chip {
+  border-left: 1px solid var(--c-line);
+}
+.status-chip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  transform: translateY(-1px);
+}
+.status-chip-label {
+  font-size: 12.5px;
+  color: var(--c-ink-1);
+}
+.status-chip-detail {
+  font-size: 12px;
+  color: var(--c-ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 仪表盘首屏的四块。左边的色条编码严重程度——数字看清之前就能读出「要不要管」。 */
+.kpi-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 13px 16px 14px;
+  border: 1px solid var(--c-line);
+  border-left: 3px solid var(--c-line-strong);
+  border-radius: 8px;
+  background: var(--c-surface);
+  transition: border-color 0.15s ease;
+}
+a:hover > .kpi-tile {
+  border-color: var(--c-line-strong);
+}
+.kpi-tile-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--c-ink-3);
+}
+/* 数字在左、视觉在右。一排只有数字的方框要逐个读完才知道哪个要紧——
+   那是报表不是仪表盘。 */
+.kpi-tile-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.kpi-tile-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.kpi-tile-visual {
+  flex: none;
+  display: flex;
+  align-items: center;
+}
+
+/* 队列状态点：运行中呼吸，空闲静止——静止本身就是信息，所以不给它动画。 */
+.pulse-dot {
+  display: block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  margin-right: 14px;
+}
+.pulse-dot--on {
+  animation: pulse-ring 1.8s ease-out infinite;
+}
+@keyframes pulse-ring {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--c-info) 55%, transparent); }
+  70% { box-shadow: 0 0 0 10px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pulse-dot--on { animation: none; }
+}
+.kpi-tile-value {
+  font-size: 30px;
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.kpi-tile-note {
+  font-size: 12px;
+  color: var(--c-ink-2);
+}
+
+/* Book 健康度：一行一条堆叠条。表格加一列进度条读起来仍然是「逐行比数字」，
+   而这一块要回答的是「哪个在坏」——那应该一眼扫出来。 */
+.health-list {
+  display: flex;
+  flex-direction: column;
+}
+.health-row {
+  display: grid;
+  /* 名字吃剩下的全部宽度：这一列此前被固定列挤到只剩 ~80px，于是
+     doudian-publish-canonical 显示成「do…」——一个认不出是谁的行等于没有。 */
+  grid-template-columns: minmax(0, 1fr) minmax(56px, 88px) 46px 34px;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 4px;
+  border-radius: 6px;
+  color: inherit;
+}
+.health-row:hover {
+  background: var(--c-subtle);
+}
+.health-name {
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--c-ink-1);
+}
+.health-bar {
+  display: flex;
+  height: 7px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--c-line);
+}
+.health-bar > span {
+  display: block;
+  height: 100%;
+}
+.health-nums {
+  font-size: 12px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.health-rate {
+  font-size: 12px;
+  font-weight: 600;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 背景量：几乎不变、也几乎从不需要你做什么，所以收成一条而不是占一整排卡片。 */
+.stat-bar {
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: 16px;
+  padding: 2px 4px;
+  border: 1px solid var(--c-line);
+  border-radius: 8px;
+  background: var(--c-surface);
+}
+.stat-bar-item {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 9px 14px;
+}
+.stat-bar > a:not(:first-child) > .stat-bar-item,
+.stat-bar > .stat-bar-item:not(:first-child) {
+  border-left: 1px solid var(--c-line);
+}
+.stat-bar-label {
+  font-size: 12px;
+  color: var(--c-ink-3);
+}
+.stat-bar-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-ink-1);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The schema-record picker's label row (ParamForm) spreads across the whole
+   row: field name left, 选存档 right. antd renders the <label> itself as an
+   inline-flex that shrinks to its content, so `width: 100%` on an inner span
+   had nothing to fill — this upgrades ONLY the labels carrying .form-label-row
+   (via :has) to a full-width flex. */
+.ant-form-item-label > label:has(.form-label-row) {
+  display: flex;
+  width: 100%;
+}
+
+/* Runs page: Tabs sit between the toolbar and the table — the height has to
+   pass through the tab bar and the content stack. antd v6 renamed the v5
+   classes (content-holder → body-holder, content → body, tabpane → content);
+   the chain below matches the v6 DOM. */
+.page-fill .ant-tabs {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.page-fill .ant-tabs-body-holder {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.page-fill .ant-tabs-body {
+  height: 100%;
+}
+.page-fill .ant-tabs-content {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.page-fill .ant-tabs-content > .page-table-host {
+  flex: 1;
+  min-height: 0;
+}
+
+/* The 数据库 page hosts Prisma Studio, which paints its own toolbar, sidebar
+   and scroll containers — padding and an outer scrollbar would double up. */
+.console-content--flush {
+  padding: 0;
+  overflow: hidden;
+}
+
+.console-content.console-content--dashboard {
+  padding: 0;
+}
+
+.console-studio-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.console-json-block {
+  margin: 0;
+  padding: 10px 12px;
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--c-subtle);
+  border: 1px solid var(--c-line);
+  border-radius: 4px;
+  font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.console-json-editor {
+  overflow: hidden;
+  border: 1px solid var(--c-line-strong);
+  border-radius: 8px;
+  background: var(--c-subtle);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--c-surface) 45%, transparent);
+}
+.console-json-editor:focus-within {
+  border-color: var(--c-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--c-accent) 16%, transparent);
+}
+.console-json-editor--invalid {
+  border-color: var(--c-bad);
+}
+.console-json-editor__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 6px 0 10px;
+  color: var(--c-ink-3);
+  border-bottom: 1px solid var(--c-line);
+  background: color-mix(in srgb, var(--c-subtle) 72%, var(--c-bg));
+  font: 600 11px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.04em;
+}
+.console-json-editor__status {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--c-ok);
+  font-family: inherit;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.console-json-editor__status--invalid {
+  color: var(--c-bad);
+}
+.console-json-editor__toolbar .ant-btn {
+  margin-left: auto;
+  color: var(--c-ink-2);
+}
+.console-json-editor__body .cm-editor {
+  height: 100%;
+}
+.console-json-editor__body .cm-scroller {
+  overflow: auto;
+}
+.console-json-editor__loading {
+  display: grid;
+  place-items: center;
+  color: var(--c-ink-3);
+  font-size: 12px;
+}
+
+/* The dialog's one container look: a soft-bordered panel that groups a
+   control with its own sub-fields. `.delivery-card` had it to itself, which is
+   why the Attachments control — a bare picture-card tile with a full-width URL
+   row loose underneath it — read as a different design in the same dialog.
+   Shared here rather than copied so the two cannot drift apart. */
+.delivery-card,
+.attachment-card {
+  margin: 8px 0;
+  padding: 10px 12px 4px;
+  border: 1px solid var(--c-line);
+  border-radius: 6px;
+  background: var(--c-bg);
+}
+
+/* Both ways of adding an attachment live inside the card, separated by a rule
+   rather than by distance: picking a file and pasting a link produce the same
+   kind of item, so they belong in one box. */
+.attachment-card .ant-upload-list {
+  margin-bottom: 2px;
+}
+.attachment-card-alt {
+  margin-top: 2px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--c-line);
+}
+.attachment-card-hint {
+  display: block;
+  margin: 8px 0 6px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.delivery-card-header {
+  width: 100%;
+  margin-bottom: 8px;
+}
+.delivery-card-header .ant-typography {
+  font-size: 14px;
+}
+.delivery-field {
+  margin-bottom: 10px !important;
+}
+.delivery-field .ant-form-item-label {
+  padding-bottom: 3px !important;
+}
+.delivery-field .ant-form-item-label > label {
+  font-size: 12px;
+  color: var(--c-ink-2);
+}
+
+@media (max-width: 768px) {
+  .console-content {
+    padding: 16px 12px;
+  }
+  .ant-modal {
+    max-width: calc(100vw - 24px);
+    margin: 12px auto;
+  }
+
+  .ant-modal .ant-modal-content {
+    padding: 16px;
+  }
+
+  .ant-table-wrapper {
+    overflow-x: auto;
+  }
+}
+
+/* ==========================================================================
+   Mission Control 设计系统层 —— 让每一页都长在指挥舱里
+   ==========================================================================
+   上一轮只翻了底色；这一层补齐仪表盘有而列表页没有的东西：氛围背景、
+   玻璃卡片、HUD 页头、发光状态、入场动效。全部挂在 .console-content / antd
+   类名上（选择器至少三类，稳压 antd 的 css-in-js），页面代码零改动。
+   ========================================================================== */
+
+/* ── 氛围：静态极光 + 网格坐标纸 ───────────────────────────────
+   比仪表盘的动态极光淡一档——列表页的主角是数据，氛围只负责衬底。 */
+.console-content {
+  position: relative;
+}
+.console-content::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(1000px 460px at 50% 0%, rgba(0, 0, 0, 0.9), transparent 80%);
+}
+.console-content::after {
+  content: "";
+  position: absolute;
+  top: -160px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 900px;
+  height: 380px;
+  pointer-events: none;
+  background:
+    radial-gradient(closest-side, rgba(56, 189, 248, 0.07), transparent 70%),
+    radial-gradient(closest-side at 70% 40%, rgba(139, 92, 246, 0.05), transparent 70%);
+}
+/* 内容整体抬到氛围层之上（教训同仪表盘：不能给伪元素以外的孩子乱设定位，
+   这里只用 relative + z-index，flex 布局不受影响）。 */
+.console-content > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* ── 页面入场：一次轻微上浮，路由切换时重放 ─────────────────── */
+@keyframes page-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.console-content > * {
+  animation: page-rise 0.38s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .console-content > * { animation: none; }
+}
+
+/* ── HUD 页头 ─────────────────────────────────────────────── */
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+  padding-left: 14px;
+  position: relative;
+}
+.page-header::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--c-accent), transparent 130%);
+  box-shadow: 0 0 14px -2px var(--c-accent);
+}
+.page-header-title {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  line-height: 1.3;
+  color: var(--c-ink-1);
+}
+.page-header-subtitle {
+  margin-top: 2px;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--c-ink-3);
+}
+
+/* ── 玻璃卡片 ─────────────────────────────────────────────── */
+.console-content .ant-card {
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  backdrop-filter: blur(6px);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.console-content .ant-card:hover {
+  border-color: rgba(34, 211, 238, 0.24);
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.06), 0 14px 40px -22px rgba(34, 211, 238, 0.28);
+}
+.console-content .ant-card .ant-card-head {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.console-content .ant-card .ant-card-head-title {
+  letter-spacing: 0.04em;
+  font-size: 13px;
+  color: var(--c-ink-2);
+}
+
+/* ── 表格：HUD 化 ─────────────────────────────────────────── */
+.console-content .ant-table-wrapper .ant-table-thead > tr > th.ant-table-cell {
+  background: transparent;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  font-size: 11px;
+  color: var(--c-ink-3);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+.console-content .ant-table-tbody > tr > td {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+}
+/* 选中/半透明行的底色跟着走 */
+.console-content .ant-table-cell.row-selected::before,
+.console-content .ant-table-tbody > tr.ant-table-row-selected > td {
+  background: rgba(34, 211, 238, 0.07) !important;
+}
+
+/* 固定列必须是实色——HUD 表头本来是 transparent，但 sticky 的固定列如果
+   也透明，横向滚动时其它列的内容会从它下面穿帮。--c-table-bg 等于表格
+   容器底色，和非固定单元格透过透明背景看到的颜色一致，所以没有接缝。
+   hover/选中态由 antd 在固定单元格上叠的 ::before 负责，不冲突。
+   antd v6 用逻辑属性 fix-start/fix-end（旧版是 fix-left/fix-right）。 */
+.console-content .ant-table-cell.ant-table-cell-fix-left,
+.console-content .ant-table-cell.ant-table-cell-fix-right,
+.console-content .ant-table-cell.ant-table-cell-fix-start,
+.console-content .ant-table-cell.ant-table-cell-fix-end {
+  background: var(--c-table-bg) !important;
+}
+
+/* ── 行内操作按钮：带底色 + icon 的统一药丸 ────────────────── */
+/* 替代之前 type="text" 的裸文字按钮。底色用 accent 的低浓度 tint，
+   危险操作用 bad 色的 tint。圆角小、内边距紧，在固定列里不占宽度。 */
+.row-action-btn.ant-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: color-mix(in srgb, var(--c-accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--c-accent) 22%, transparent);
+  color: var(--c-ink-2);
+  border-radius: 6px;
+  padding: 0 8px;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.row-action-btn.ant-btn:hover {
+  background: color-mix(in srgb, var(--c-accent) 20%, transparent);
+  border-color: color-mix(in srgb, var(--c-accent) 38%, transparent);
+  color: var(--c-ink-1);
+}
+.row-action-btn.ant-btn-dangerous {
+  background: color-mix(in srgb, var(--c-bad) 12%, transparent);
+  border-color: color-mix(in srgb, var(--c-bad) 28%, transparent);
+  color: var(--c-bad);
+}
+.row-action-btn.ant-btn-dangerous:hover {
+  background: color-mix(in srgb, var(--c-bad) 22%, transparent);
+  border-color: color-mix(in srgb, var(--c-bad) 42%, transparent);
+  color: var(--c-bad);
+}
+.row-action-btn.ant-btn[disabled],
+.row-action-btn.ant-btn[disabled]:hover {
+  background: transparent;
+  border-color: var(--c-line);
+  color: var(--c-ink-3);
+}
+
+/* ── 状态药丸（RunStatusTag）──────────────────────────────── */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1.5px 10px 1.5px 8px;
+  border-radius: 999px;
+  border: 1px solid;
+  font-size: 12px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+.status-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+.status-pill-dot.live {
+  animation: pill-pulse 2s ease-in-out infinite;
+}
+@keyframes pill-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 currentColor; opacity: 1; }
+  50% { box-shadow: 0 0 0 4px transparent; opacity: 0.6; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .status-pill-dot.live { animation: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   侧栏 Mission Control —— 深空指挥舱入口
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── 1. 侧栏容器：呼吸式渐变 + 径向光晕 ──────────────── */
+.ant-layout-sider {
+  border-right: none !important;
+}
+.console-layout .ant-layout-sider {
+  position: relative;
+  /* 去掉分段，用 800px 超长过渡 + 径向光晕叠层，让背景不是"从上往下变"而是"中心向外晕"
+     顶略亮、底略暗，但过渡距离很长，肉眼捕捉不到渐变在哪个位置发生 */
+  background:
+    radial-gradient(ellipse 140% 60% at 50% 0%, #101a30 0%, transparent 55%),
+    linear-gradient(180deg, #0c1222 0%, #090e1c 50%, #060913 100%) !important;
+}
+/* 右侧描边 —— 进一步淡化 + 加宽扩散（更柔） */
+.console-layout .ant-layout-sider::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 1px;
+  background: linear-gradient(
+    180deg,
+    rgba(34, 211, 238, 0.12) 0%,
+    rgba(34, 211, 238, 0.04) 40%,
+    rgba(255, 255, 255, 0.02) 100%
+  );
+  pointer-events: none;
+}
+
+/* ── 2. 侧栏背景层：极弱网格 + 顶部柔光 ───────────────── */
+.console-layout .ant-layout-sider::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  /* 网格浓度砍半：2.5% → 1.2%，从"坐标纸"变成"极细颗粒感" */
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.013) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.013) 1px, transparent 1px);
+  background-size: 36px 36px;
+  /* mask 也做长距离淡出，避免底部出现一条明显的"网格消失线" */
+  mask-image: linear-gradient(180deg, rgba(0,0,0,0.45) 0%, rgba(0,0,0,0.15) 50%, transparent 85%);
+}
+
+/* Logo 区柔光 —— 范围扩大 + 浓度减半，从"极光"变成"晨曦微露" */
+.console-layout .ant-layout-sider .ant-layout-sider-children::before {
+  content: "";
+  position: absolute;
+  top: -60px;
+  left: -60px;
+  right: -60px;
+  height: 280px;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse at 35% 15%, rgba(34, 211, 238, 0.06), transparent 65%),
+    radial-gradient(ellipse at 65% 40%, rgba(139, 92, 246, 0.04), transparent 60%),
+    radial-gradient(ellipse at 50% 0%, rgba(255, 255, 255, 0.015), transparent 70%);
+  z-index: 0;
+}
+.ant-layout-sider-children {
+  position: relative;
+  z-index: 1;
+}
+
+/* ── 3. Logo 区域：柔和玻璃 + 多层 box-shadow 发光 ─────── */
+.console-layout .ant-layout-sider > .ant-layout-sider-children > div:first-child {
+  position: relative;
+  margin: 16px 16px 8px;
+  padding: 14px 12px;
+  /* 容器底色比之前再透一点，让它更"浮"在渐变之上而不是"贴"在上面 */
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  backdrop-filter: blur(12px);
+  /* 四层叠加但每一层都极低浓度：
+     1) 最内层 accent 辉光（border 大小）—— 非常淡
+     2) 中层柔光晕（大扩散）—— 主辉光来源
+     3) 外层全局环境光（超大扩散）—— 给容器"呼吸空间"
+     4) 内侧顶高光 —— 体积感
+     核心思路：多层叠加比单层高浓度柔和，每一层都几乎看不见，但叠在一起就有了 */
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--c-accent) 12%, transparent),
+    0 6px 24px -8px color-mix(in srgb, var(--c-accent) 18%, transparent),
+    0 16px 48px -16px color-mix(in srgb, var(--c-accent) 10%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  overflow: hidden;
+}
+/* Logo 内部柔光条 —— 顶部一条渐变高光，给容器加一点"体积感" */
+.console-layout .ant-layout-sider > .ant-layout-sider-children > div:first-child::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 20%;
+  right: 20%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.14), transparent);
+  pointer-events: none;
+}
+/* Logo 呼吸光点 —— 辉光进一步柔化，浓度全降 */
+.console-layout .ant-layout-sider > .ant-layout-sider-children > div:first-child::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 16px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--c-accent);
+  transform: translateY(-50%);
+  box-shadow:
+    0 0 0 0 color-mix(in srgb, var(--c-accent) 35%, transparent),
+    0 0 6px color-mix(in srgb, var(--c-accent) 25%, transparent),
+    0 0 14px -2px color-mix(in srgb, var(--c-accent) 15%, transparent);
+  animation: logo-pulse 3.6s ease-in-out infinite;
+}
+.console-brand-name {
+  min-width: 0;
+  padding-right: 26px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@keyframes logo-pulse {
+  0%, 100% {
+    opacity: 0.85;
+    box-shadow:
+      0 0 0 0 color-mix(in srgb, var(--c-accent) 35%, transparent),
+      0 0 6px color-mix(in srgb, var(--c-accent) 25%, transparent),
+      0 0 14px -2px color-mix(in srgb, var(--c-accent) 15%, transparent);
+  }
+  50% {
+    opacity: 0.45;
+    box-shadow:
+      0 0 0 3px transparent,
+      0 0 10px color-mix(in srgb, var(--c-accent) 20%, transparent),
+      0 0 18px -4px color-mix(in srgb, var(--c-accent) 10%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .console-layout .ant-layout-sider > .ant-layout-sider-children > div:first-child::after {
+    animation: none;
+  }
+}
+
+/* ── 4. Menu 主体：flex 填充剩余空间 + 自己滚 ─────────── */
+.console-layout .ant-menu {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  background: transparent !important;
+  padding: 6px 10px 12px !important;
+}
+
+/* ── 5. 分组标题：渐变分隔线 ──────────────────────────── */
+.console-layout .ant-menu-item-group > .ant-menu-item-group-title {
+  position: relative;
+  padding: 22px 14px 6px 14px !important;
+  font-size: 10.5px !important;
+  font-weight: 600;
+  letter-spacing: 0.14em !important;
+  text-transform: uppercase;
+  color: rgba(138, 146, 167, 0.6) !important;
+  background: transparent !important;
+}
+.console-layout .ant-menu-item-group > .ant-menu-item-group-title::before {
+  content: "";
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  top: 14px;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.08) 30%,
+    rgba(255, 255, 255, 0.12) 50%,
+    rgba(255, 255, 255, 0.08) 70%,
+    transparent 100%
+  );
+}
+/* 第一组不要顶部分隔线 */
+.console-layout .ant-menu-item-group:first-child > .ant-menu-item-group-title::before {
+  display: none;
+}
+.console-layout .ant-menu-item-group:first-child > .ant-menu-item-group-title {
+  padding-top: 10px !important;
+}
+
+/* ── 6. 菜单项：基础态 ────────────────────────────────── */
+/* ── 6. 菜单项：基础态 —— 全程用 --c-ink-*，日夜自动换 ── */
+.console-layout .ant-menu .ant-menu-item {
+  position: relative;
+  height: 36px !important;
+  line-height: 36px !important;
+  margin: 2px 0 !important;
+  padding: 0 12px !important;
+  border-radius: 8px !important;
+  color: var(--c-ink-2) !important;
+  font-weight: 450;
+  transition:
+    color 0.2s ease,
+    background-color 0.2s ease,
+    box-shadow 0.2s ease,
+    transform 0.15s ease !important;
+}
+.console-layout .ant-menu .ant-menu-item .ant-menu-item-icon {
+  font-size: 15px;
+  color: var(--c-ink-3);
+  transition: color 0.2s ease, transform 0.2s ease;
+}
+
+/* ── 7. 菜单项：悬停态 ────────────────────────────────── */
+.console-layout .ant-menu .ant-menu-item:hover {
+  color: var(--c-ink-1) !important;
+}
+html[data-theme="dark"] .console-layout .ant-menu .ant-menu-item:hover {
+  background: rgba(255, 255, 255, 0.04) !important;
+}
+html[data-theme="light"] .console-layout .ant-menu .ant-menu-item:hover {
+  background: rgba(0, 0, 0, 0.045) !important;
+}
+.console-layout .ant-menu .ant-menu-item:hover .ant-menu-item-icon {
+  color: var(--c-accent);
+  transform: scale(1.08);
+}
+
+/* ── 8. 菜单项：选中态 —— 辉光胶囊 ────────────────────── */
+.console-layout .ant-menu .ant-menu-item-selected {
+  color: var(--c-ink-1) !important;
+  font-weight: 600;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--c-accent) 18%, #1a2540) 0%,
+    color-mix(in srgb, var(--c-accent) 6%, transparent) 100%
+  ) !important;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--c-accent) 30%, transparent),
+    0 4px 20px -8px color-mix(in srgb, var(--c-accent) 50%, transparent) !important;
+}
+/* 选中项左侧发光条 —— 渐变，不是硬切 */
+.console-layout .ant-menu .ant-menu-item-selected::before {
+  content: "";
+  position: absolute;
+  left: -2px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 18px;
+  border-radius: 0 3px 3px 0;
+  background: linear-gradient(180deg, var(--c-accent), color-mix(in srgb, var(--c-accent) 40%, transparent));
+  box-shadow: 0 0 10px 0 var(--c-accent);
+}
+.console-layout .ant-menu .ant-menu-item-selected .ant-menu-item-icon {
+  color: var(--c-accent);
+  transform: scale(1.1);
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--c-accent) 50%, transparent));
+}
+
+/* ── 9. 收起后的紧凑态 ────────────────────────────────── */
+.console-layout .ant-layout-sider-collapsed .ant-menu {
+  padding: 4px 4px 12px !important;
+}
+.console-layout .ant-layout-sider-collapsed .ant-menu .ant-menu-item {
+  justify-content: center;
+  padding: 0 !important;
+  width: 100% !important;
+  margin: 3px 0 !important;
+  height: 38px;
+  line-height: 38px;
+}
+.console-layout .ant-layout-sider-collapsed > .ant-layout-sider-children > div:first-child {
+  height: 38px !important;
+  margin: 7px 6px 10px;
+  padding: 0;
+  border-radius: 10px;
+}
+.console-layout .ant-layout-sider-collapsed .ant-menu .ant-menu-item-selected::before {
+  left: -4px;
+}
+
+/* ── 10. 收起按钮：科技感胶囊 ─────────────────────────── */
+.console-layout .ant-layout-sider-trigger {
+  position: relative;
+  background: rgba(255, 255, 255, 0.02) !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.06) !important;
+  color: rgba(138, 146, 167, 0.8) !important;
+  transition: color 0.2s ease, background 0.2s ease;
+}
+.console-layout .ant-layout-sider-trigger:hover {
+  color: var(--c-accent) !important;
+  background: rgba(34, 211, 238, 0.06) !important;
+}
+
+/* ── 11. 侧栏入场动画 ────────────────────────────────── */
+@keyframes sider-slide-in {
+  from { opacity: 0; transform: translateX(-12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes menu-item-pop {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.console-layout .ant-menu-item-group {
+  animation: sider-slide-in 0.4s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+.console-layout .ant-menu-item-group:nth-child(1) { animation-delay: 0.05s; }
+.console-layout .ant-menu-item-group:nth-child(2) { animation-delay: 0.12s; }
+.console-layout .ant-menu-item-group:nth-child(3) { animation-delay: 0.19s; }
+.console-layout .ant-menu-item-group:nth-child(4) { animation-delay: 0.26s; }
+@media (prefers-reduced-motion: reduce) {
+  .console-layout .ant-menu-item-group { animation: none; }
+}
+
+/* ── 滚动条：所有滚动容器共用一套低对比但易抓取的轨道 ─────── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--c-ink-3) 48%, transparent) transparent;
+}
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  min-height: 28px;
+  background: color-mix(in srgb, var(--c-ink-3) 48%, transparent);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--c-accent) 62%, var(--c-ink-3));
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ── 主按钮辉光 / 链接悬停辉光 ────────────────────────────── */
+.ant-btn-primary:not(:disabled) {
+  box-shadow: 0 0 18px -8px color-mix(in srgb, var(--c-accent) 80%, transparent);
+}
+.ant-btn-primary:not(:disabled):hover {
+  box-shadow: 0 0 22px -6px color-mix(in srgb, var(--c-accent) 90%, transparent);
+}
+.console-content a:hover {
+  text-shadow: 0 0 14px color-mix(in srgb, var(--c-accent) 55%, transparent);
+}
+
+/* ── 弹层：深空玻璃（夜模式） ───────────────────────────────── */
+html[data-theme="dark"] .ant-modal .ant-modal-content {
+  background: #0d1322;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 24px 80px -24px rgba(0, 0, 0, 0.8);
+}
+html[data-theme="dark"] .ant-drawer .ant-drawer-content {
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* ── 弹层：日模式覆盖（亮底 + 轻描边） ─────────────────────── */
+html[data-theme="light"] .ant-modal .ant-modal-content {
+  background: #FFFFFF;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 12px 48px -12px rgba(0, 0, 0, 0.15);
+}
+html[data-theme="light"] .ant-drawer .ant-drawer-content {
+  border-left: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+/* ── Dropdown / Select / Cascader 等下挂弹层 ───────────────── */
+html[data-theme="dark"] .ant-dropdown .ant-dropdown-menu,
+html[data-theme="dark"] .ant-select-dropdown,
+html[data-theme="dark"] .ant-cascader-panel {
+  background: #0d1322;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow: 0 12px 40px -12px rgba(0, 0, 0, 0.7);
+}
+html[data-theme="light"] .ant-dropdown .ant-dropdown-menu,
+html[data-theme="light"] .ant-select-dropdown,
+html[data-theme="light"] .ant-cascader-panel {
+  background: #FFFFFF;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 6px 20px -6px rgba(0, 0, 0, 0.12);
+}
+
+/* ── Segmented / Alert / Tag 微调日模式 ────────────────────── */
+html[data-theme="light"] .ant-segmented {
+  background: rgba(0, 0, 0, 0.04);
+}
+html[data-theme="light"] .ant-segmented-item-selected {
+  background: #FFFFFF;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+/* ── 药丸化 Tag ──────────────────────────────────────────── */
+.console-content .ant-tag {
+  border-radius: 999px;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   日模式覆盖层 —— 所有写死了 dark 字面量的地方都在这里替换
+   用 [data-theme="light"] 挂在 <html> 上，与 theme.tsx 的
+   root.dataset.theme = mode 同源。
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── 侧栏：深空渐变 → 冷白渐变 ───────────────────────────── */
+html[data-theme="light"] .console-layout .ant-layout-sider {
+  background: linear-gradient(180deg, #FAFBFD 0%, #F3F5FA 50%, #ECEFF5 100%) !important;
+}
+/* 右侧发光描边 → 日模式不需要 glow，换成细灰分割线 */
+html[data-theme="light"] .console-layout .ant-layout-sider::after {
+  background: rgba(0, 0, 0, 0.06);
+  width: 1px;
+  box-shadow: none;
+}
+/* 网格 + 极光 → 日模式淡化到几乎看不见 */
+html[data-theme="light"] .console-layout .ant-layout-sider::before {
+  background-image:
+    linear-gradient(rgba(0, 0, 0, 0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 0, 0, 0.02) 1px, transparent 1px);
+  mask-image: linear-gradient(180deg, rgba(0,0,0,0.3), transparent 70%);
+}
+/* Logo 区极光光晕 → 日模式换成极淡的 accent 色晕 */
+html[data-theme="light"] .console-layout .ant-layout-sider .ant-layout-sider-children::before {
+  background:
+    radial-gradient(ellipse at 35% 15%, color-mix(in srgb, var(--c-accent) 5%, transparent), transparent 65%),
+    radial-gradient(ellipse at 65% 40%, rgba(0, 0, 0, 0.02), transparent 60%);
+}
+
+/* ── Logo 容器：辉光 box-shadow → 日模式换成实心白 + 细描边 ─ */
+html[data-theme="light"] .console-layout .ant-layout-sider > .ant-layout-sider-children > div:first-child {
+  background: #FFFFFF;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.04),
+    0 4px 16px -8px rgba(0, 0, 0, 0.08);
+}
+html[data-theme="light"] .console-layout .ant-layout-sider > .ant-layout-sider-children > div:first-child::before {
+  background: linear-gradient(90deg, transparent, rgba(0, 0, 0, 0.06), transparent);
+}
+/* Logo 呼吸光点 → 日模式下保留但辉光强度减半 */
+html[data-theme="light"] .console-layout .ant-layout-sider > .ant-layout-sider-children > div:first-child::after {
+  box-shadow:
+    0 0 0 0 color-mix(in srgb, var(--c-accent) 40%, transparent),
+    0 0 6px color-mix(in srgb, var(--c-accent) 25%, transparent),
+    0 0 12px -2px color-mix(in srgb, var(--c-accent) 15%, transparent);
+}
+
+/* ── 菜单选中态：辉光胶囊 → 日模式换成淡 accent 底 + 细边 ── */
+html[data-theme="light"] .console-layout .ant-menu .ant-menu-item-selected {
+  background: color-mix(in srgb, var(--c-accent) 10%, transparent) !important;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-accent) 25%, transparent) !important;
+}
+html[data-theme="light"] .console-layout .ant-menu .ant-menu-item-selected::before {
+  box-shadow: 0 0 6px 0 color-mix(in srgb, var(--c-accent) 40%, transparent);
+}
+html[data-theme="light"] .console-layout .ant-menu .ant-menu-item-selected .ant-menu-item-icon {
+  filter: none;
+}
+/* 悬停态 → 日模式更淡 */
+html[data-theme="light"] .console-layout .ant-menu .ant-menu-item:hover {
+  background: rgba(0, 0, 0, 0.035) !important;
+}
+
+/* ── 分组标题分隔线 ──────────────────────────────────────── */
+html[data-theme="light"] .console-layout .ant-menu-item-group > .ant-menu-item-group-title::before {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(0, 0, 0, 0.06) 30%,
+    rgba(0, 0, 0, 0.1) 50%,
+    rgba(0, 0, 0, 0.06) 70%,
+    transparent 100%
+  );
+}
+
+/* ── 收起按钮 ──────────────────────────────────────────── */
+html[data-theme="light"] .console-layout .ant-layout-sider-trigger {
+  background: rgba(0, 0, 0, 0.015) !important;
+  border-top: 1px solid rgba(0, 0, 0, 0.06) !important;
+  color: rgba(0, 0, 0, 0.55) !important;
+}
+html[data-theme="light"] .console-layout .ant-layout-sider-trigger:hover {
+  background: color-mix(in srgb, var(--c-accent) 8%, transparent) !important;
+}
+
+/* ── 内容区：极光 + 网格 → 淡化 ─────────────────────────── */
+html[data-theme="light"] .console-content::before {
+  background-image:
+    linear-gradient(rgba(0, 0, 0, 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 0, 0, 0.018) 1px, transparent 1px);
+  mask-image: radial-gradient(900px 400px at 50% 0%, rgba(0, 0, 0, 0.4), transparent 80%);
+}
+html[data-theme="light"] .console-content::after {
+  background:
+    radial-gradient(closest-side at 50% 30%, color-mix(in srgb, var(--c-accent) 8%, transparent), transparent 60%);
+}
+
+/* ── 玻璃卡片 → 日模式换成实心白 + 细描边 ──────────────── */
+html[data-theme="light"] .console-content .ant-card {
+  background: #FFFFFF;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+html[data-theme="light"] .console-content .ant-card:hover {
+  border-color: color-mix(in srgb, var(--c-accent) 30%, transparent);
+  box-shadow: 0 2px 8px -4px rgba(0, 0, 0, 0.12), 0 6px 20px -16px color-mix(in srgb, var(--c-accent) 30%, transparent);
+}
+html[data-theme="light"] .console-content .ant-card .ant-card-head {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+/* ── 表格 HUD 头部 → 日模式更淡 ────────────────────────── */
+html[data-theme="light"] .console-content .ant-table-wrapper .ant-table-thead > tr > th.ant-table-cell {
+  color: var(--c-ink-3);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+html[data-theme="light"] .console-content .ant-table-tbody > tr > td {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.045);
+}
+html[data-theme="light"] .console-content .ant-table-cell.row-selected::before,
+html[data-theme="light"] .console-content .ant-table-tbody > tr.ant-table-row-selected > td {
+  background: rgba(0, 0, 0, 0.04) !important;
+}
+
+/* ── 主按钮辉光 → 日模式更克制 ─────────────────────────── */
+html[data-theme="light"] .ant-btn-primary:not(:disabled) {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+html[data-theme="light"] .ant-btn-primary:not(:disabled):hover {
+  box-shadow: 0 2px 6px -1px rgba(0, 0, 0, 0.15);
+}
+html[data-theme="light"] .console-content a:hover {
+  text-shadow: none;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ── 状态栏 / KPI 卡片 / stat-bar ──────────────────────── */
+html[data-theme="light"] .status-strip,
+html[data-theme="light"] .stat-bar {
+  background: #FFFFFF;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+html[data-theme="light"] .kpi-tile {
+  background: #FFFFFF;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-left-color: rgba(0, 0, 0, 0.15);
+}
+html[data-theme="light"] a:hover > .kpi-tile {
+  border-color: rgba(0, 0, 0, 0.15);
+}
+html[data-theme="light"] .health-row:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+html[data-theme="light"] .page-header::before {
+  background: linear-gradient(180deg, var(--c-accent), transparent 100%);
+  box-shadow: none;
+}
+
+/* ── status-pill（RunStatusTag）→ 日模式更克制 ────────── */
+html[data-theme="light"] .status-pill {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   日 / 夜切换条
+   ═══════════════════════════════════════════════════════════ */
+.theme-toggle-bar {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  margin: 0 12px 12px;
+  padding: 3px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  backdrop-filter: blur(8px);
+}
+.theme-toggle-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 0;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: rgba(169, 180, 201, 0.55);
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+.theme-toggle-btn .anticon {
+  font-size: 13px;
+}
+.theme-toggle-btn:hover {
+  color: var(--c-ink-1);
+}
+.theme-toggle-btn.active {
+  color: var(--c-ink-1);
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--c-accent) 35%, transparent),
+    0 0 12px -4px color-mix(in srgb, var(--c-accent) 45%, transparent);
+}
+.theme-toggle-btn.active .anticon {
+  color: var(--c-accent);
+}
+/* ── 日模式覆盖 ───────────────────────────────────────── */
+html[data-theme="light"] .theme-toggle-bar {
+  background: rgba(0, 0, 0, 0.035);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+html[data-theme="light"] .theme-toggle-btn {
+  color: rgba(0, 0, 0, 0.45);
+}
+html[data-theme="light"] .theme-toggle-btn:hover {
+  color: rgba(0, 0, 0, 0.7);
+}
+html[data-theme="light"] .theme-toggle-btn.active {
+  background: #FFFFFF;
+  color: var(--c-ink-1);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--c-accent) 30%, transparent),
+    0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   FlowRunDetail 详情页 —— 时间线驱动 · 专业级信息架构
+   结构：Hero → 流程产出 → [执行时间线 | 检视面板]
+
+   这一页做成「应用外壳」而不是一篇长文：整页不滚动，滚动发生在时间线和检视
+   面板内部。原因是量出来的 —— 12 个节点时时间线有 1340px 高，而右侧面板只有
+   608px，右边的空洞读起来像布局塌了；产出卡片在 3 种状态 × 3 种视口的 6 次
+   测量里**每次都落在首屏之外**，而它是这条运行的结果。锁成定高以后，产出与
+   结论始终在首屏，时间线自己滚。
+
+   高度能定住是因为 `.console-content` 本身就是确定高度（= 视口）的
+   `overflow: auto` 容器，`height: 100%` 有得可算；窗口过矮时 min-height 兜底，
+   退化回整页滚动。
+   ═══════════════════════════════════════════════════════════════════ */
+
+.frd-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  height: 100%;
+  min-height: 660px;
+}
+
+/* ── Hero 状态横幅（一行）────────────────────────────────────── */
+.frd-hero {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--c-line);
+  border-radius: 12px;
+  background: var(--c-surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+.frd-hero-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.frd-hero-top {
+  padding: 8px 16px 0;
+  justify-content: space-between;
+}
+.frd-hero-main {
+  padding: 6px 16px 14px;
+  justify-content: space-between;
+}
+.frd-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--c-ink-3);
+  font-size: 12px;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+.frd-back:hover { color: var(--c-accent); }
+
+.frd-hero-title-block { min-width: 0; flex-shrink: 0; }
+.frd-hero-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--c-ink-1);
+  letter-spacing: -0.2px;
+  line-height: 1.3;
+}
+.frd-hero-id {
+  font-size: 11px !important;
+  color: var(--c-ink-3) !important;
+  margin-top: 2px;
+  display: block;
+}
+
+/* 紧凑 inline 统计 */
+/* 靠右、紧挨状态徽章。原先在剩余空间里居中，而左侧标题块只占 216px，于是这一组
+   被推到整条横幅中心偏左，两边留下两个不等宽的空白 —— 看着像没对齐。靠右以后
+   「这次运行的事实」（谁触发/何时/多久）和它的结论（状态）挨在一起。 */
+.frd-hero-stats-inline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  justify-content: flex-end;
+  min-width: 0;
+  flex-wrap: wrap;
+  padding-right: 6px;
+}
+.frd-stat-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--c-ink-3);
+  white-space: nowrap;
+}
+/* 图标跟标签同色。三个一模一样的强调色图标不携带任何信息，只会让顶栏看起来
+   到处都在发亮 —— 这条横幅里唯一有资格用颜色的东西是状态徽章。 */
+.frd-stat-inline .anticon { font-size: 13px; color: var(--c-ink-3); }
+.frd-stat-inline b { color: var(--c-ink-1); font-weight: 600; font-variant-numeric: tabular-nums; }
+.frd-stat-sep {
+  width: 1px;
+  height: 12px;
+  background: var(--c-line);
+}
+
+/* 状态徽章 */
+.frd-hero-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 13px 5px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--tone) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tone) 35%, transparent);
+  flex-shrink: 0;
+}
+/* 呼吸灯只给还在推进的状态。终态用静止的点 —— 一个一直脉冲的「已取消」是在说
+   「它还在动」，那是假消息，而 2s 一次的循环动画还会一直占着合成层。 */
+.frd-status-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--tone);
+  flex-shrink: 0;
+}
+.frd-status-pulse.is-live { animation: frd-pulse 2s infinite; }
+@keyframes frd-pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--tone) 60%, transparent); }
+  70% { box-shadow: 0 0 0 6px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.frd-status-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tone);
+  letter-spacing: 0.3px;
+}
+
+/* ── 主网格：时间线 + 检视面板 ───────────────────────────────── */
+/* 两列都撑满行高（默认 stretch），各自内部滚动 —— 面板不再是一张悬在顶部的
+   小卡片、下面留一片空白。 */
+.frd-main-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ── 执行时间线 ──────────────────────────────────────────────── */
+.frd-timeline {
+  position: relative;
+  padding-left: 4px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.frd-timeline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 2px 10px 30px;
+  flex-shrink: 0;
+}
+.frd-timeline-title {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--c-ink-1);
+}
+.frd-timeline-count {
+  font-size: 11px;
+  color: var(--c-ink-3);
+}
+/* 滚动层与导轨层必须分开：导轨是 `.frd-tl-list::before` 上的绝对定位元素，
+   如果让 `.frd-tl-list` 自己滚，`top:6px/bottom:6px` 会按**容器可视高度**解析，
+   于是一往下滚导轨就跟着走光。多包一层以后导轨挂在内容高度上，随内容滚动。 */
+.frd-tl-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.frd-tl-list {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+/* 垂直导轨 */
+.frd-tl-list::before {
+  content: "";
+  position: absolute;
+  left: 14px;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  background: linear-gradient(to bottom, var(--c-line) 0%, var(--c-line) 100%);
+  border-radius: 2px;
+}
+
+/* 单个时间线节点 */
+.frd-tl-item {
+  position: relative;
+  display: flex;
+  gap: 12px;
+  padding: 4px 0 4px 0;
+}
+.frd-tl-rail {
+  position: relative;
+  width: 30px;
+  flex-shrink: 0;
+  display: flex;
+  justify-content: center;
+  padding-top: 14px;
+}
+.frd-tl-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--c-surface);
+  border: 2px solid var(--dot-color, var(--c-ink-3));
+  flex-shrink: 0;
+  z-index: 1;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+/* 填充 + 光环给「正在跑或刚失败」的节点（它需要被一眼看到），但**闪动只给正在跑的**：
+   失败是终态，一个永远脉冲的红点等于在说「它还在动」。 */
+.frd-tl-item.is-active .frd-tl-dot {
+  background: var(--dot-color, var(--c-info));
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--dot-color, var(--c-info)) 18%, transparent);
+}
+.frd-tl-item.is-running .frd-tl-dot {
+  animation: frd-dot-pulse 2s infinite;
+}
+@keyframes frd-dot-pulse {
+  0%, 100% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--dot-color) 18%, transparent); }
+  50% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--dot-color) 8%, transparent); }
+}
+.frd-tl-item.is-done .frd-tl-dot {
+  background: var(--dot-color, var(--c-ok));
+}
+.frd-tl-item.is-failed .frd-tl-dot {
+  background: var(--c-bad);
+  border-color: var(--c-bad);
+}
+.frd-tl-item.is-skipped .frd-tl-dot {
+  border-style: dashed;
+}
+
+/* 节点卡片 */
+.frd-tl-card {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--c-line);
+  border-radius: 10px;
+  background: var(--c-surface);
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+.frd-tl-card:hover {
+  border-color: color-mix(in srgb, var(--c-accent) 45%, var(--c-line));
+  box-shadow: 0 3px 12px -6px rgba(0, 0, 0, 0.12);
+  transform: translateY(-1px);
+}
+.frd-tl-item.is-failed .frd-tl-card {
+  border-color: color-mix(in srgb, var(--c-bad) 40%, var(--c-line));
+  background: color-mix(in srgb, var(--c-bad) 4%, var(--c-surface));
+}
+.frd-tl-item.is-running .frd-tl-card {
+  border-color: color-mix(in srgb, var(--c-info) 40%, var(--c-line));
+  background: color-mix(in srgb, var(--c-info) 4%, var(--c-surface));
+}
+/* 选中必须放在状态之后：它只接管左侧那条竖条，其余边框与底色继续由状态说话。
+   以前它在前、且顺手给整条卡叠了一层强调色的外发光，而 `.is-failed` 的
+   `border-color` 简写会把 border-left 的颜色一并染红 —— 于是「选中的失败节点」
+   就变成红框配青色光晕，两种颜色在讲两件不相干的事。 */
+.frd-tl-item.is-selected .frd-tl-card {
+  border-left: 3px solid var(--c-accent);
+  padding-left: 12px;
+}
+
+.frd-tl-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.frd-tl-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.frd-tl-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-ink-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.frd-tl-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.frd-tl-duration {
+  font-size: 11px;
+  color: var(--c-ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.frd-tl-card-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.frd-tl-card-note {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--c-ink-2);
+}
+.frd-tl-card-note.is-error { color: var(--c-bad); }
+
+/* 节点展开内容（子阶段/分支条件） */
+.frd-tl-extra {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--c-line);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ── 详情面板（右侧，sticky）─────────────────────────────────── */
+/* ── 检视面板（节点详情 / 业务诊断）────────────────────────────── */
+/* 撑满行高、内部滚动。原来的 `position: sticky + max-height: calc(100vh - 32px)`
+   是套从没生效的 hack：面板高度恒等于自身内容（188~608px，远小于 868px 的上限），
+   所以既没贴住也没填满，只是把右侧留白。 */
+.frd-detail {
+  border: 1px solid var(--c-line);
+  border-radius: 12px;
+  background: var(--c-surface);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.frd-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--c-line);
+  background: var(--c-subtle);
+  flex-shrink: 0;
+}
+.frd-detail-title {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--c-ink-1);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.frd-detail-body {
+  padding: 14px 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.frd-detail-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--c-ink-3);
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  margin: 0 0 6px;
+}
+.frd-detail-meta-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  font-size: 12px;
+}
+.frd-detail-meta-grid dt {
+  color: var(--c-ink-3);
+  white-space: nowrap;
+}
+.frd-detail-meta-grid dd {
+  margin: 0;
+  color: var(--c-ink-1);
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── 诊断摘要（flow 编辑器「执行监控」侧栏）─────────────────────
+   这套样式原本挂在 `.flow-run-summary` 上，组件改用 `frd-` 前缀后没跟着搬
+   过来，面板一度变成裸排版。这里补回容器本身，内容块复用下面的诊断样式。 */
+.frd-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 12px;
+  border: 1px solid var(--flow-border, var(--c-line));
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+.frd-summary p,
+.frd-summary ul { margin-block: 4px; }
+.frd-summary ul { padding-inline-start: 20px; }
+.frd-summary > .ant-btn { align-self: flex-start; max-width: 100%; white-space: normal; height: auto; min-height: 24px; }
+
+/* ── 业务诊断（详情面板默认视图）──────────────────────────────── */
+.frd-diag-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  /* `1 0 auto`：内容矮时撑满面板高度，让底部的「技术状态 / 下载诊断归档」贴到
+     面板底边；内容高时按内容走（不缩），由面板自身滚动。 */
+  flex: 1 0 auto;
+}
+/* 折叠过来的运行级错误：以前它是一条横跨整页的独立横幅，跟失败节点卡片和右侧
+   面板说的是同一句话。现在它是面板里的一块，外观上刻意比业务结论轻一档。 */
+.frd-diag-error {
+  border-left: 3px solid var(--c-bad);
+  background: color-mix(in srgb, var(--c-bad) 7%, transparent);
+  border-radius: 6px;
+  padding: 9px 12px;
+}
+.frd-diag-error-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--c-bad);
+  margin-bottom: 4px;
+}
+.frd-diag-error-head code {
+  font-weight: 400;
+  background: color-mix(in srgb, var(--c-bad) 12%, transparent);
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: 10px;
+}
+.frd-diag-error-body {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--c-ink-2);
+  overflow-wrap: anywhere;
+}
+.frd-diag-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--tone) 8%, transparent);
+  border-left: 3px solid var(--tone);
+}
+.frd-diag-banner-icon { font-size: 18px; color: var(--tone); flex-shrink: 0; margin-top: 1px; }
+.frd-diag-banner-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+.frd-diag-banner-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.frd-diag-banner-label {
+  font-size: 10px;
+  color: var(--c-ink-3);
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.frd-diag-banner-value {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--c-ink-1);
+}
+.frd-diag-banner-reason {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--c-ink-2);
+}
+.frd-diag-missing ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  color: var(--c-ink-2);
+  font-size: 13px;
+}
+.frd-diag-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 12px;
+  color: var(--c-ink-2);
+}
+.frd-diag-links code {
+  background: var(--c-subtle);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+/* ── 阶段耗时（时间线内嵌 + 详情面板通用）────────────────────── */
+.frd-timing-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.frd-timing-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.frd-timing-head span:first-child {
+  font-weight: 600;
+  color: var(--c-ink-1);
+  font-size: 12px;
+}
+.frd-timing-total {
+  font-size: 11px;
+  color: var(--c-ink-3);
+  font-variant-numeric: tabular-nums;
+}
+/* 总览：先给结论，再给逐条明细。调试「为什么跑了 8 分钟」时，先要知道谁是
+   大头、有没有阶段挂了、以及各条占比为什么加不到 100%。 */
+.frd-timing-overview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 12px;
+  margin-top: -2px;
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+.frd-timing-ov-slowest {
+  color: var(--c-accent);
+  font-weight: 600;
+}
+.frd-timing-ov-bad { color: var(--c-bad); font-weight: 600; }
+.frd-timing-ov-hint {
+  color: var(--c-ink-3);
+  cursor: help;
+  border-bottom: 1px dotted color-mix(in srgb, var(--c-ink-3) 55%, transparent);
+}
+.frd-timing-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.frd-timing-row {
+  display: grid;
+  grid-template-columns: minmax(0, 122px) minmax(0, 1fr) 78px;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 0;
+}
+/* 失败只在这一行「左侧描一道红」+ 行首红点 + 失败徽章上体现，条形本身仍然
+   只讲耗时 —— 否则一条 250 秒的成功阶段和一条 250 秒的失败阶段会长得几乎
+   一样，红色反而盖掉了真正要比较的东西。 */
+.frd-timing-row.is-failed {
+  box-shadow: inset 2px 0 0 var(--c-bad);
+  padding-left: 6px;
+}
+.frd-timing-row.is-slowest .frd-timing-name { color: var(--c-ink-1); font-weight: 500; }
+.frd-timing-name {
+  font-size: 11px;
+  color: var(--c-ink-2);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+}
+.frd-timing-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.frd-timing-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.frd-timing-failed-tag {
+  font-size: 9px;
+  padding: 0 4px;
+  height: 14px;
+  line-height: 14px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--c-bad) 14%, transparent);
+  color: var(--c-bad);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.frd-timing-bar {
+  height: 8px;
+  background: var(--c-subtle);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.frd-timing-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.5s ease;
+}
+.frd-timing-ms {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.2;
+  gap: 1px;
+}
+.frd-timing-pct {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--c-ink-1);
+  font-variant-numeric: tabular-nums;
+}
+.frd-timing-ms-val {
+  font-size: 10px;
+  color: var(--c-ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 分支条件（时间线内嵌 + 详情面板通用）────────────────────── */
+.frd-branch {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.frd-branch-label {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-ink-1);
+}
+.frd-branch-port {
+  margin: 0;
+  font-size: 12px;
+  color: var(--c-ink-2);
+}
+.frd-condition {
+  background: var(--c-subtle);
+  border: 1px solid var(--c-line);
+  border-left: 2px solid var(--cond-tone, var(--c-line));
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.frd-condition-path {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.frd-condition-path code {
+  font-size: 11px;
+  background: var(--c-surface);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--c-ink-1);
+}
+.frd-condition-op {
+  font-size: 11px;
+  color: var(--c-accent);
+  font-weight: 600;
+}
+.frd-condition-value,
+.frd-condition-right {
+  font-size: 12px;
+  color: var(--c-ink-2);
+  min-width: 0;
+}
+.frd-condition-tag {
+  align-self: flex-start;
+  font-size: 10px !important;
+  padding: 0 6px !important;
+  height: 18px !important;
+  line-height: 16px !important;
+}
+.frd-operand { min-width: 0; max-width: 100%; }
+.frd-operand > summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--c-ink-3);
+}
+.frd-operand code {
+  background: var(--c-surface);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+/* ── 诊断预览 / 下载 ─────────────────────────────────────────── */
+.frd-preview { min-width: 0; }
+.frd-preview > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--c-ink-2);
+  padding: 4px 0;
+}
+
+/* 通用辅助 */
+.frd-muted { color: var(--c-ink-3); font-size: 11px; margin: 0; }
+.node-type-tag {
+  font-size: 10px !important;
+  padding: 0 6px !important;
+  height: 18px !important;
+  line-height: 16px !important;
+  background: color-mix(in srgb, var(--c-accent) 10%, transparent) !important;
+  color: var(--c-accent) !important;
+}
+
+/* ── 流程产出卡片 ────────────────────────────────────────────── */
+.frd-output {
+  border: 1px solid var(--c-line);
+  border-radius: 12px;
+  background: var(--c-surface);
+  overflow: hidden;
+}
+/* 这里原来有个 hover 高亮 + 强调色外发光。整张卡并不可点（能点的是里面那行文件
+   名），给一个不响应的容器加"可点"的反馈只会骗人，所以去掉。 */
+.frd-output-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--c-subtle);
+  border-bottom: 1px solid var(--c-line);
+}
+.frd-output-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--c-ink-1);
+}
+.frd-output-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.frd-output-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--c-surface);
+  color: var(--c-ink-2);
+  border: 1px solid var(--c-line);
+  font-variant-numeric: tabular-nums;
+}
+.frd-output-badge--schema {
+  background: color-mix(in srgb, var(--c-accent) 10%, transparent);
+  color: var(--c-accent);
+  border-color: color-mix(in srgb, var(--c-accent) 25%, transparent);
+}
+.frd-output-sub {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--c-ink-3);
+}
+.frd-output-body {
+  padding: 14px 16px;
+}
+.frd-output-body .ant-space {
+  margin-bottom: 10px;
+}
+/* 文件支的产出：一行工件，而不是一句文件名。 */
+.frd-output-file {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--c-line);
+  border-radius: 8px;
+  background: var(--c-subtle);
+  min-width: 0;
+}
+.frd-output-file-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--c-accent) 12%, transparent);
+  color: var(--c-accent);
+  font-size: 14px;
+}
+.frd-output-file-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+.frd-output-file-name {
+  font-family: var(--c-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  color: var(--c-accent);
+  overflow-wrap: anywhere;
+}
+.frd-output-file-name:hover { text-decoration: underline; }
+.frd-output-file-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  font-size: 10.5px;
+  color: var(--c-ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.frd-output-file-open {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--c-ink-2);
+  white-space: nowrap;
+}
+.frd-output-file-open:hover { color: var(--c-accent); }
+.frd-output-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--c-warn) 9%, transparent);
+  color: var(--c-ink-2);
+  font-size: 11px;
+  line-height: 1.55;
+}
+.frd-output-notice .anticon { color: var(--c-warn); margin-top: 2px; }
+
+/* 窄屏适配：左右分栏变上下，同时放弃「应用外壳」—— 一个 900px 高的窗口装不下
+   上下堆叠的 Hero + 产出 + 时间线 + 面板，硬锁高度只会把三块都压扁。这里退回
+   自然文档流，整页滚动。 */
+@media (max-width: 768px) {
+  .frd-page { height: auto; min-height: 0; }
+  /* `1fr` 的最小值是 auto：列会被内容顶住不缩，于是横向溢出。必须写 minmax(0,1fr)。 */
+  .frd-main-grid { grid-template-columns: minmax(0, 1fr); flex: none; }
+  .frd-tl-scroll { overflow: visible; }
+  .frd-detail { min-height: 0; }
+  .frd-detail-body { overflow: visible; }
+  .frd-diag-panel { flex: none; }
+}
+@media (max-width: 720px) {
+  .frd-hero-main { flex-wrap: wrap; }
+  .frd-hero-stats-inline { order: 3; width: 100%; justify-content: flex-start; padding-top: 6px; }
+  .frd-timing-row { grid-template-columns: minmax(0, 84px) minmax(0, 1fr) 64px; gap: 8px; }
+  /* 窄屏下侧栏会吃掉大半宽度（420px 视口时内容区只剩 ~176px），而标题块是
+     `flex-shrink: 0`、运行 id 又是 36 个字符不可断的等宽芯片 —— 两者都会把横幅
+     顶出横向溢出。这里让标题与 id 都能省略，产出行的操作链接换行到底部。 */
+  .frd-hero-title-block { flex-shrink: 1; min-width: 0; }
+  .frd-hero-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .frd-hero-id code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .frd-status-text { white-space: nowrap; }
+  .frd-output-file { flex-wrap: wrap; }
+  .frd-output-file-open { width: 100%; }
+}
+
+.script-workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(340px, 0.85fr);
+  min-height: 620px;
+  height: calc(100vh - 150px);
+  overflow: hidden;
+  border: 1px solid var(--c-line);
+  border-radius: 10px;
+  background: var(--c-surface);
+}
+.script-workbench__editor {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 14px;
+  border-inline-end: 1px solid var(--c-line);
+}
+.script-workbench__sidebar {
+  min-width: 0;
+  overflow: auto;
+  padding: 0 14px 14px;
+}
+.script-workbench__loading {
+  min-height: 420px;
+  display: grid;
+  place-items: center;
+  color: var(--c-ink-3);
+}
+.script-workbench__security {
+  display: block;
+  margin-top: 8px;
+  font-size: 12px;
+}
+.script-editor__toolbar {
+  display: flex;
+  justify-content: flex-end;
+  flex: none;
+  padding: 3px 6px;
+  border-bottom: 1px solid var(--c-line);
+  background: var(--c-subtle);
+}
+
+.script-schema-diff {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.script-schema-diff pre {
+  max-height: 260px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--c-line);
+  border-radius: 6px;
+  background: var(--c-subtle);
+  white-space: pre-wrap;
+}
+
+@media (max-width: 720px) {
+  .script-schema-diff {
+    grid-template-columns: 1fr;
+  }
+}
+.script-test-console .ant-form-item { margin-bottom: 10px; }
+.schema-param-editor__advanced { margin-top: 10px; }
+.schema-param-editor__advanced summary { cursor: pointer; color: var(--c-ink-3); font-size: 12px; margin-bottom: 8px; }
+.contract-field-details {
+  margin: 6px 0 0 4px;
+  color: var(--c-ink-3);
+  font-size: 12px;
+}
+.contract-field-details summary { cursor: pointer; margin-bottom: 6px; }
+.contract-field-details .ant-input + .ant-input { margin-top: 6px; }
+.contract-field-details > div { margin-top: 6px; }
+
+@media (max-width: 960px) {
+  .script-workbench {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+    overflow: visible;
+  }
+  .script-workbench__editor {
+    height: 58vh;
+    border-inline-end: 0;
+    border-bottom: 1px solid var(--c-line);
+  }
+  .script-workbench__sidebar { overflow: visible; }
+}

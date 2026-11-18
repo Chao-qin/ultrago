@@ -1,0 +1,25 @@
+{
+  "configId": "example-preprocess",
+  "shopProfile": {
+    "profileId": "TODO-shop-id",
+    "shopName": "TODO-shop-name",
+    "listing": { "productType": 0, "reduceType": 1, "commit": false, "serviceMobile": "TODO-service-phone", "startSaleType": 1, "pickupMethod": "0" },
+    "shipping": { "freightTemplateId": 0, "presellType": 0, "deliveryDelayDay": 2 },
+    "afterSale": { "damagedOrderReturn": 1 },
+    "brand": { "defaultDoudianBrandId": 0, "assumeNoBrand": true },
+    "pricing": { "strategy": "fixed_amount", "markup": 10, "minMarginYuan": 5 }
+  },
+  "pricing": { "strategy": "fixed_amount", "markup": 10, "minMarginYuan": 5 },
+  "text": {
+    "removeSensitiveByAi": false,
+    "removeBrandByAi": false,
+    "replaceRules": [{ "pattern": "某品牌", "replacement": "", "flags": "", "description": "删除来源标题中的品牌占位词" }],
+    "enableAiShortTitle": false
+  },
+  "sku": { "dropZeroStock": true },
+  "images": {
+    "main": { "start": 2, "end": 4, "shuffle": false },
+    "detail": { "start": 1, "end": null, "shuffle": true },
+    "seed": 20260913
+  }
+}

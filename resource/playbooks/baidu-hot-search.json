@@ -1,0 +1,277 @@
+{
+  "name": "baidu-hot-search",
+  "goal": "在独立工作窗口采集百度今日热点的热搜榜、民生榜和财经榜；三榜完整校验后写入 reports/，并关闭工作 tab。",
+  "goalDetail": "工作窗口使用 newWindow(focused:false, minimized:false, restoreFocus:true)，避免改动用户当前 tab，同时保持页面正常渲染。工作窗口直接开在搜索结果页(首页经典表单已被百度置为 display:none)，采集动作在页面内完成榜单切换、文本解析和完整性断言；任一榜单缺失或条目不足即抛错，拒绝写入部分报告。成功写入后关闭工作 tab，回放路径会释放其 claim。",
+  "paramSchemaRef": "book-input-baidu-hot-search@1",
+  "params": [
+    {
+      "name": "reportFile",
+      "required": true,
+      "defaultTemplate": "{{bookName}}-{{datetime}}-{{uuid}}.md",
+      "description": "输出 Markdown 文件路径,相对 reports/ 目录。直接写文件名即可,如: baidu-hot-search-2026-08-22.md(落在 reports/ 下,自动建子目录)。注意: 不要带 reports/ 前缀,不要填绝对路径(如 /xxx),否则被目录守卫拒绝。",
+      "schema": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    {
+      "name": "overwrite",
+      "required": false,
+      "default": "overwrite",
+      "description": "目标文件已存在时的处理: overwrite=直接覆盖(默认,适合定时任务每天写当日报告) / error=存在即报错拒绝 / rename=自动加时间戳改名,保留旧文件。",
+      "schema": {
+        "type": "string",
+        "enum": [
+          "overwrite",
+          "error",
+          "rename"
+        ]
+      }
+    }
+  ],
+  "steps": [
+    {
+      "goal": "在独立且正常渲染的后台窗口【直接打开今日热点的搜索结果页】，并立即恢复用户原窗口焦点。不再走首页搜索框：百度 PC 首页已把经典表单 #form 整体置为 display:none（可见的是 AI 对话框 #chat-textarea），#kw/#su 打不动，而本 book 要的三榜数据只在经典结果页上。",
+      "verify": {
+        "urlIncludes": "baidu.com/s",
+        "noErrors": true,
+        "settled": true
+      },
+      "onFail": "escalate",
+      "action": {
+        "method": "browser.newWindow",
+        "params": {
+          "url": "https://www.baidu.com/s?wd=%E4%BB%8A%E6%97%A5%E7%83%AD%E7%82%B9",
+          "focused": false,
+          "minimized": false,
+          "restoreFocus": true
+        }
+      },
+      "page": "baidu"
+    },
+    {
+      "goal": "依次切到热搜榜、民生榜、财经榜并解析榜单文本；三榜均须取得 15 条有效数据，否则失败。榜单切换器按结构定位（全页唯一一个「直接子元素里有 ≥2 个榜名」的容器），既不认带 hash 的 CSS module 类名，也不认榜名顺序——2026-09-15 百度把民生/财经对调，原先写死的拼接串 '热搜榜民生榜财经榜' 当场失效；解析范围同时从 document.body 收窄到榜单容器自身，不再依赖任何写死的分界串。热度值仍不可得（那一列只有带 hash 的类名能取，宁可少一列也不要一个会骗人的列）。",
+      "verify": {
+        "elementName": "财经榜",
+        "noErrors": true
+      },
+      "onFail": "retry",
+      "maxRetries": 1,
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "return (async () => {",
+            "  const NAMES = ['热搜榜', '民生榜', '财经榜'];",
+            "",
+            "  // 榜单切换器 = 全页唯一一个「直接子元素里有 ≥2 个榜名」的容器。",
+            "  // 不认 class —— 这一块全是带 hash 的 CSS module 名（tag-select_3Yje6），每次构建都变",
+            "  // （learn 2026-09-05）；也不认榜名顺序 —— 2026-09-15 百度把民生/财经对调，",
+            "  // 写死的拼接串 '热搜榜民生榜财经榜' 当场失效，那就是上次报障的直接根因。",
+            "  // 更不能按文本在 document 里首次命中取：右侧「热搜榜」卡片标题是个",
+            "  // <a target=\"_blank\" href=\"top.baidu.com\">，document 顺序排在切换器之前，",
+            "  // 点它只会白开一个新 tab，一榜都切不动。",
+            "  const findTabs = () => {",
+            "    for (const el of document.querySelectorAll('div,ul,nav,section')) {",
+            "      const tabs = [...el.children].filter(child => NAMES.includes(child.textContent?.trim()));",
+            "      if (tabs.length >= 2) return tabs;",
+            "    }",
+            "    return null;",
+            "  };",
+            "",
+            "  // 15 行全齐且排名严格 1..15 才算一榜；差一行就返回 null，怎么报由调用方决定。",
+            "  const parseRows = text => {",
+            "    const lines = text.split('\\n').map(line => line.trim()).filter(Boolean);",
+            "    const rows = [];",
+            "    for (let i = 0; i < lines.length - 1 && rows.length < 15; i++) {",
+            "      if (!/^\\d+$/.test(lines[i])) continue;",
+            "      let title = lines[i + 1];",
+            "      let tag = '—';",
+            "      for (const candidate of ['爆', '沸', '热', '新']) {",
+            "        if (title.length > candidate.length && title.endsWith(candidate)) {",
+            "          title = title.slice(0, -candidate.length);",
+            "          tag = candidate;",
+            "          break;",
+            "        }",
+            "      }",
+            "      if (title) rows.push({ rank: Number(lines[i]), title, tag });",
+            "      i++;",
+            "    }",
+            "    return rows.length === 15 && rows.every((row, index) => row.rank === index + 1 && row.title)",
+            "      ? rows",
+            "      : null;",
+            "  };",
+            "",
+            "  // 解析范围 = 切换器往上最近的、能整出完整 15 行的祖先（当前是 .FYB_RD）。",
+            "  // 从切换器起步而不是从 body 起步：body 文本里还有右侧「电影榜/小说榜/电视剧榜」",
+            "  // 那几组 1..6，按 body 切片就得先有个写死的分界串 —— 那正是这次坏掉的东西。",
+            "  const boardRows = tabs => {",
+            "    let node = tabs[0].parentElement;",
+            "    for (let up = 0; up < 4 && node; up++, node = node.parentElement) {",
+            "      const rows = parseRows(node.innerText || '');",
+            "      if (rows) return rows;",
+            "    }",
+            "    return null;",
+            "  };",
+            "",
+            "  let lastFirstTitle = '';",
+            "  const readBoard = async name => {",
+            "    const tabs = findTabs();",
+            "    if (!tabs) {",
+            "      // 区分「确认没有」和「没找到」：榜名一个都不在页面上 = 这个结果页压根没出榜单模块；",
+            "      // 榜名在、切换器却找不到 = 结构变了，必须响亮失败（skill §7）。",
+            "      const seen = NAMES.filter(board => (document.body.innerText || '').includes(board));",
+            "      throw new Error(seen.length",
+            "        ? 'Baidu board tab group not found although ' + seen.join('/') + ' are on the page'",
+            "        : 'Baidu board module is absent from this result page');",
+            "    }",
+            "    const tab = tabs.find(candidate => candidate.textContent.trim() === name);",
+            "    if (!tab) {",
+            "      throw new Error(",
+            "        'Baidu ' + name + ' tab is missing (tabs: ' + tabs.map(t => t.textContent.trim()).join('/') + ')'",
+            "      );",
+            "    }",
+            "    tab.click();",
+            "    // 每轮重新 findTabs：点一下会把这一块整个重渲染，动作之前取好的节点属于旧文档",
+            "    // （learn 2026-09-02：动作的判据基座不能在动作之前一次性取好）。",
+            "    const rows = await bcpWait.until(() => {",
+            "      const live = findTabs();",
+            "      const parsed = live && boardRows(live);",
+            "      return parsed && parsed[0].title !== lastFirstTitle ? parsed : null;",
+            "    }, 4000, 200);",
+            "    if (!rows) {",
+            "      // 超时后把「没换过来」和「压根解析不出来」分开报：前者是切换没生效，后者是结构变了。",
+            "      // 混成一句话的话，下次改版只会得到一条没有指向的报错。",
+            "      const live = findTabs();",
+            "      const parsed = live && boardRows(live);",
+            "      throw new Error(parsed",
+            "        ? 'Baidu ' + name + ' still shows the previous board after 4000ms (first row: ' + parsed[0].title + ')'",
+            "        : 'Baidu ' + name + ' board did not render 15 valid rows within 4000ms');",
+            "    }",
+            "    lastFirstTitle = rows[0].title;",
+            "    return rows;",
+            "  };",
+            "",
+            "  // 三榜各 4000ms，最坏 12s，落在 eval 预算内。热搜榜是默认选中的那一页，",
+            "  // lastFirstTitle 还是 '' 时首轮即放行；后两榜都要求首条标题相对上一榜发生变化，",
+            "  // 才算真的切过去了。",
+            "  const hotsearch = await readBoard('热搜榜');",
+            "  const minsheng = await readBoard('民生榜');",
+            "  const caijing = await readBoard('财经榜');",
+            "",
+            "  return { capturedAt: new Date().toISOString(), hotsearch, minsheng, caijing };",
+            "})();"
+          ]
+        }
+      },
+      "page": "baidu",
+      "gate": {
+        "all": [
+          "resultPage"
+        ]
+      }
+    },
+    {
+      "goal": "校验三榜采集结果并生成 Markdown；缺少任一榜单时拒绝生成报告",
+      "verify": {
+        "actionSucceeded": true
+      },
+      "onFail": "escalate",
+      "action": {
+        "method": "local.eval",
+        "params": {
+          "code": [
+            "const unwrap = result => {",
+            "  const value = result && result.value;",
+            "  return value && typeof value === 'object' && 'value' in value ? value.value : value;",
+            "};",
+            "const capture = results",
+            "  .map(unwrap)",
+            "  .find(",
+            "    value =>",
+            "      value &&",
+            "      typeof value === 'object' &&",
+            "      Array.isArray(value.hotsearch) &&",
+            "      Array.isArray(value.minsheng) &&",
+            "      Array.isArray(value.caijing)",
+            "  );",
+            "if (",
+            "  !capture ||",
+            "  capture.hotsearch.length < 15 ||",
+            "  capture.minsheng.length < 15 ||",
+            "  capture.caijing.length < 15",
+            ") {",
+            "  throw new Error('Baidu capture is incomplete; refusing to write a partial report');",
+            "}",
+            "const board = (name, rows) =>",
+            "  `## ${name}（Top ${rows.length}）\\n\\n| 排名 | 标题 | 标签 |\\n|---|---|---|\\n${rows.map(row => `| ${row.rank} | ${row.title} | ${row.tag} |`).join('\\n')}\\n`;",
+            "return `# 百度今日热点\\n\\n采集时间: ${capture.capturedAt}\\n来源: run_playbook(\"baidu-hot-search\", mode:\"auto\") 独立工作窗口零 agent 回放\\n\\n${board('热搜榜', capture.hotsearch)}\\n${board('民生榜', capture.minsheng)}\\n${board('财经榜', capture.caijing)}`;"
+          ]
+        }
+      },
+      "page": "baidu",
+      "gate": {
+        "all": [
+          "resultPage"
+        ]
+      }
+    },
+    {
+      "goal": "写入完整的三榜 Markdown 报告到 reports/{{reportFile}}",
+      "verify": {
+        "actionSucceeded": true
+      },
+      "onFail": "escalate",
+      "action": {
+        "method": "local.writeFile",
+        "params": {
+          "path": "{{reportFile}}",
+          "overwrite": "{{overwrite}}"
+        }
+      },
+      "page": "baidu",
+      "gate": {
+        "all": [
+          "resultPage"
+        ]
+      }
+    },
+    {
+      "goal": "关闭本次百度工作 tab，释放工作 claim",
+      "verify": {
+        "actionSucceeded": true
+      },
+      "onFail": "escalate",
+      "action": {
+        "method": "browser.closeTab",
+        "params": {}
+      },
+      "page": "baidu",
+      "gate": {
+        "all": [
+          "resultPage"
+        ]
+      }
+    }
+  ],
+  "deliveries": [
+    {
+      "kind": "file",
+      "artifact": "{{reportFile}}"
+    }
+  ],
+  "schemaVersion": 2,
+  "pages": {
+    "baidu": {
+      "description": "百度首页/搜索结果页(独立工作窗口)",
+      "signals": {
+        "resultPage": {
+          "condition": {
+            "urlIncludes": "baidu.com/s"
+          },
+          "description": "已进入搜索结果页"
+        }
+      }
+    }
+  }
+}

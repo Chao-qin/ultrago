@@ -1,0 +1,498 @@
+{
+  "name": "doubao-ask",
+  "goal": "豆包网页 API 监听版问答：开新窗口 → 上传图片/文件 → 输入文字并发送 → 监听并解析 /chat/completion SSE → 落盘 reports/ → 关闭 tab。发送仍由豆包页面完成，结果只从 API 流解析。",
+  "goalDetail": "结果只从 API 流解析，不读回答 DOM（DOM 版已废弃：后台/被遮挡窗口会被 Chrome 冻结渲染，读出空结果）。页面负责登录态、附件上传、请求签名与发送；Book 用 fetch hook 读同源 /chat/completion SSE。豆包把一条回复拆成三路 event —— STREAM_MSG_NOTIFY(首片) + STREAM_CHUNK(patch_op[].patch_value.content_block[]) + CHUNK_DELTA(顶层 text)，必须按帧出现顺序累加，分组拼会乱序；FULL_MSG_NOTIFY 是用户消息回显不是回复；生成的图在 creation_block.creations[].image.image_ori.url，转 markdown 追加。出现未识别 event / 未消费 block / 缺 SSE_REPLY_END 一律拒绝写出，绝不静默交残缺答案。公开参数 message / conversationId / attachments / outputFile / requireJson 与旧版完全一致；attachments 走 source-backed browser.upload，空数组是成功 no-op。回归见 pnpm check:books（fixture 为真实抓取的原始 SSE 流）。",
+  "paramSchemaRef": "book-input-doubao-ask@1",
+  "outputSchemaRef": "book-output-nonempty-string@1",
+  "params": [
+    {
+      "name": "message",
+      "required": true,
+      "description": "发送给豆包的文本内容",
+      "schema": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    {
+      "name": "conversationId",
+      "required": false,
+      "default": "",
+      "description": "可选的豆包会话 ID；留空时创建新会话",
+      "schema": {
+        "type": "string"
+      }
+    },
+    {
+      "name": "attachments",
+      "required": false,
+      "default": [],
+      "description": "可选附件数组。每项包含 type(image/file) 和 url 或 localPath，可选 filename/mimeType",
+      "schema": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "image",
+                "file"
+              ]
+            },
+            "url": {
+              "type": "string",
+              "minLength": 1
+            },
+            "localPath": {
+              "type": "string",
+              "minLength": 1
+            },
+            "filename": {
+              "type": "string"
+            },
+            "mimeType": {
+              "type": "string"
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "url"
+              ],
+              "not": {
+                "required": [
+                  "localPath"
+                ]
+              }
+            },
+            {
+              "required": [
+                "localPath"
+              ],
+              "not": {
+                "required": [
+                  "url"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "outputFile",
+      "required": false,
+      "defaultTemplate": "doubao-{{runId}}-{{uuid}}.json",
+      "description": "输出 JSON 文件路径，相对 reports/ 目录",
+      "schema": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    {
+      "name": "requireJson",
+      "required": false,
+      "default": false,
+      "description": "为 true 时，回复必须是可解析的完整 JSON；否则在写入或关闭前失败",
+      "schema": {
+        "type": "boolean"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "goal": "在前台打开豆包工作窗口（step 6 发送完成后立即最小化，占用前台仅数秒）；不可用 restoreFocus 把它压到用户窗口之后——当用户窗口最大化时那等同于被完全遮挡，Chrome 会冻结其渲染，元素永远不会 visible，composerReady 必然超时",
+      "verify": {
+        "urlIncludes": "doubao.com/chat"
+      },
+      "onFail": "escalate",
+      "action": {
+        "method": "browser.newWindow",
+        "params": {
+          "url": "https://www.doubao.com/chat/{{conversationId}}",
+          "focused": true,
+          "minimized": false,
+          "restoreFocus": false
+        }
+      },
+      "page": "doubao"
+    },
+    {
+      "goal": "开启页面 fetch/XHR response-body 监听，后续只解析豆包同源 API 流",
+      "verify": {
+        "settled": true,
+        "noErrors": true
+      },
+      "onFail": "retry",
+      "maxRetries": 2,
+      "action": {
+        "method": "browser.setNetworkCapture",
+        "params": {
+          "enabled": true
+        }
+      },
+      "page": "doubao",
+      "gate": {
+        "all": [
+          "composerReady"
+        ]
+      }
+    },
+    {
+      "goal": "安装一次性 /chat/completion fetch hook，保存 SSE 分片、请求文本和 ACK 会话信息",
+      "verify": {
+        "settled": true,
+        "noErrors": true
+      },
+      "onFail": "retry",
+      "maxRetries": 2,
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "return (() => {",
+            "  const old = window.__bcpDoubaoApi;",
+            "  if (old?.hooked) return { hooked: true, reused: true };",
+            "  const state = { hooked: false, chunks: [], requestBody: null, requestUrl: '', done: false };",
+            "  const original = window.fetch;",
+            "  window.fetch = function (...args) {",
+            "    const input = args[0];",
+            "    const init = args[1];",
+            "    const url = typeof input === 'string' ? input : (input && input.url) || '';",
+            "    const body = init && init.body;",
+            "    const promise = original.apply(this, args);",
+            "    if (!String(url).includes('/chat/completion')) return promise;",
+            "    state.requestUrl = String(url);",
+            "    if (typeof body === 'string') {",
+            "      try {",
+            "        state.requestBody = JSON.parse(body);",
+            "      } catch {}",
+            "    }",
+            "    promise",
+            "      .then(res => {",
+            "        if (!res.body) return;",
+            "        const tee = res.body.tee();",
+            "        Object.defineProperty(res, 'body', { value: tee[1], configurable: true });",
+            "        const reader = tee[0].getReader();",
+            "        const decoder = new TextDecoder();",
+            "        (async () => {",
+            "          try {",
+            "            for (;;) {",
+            "              const part = await reader.read();",
+            "              if (part.done) break;",
+            "              state.chunks.push(decoder.decode(part.value, { stream: true }));",
+            "            }",
+            "          } finally {",
+            "            state.done = true;",
+            "          }",
+            "        })();",
+            "      })",
+            "      .catch(() => {});",
+            "    return promise;",
+            "  };",
+            "  state.hooked = true;",
+            "  window.__bcpDoubaoApi = state;",
+            "  return { hooked: true, reused: false };",
+            "})();"
+          ]
+        }
+      },
+      "page": "doubao",
+      "gate": {
+        "all": [
+          "composerReady"
+        ]
+      }
+    },
+    {
+      "goal": "上传 attachments；空数组时跳过，非空时由后端解析 URL/localPath 后逐个注入豆包上传控件",
+      "verify": {
+        "settled": true,
+        "noErrors": true
+      },
+      "onFail": "escalate",
+      "action": {
+        "method": "browser.upload",
+        "params": {
+          "css": "input[type=file]",
+          "attachments": "{{attachments}}"
+        }
+      },
+      "page": "doubao",
+      "gate": {
+        "all": [
+          "composerReady"
+        ]
+      }
+    },
+    {
+      "goal": "输入 message 到豆包编辑器；输入只作为页面发送数据，不参与脚本拼接",
+      "verify": {
+        "settled": true,
+        "noErrors": true
+      },
+      "onFail": "escalate",
+      "action": {
+        "method": "browser.paste",
+        "params": {
+          "css": ".tiptap.ProseMirror",
+          "text": "{{message}}"
+        }
+      },
+      "page": "doubao",
+      "gate": {
+        "all": [
+          "composerReady"
+        ]
+      }
+    },
+    {
+      "goal": "发送消息；使用豆包 TipTap keymap 触发真实页面发送入口，并进行多轮重试。每一轮都重新从 DOM 取编辑器实例——发送成功会让豆包换路由并重挂载 composer，扣着发送前那个实例不放会把【已经成功】的发送报成失败。",
+      "verify": {
+        "settled": true,
+        "noErrors": true
+      },
+      "onFail": "escalate",
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "return (async () => {",
+            "  // 每一轮都重新从 DOM 取编辑器实例。发送成功后豆包会把路由从 /chat/ 推到",
+            "  // /chat/<会话id> 并整个重挂载 composer（实测 editor.instanceId 变了、旧实例的",
+            "  // view 被销毁）。若像之前那样把发送前的实例扣在闭包里：",
+            "  //   · sent() 读旧实例的 state.doc，永远还是发送前的原文 → 判定「没发出去」",
+            "  //   · 于是再 fire() 一次，旧实例的 view.someProp 抛",
+            "  //     『editor view is not available』并逃出重试循环",
+            "  // 结果是一次【已经成功】的发送被报成整本 book 失败（2026-09-05 实测可稳定复现）。",
+            "  const composer = () => document.querySelector('.tiptap.ProseMirror')?.editor ?? null;",
+            "  if (!composer()) throw new Error('doubao composer not ready');",
+            "  // 判据是「当前挂着的编辑器已经空了」。发送以外的原因重挂一个空 composer 也会",
+            "  // 让它成立，但那不会把假成功放过去：下一步的 replyEnded 门读的是 SSE 抓流，",
+            "  // 真没发出去就没有流，门会超时，book 依旧 fail-closed。",
+            "  const sent = () => {",
+            "    const ed = composer();",
+            "    return !!ed && !ed.state.doc.textContent.length;",
+            "  };",
+            "  const fire = () => {",
+            "    const ed = composer();",
+            "    if (!ed) return false;",
+            "    try {",
+            "      return ed.view.someProp('handleKeyDown', handler =>",
+            "        handler(",
+            "          ed.view,",
+            "          new KeyboardEvent('keydown', {",
+            "            key: 'Enter',",
+            "            code: 'Enter',",
+            "            keyCode: 13,",
+            "            which: 13,",
+            "            bubbles: true,",
+            "            cancelable: true",
+            "          })",
+            "        )",
+            "      );",
+            "    } catch (error) {",
+            "      // 正撞上重挂载窗口：这一拍打不中，留给下一拍，别把整步打死",
+            "      return false;",
+            "    }",
+            "  };",
+            "  const started = Date.now();",
+            "  const hardStop = Date.now() + 12000;",
+            "  await new Promise(resolve => setTimeout(resolve, 2000));",
+            "  let attempts = 0;",
+            "  while (Date.now() < hardStop) {",
+            "    if (sent()) return { submitted: true, attempts, elapsedMs: Date.now() - started };",
+            "    fire();",
+            "    attempts++;",
+            "    await new Promise(resolve => setTimeout(resolve, 1200));",
+            "  }",
+            "  if (sent()) return { submitted: true, attempts, elapsedMs: Date.now() - started };",
+            "  throw new Error(",
+            "    'doubao did not accept the message within ' +",
+            "      (Date.now() - started) +",
+            "      'ms after ' +",
+            "      attempts +",
+            "      ' submit attempts'",
+            "  );",
+            "})();"
+          ]
+        }
+      },
+      "page": "doubao",
+      "gate": {
+        "all": [
+          "composerReady"
+        ]
+      }
+    },
+    {
+      "goal": "提交成功后切到后台，避免工作窗口阻挡用户；后续回复只依赖 API 流",
+      "verify": {
+        "settled": true,
+        "noErrors": true
+      },
+      "onFail": "escalate",
+      "action": {
+        "method": "browser.setWindowState",
+        "params": {
+          "minimized": true
+        }
+      },
+      "page": "doubao",
+      "gate": {
+        "all": [
+          "composerReady"
+        ]
+      }
+    },
+    {
+      "goal": "等 replyEnded 门放行后，从 API SSE 解析 conversationId、助手回复和原始回复；禁止从回答 DOM 读取结果",
+      "verify": {
+        "settled": true,
+        "noErrors": true
+      },
+      "onFail": "escalate",
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": "return (() => { const state = window.__bcpDoubaoApi; if (!state) throw new Error('doubao API hook is missing'); const all = state.chunks.join(''); const frames = all.split('\\n\\n'); const eventCounts = {}; const firstPayload = {}; let parseFail = 0; let firstParseFail = ''; let conversationId = ''; let streamed = ''; let full = ''; let streamError = ''; const blockKinds = {}; const images = {}; const pick = (blocks, sink) => { for (const b of blocks || []) { const c = b && b.content; if (c && typeof c === 'object') { for (const k of Object.keys(c)) blockKinds[k] = (blockKinds[k] || 0) + 1; const cb = c.creation_block; if (cb) for (const cr of cb.creations || []) { const im = cr && cr.image; const u = im && ((im.image_ori && im.image_ori.url) || (im.image_preview && im.image_preview.url) || (im.image_thumb && im.image_thumb.url)); if (u) images[cr.id || u] = u; } } const t = c && c.text_block && c.text_block.text; if (typeof t === 'string') sink(t); } }; const add = (t) => { streamed += t; }; for (const frame of frames) { const event = (frame.match(/^event: (.+)$/m) || [])[1]; const data = (frame.match(/^data: ([\\s\\S]*)$/m) || [])[1]; if (event) eventCounts[event] = (eventCounts[event] || 0) + 1; if (!data) continue; let payload; try { payload = JSON.parse(data); } catch (err) { parseFail++; if (!firstParseFail) firstParseFail = String(data).slice(0, 160); continue; } if (event && !(event in firstPayload)) firstPayload[event] = payload; if (event === 'SSE_ACK') { conversationId = (payload.ack_client_meta && payload.ack_client_meta.conversation_id) || conversationId; continue; } if (event === 'STREAM_ERROR') { streamError = streamError || (payload.error_msg || JSON.stringify(payload).slice(0, 200)); continue; } if (event === 'STREAM_MSG_NOTIFY') { pick(payload.content && payload.content.content_block, add); continue; } if (event === 'STREAM_CHUNK') { for (const op of payload.patch_op || []) pick(op && op.patch_value && op.patch_value.content_block, add); continue; } if (event === 'CHUNK_DELTA') { if (typeof payload.text === 'string') add(payload.text); continue; } if (event === 'FULL_MSG_NOTIFY') { if (payload.message && payload.message.user_type === 2) pick(payload.message.content_block, (t) => { full += t; }); continue; } } if (streamError) throw new Error('doubao refused the request: ' + streamError + ' | events: ' + Object.keys(eventCounts).map((k) => k + 'x' + eventCounts[k]).join(' ')); const replyRaw = streamed || full; const imageUrls = Object.keys(images).map((k) => images[k]); let reply = replyRaw.trim().replace(/^\\x60\\x60\\x60[a-zA-Z]*\\s*/, '').replace(/\\x60\\x60\\x60\\s*$/, '').trim(); if (imageUrls.length) reply = (reply ? reply + '\\n\\n' : '') + imageUrls.map((u) => '![](' + u + ')').join('\\n'); const scan = (node, prefix, out, depth) => { if (depth > 6 || !node || typeof node !== 'object' || out.length >= 10) return; for (const k of Object.keys(node)) { if (out.length >= 10) return; const v = node[k]; const path = prefix ? prefix + '.' + k : k; if (typeof v === 'string') { if (v.length) out.push(path + '=' + JSON.stringify(v.slice(0, 40))); } else if (v && typeof v === 'object') scan(v, Array.isArray(v) ? path + '[0]' : path, out, depth + 1); } }; const seen = Object.keys(eventCounts).map((k) => k + 'x' + eventCounts[k]).join(' ') || '(no \"event:\" line found)'; const handled = ['SSE_ACK', 'STREAM_MSG_NOTIFY', 'STREAM_CHUNK', 'CHUNK_DELTA', 'FULL_MSG_NOTIFY', 'STREAM_ERROR', 'SSE_HEARTBEAT', 'SSE_REPLY_END', 'DOWNSTREAM_VERBOSE_INFO', 'DOWNLINK_CMD']; const unknown = Object.keys(eventCounts).filter((k) => k && handled.indexOf(k) < 0); const pool = (unknown.length ? unknown : Object.keys(eventCounts)).slice().sort((a, b) => eventCounts[b] - eventCounts[a]).slice(0, 3); const probes = pool.map((ev) => { const out = []; scan(firstPayload[ev], '', out, 0); return ev + ' { ' + (out.join(' ') || '(no string field)') + ' }'; }).join('  ||  '); if (!reply) throw new Error('doubao API reply is empty — refusing to write a partial artifact. DIAG chars=' + all.length + ' frames=' + frames.length + ' parseFail=' + parseFail + ' | events: ' + seen + (firstParseFail ? ' | firstUnparsable: ' + firstParseFail : '') + ' | PROBE ' + probes); if (unknown.length) throw new Error('doubao stream carries UNRECOGNIZED events — the answer may be incomplete, refusing to write it. got=' + JSON.stringify(reply.slice(0, 40)) + ' | events: ' + seen + ' | PROBE ' + probes); const benignBlocks = ['text_block', 'attachment_block', 'loading_block', 'thinking_block', 'creation_block', 'search_query_result_block']; const otherBlocks = Object.keys(blockKinds).filter((k) => benignBlocks.indexOf(k) < 0); if (otherBlocks.length) throw new Error('doubao reply contains non-text blocks this parser drops (image/code/etc) — refusing to write a partial answer. blocks: ' + Object.keys(blockKinds).map((k) => k + 'x' + blockKinds[k]).join(' ') + ' | textGot=' + JSON.stringify(reply.slice(0, 60))); if (!all.includes('SSE_REPLY_END')) throw new Error('doubao stream ended without SSE_REPLY_END — likely truncated, refusing to write it. gotLen=' + reply.length + ' | events: ' + seen); let sentText = ''; const first = state.requestBody && state.requestBody.messages && state.requestBody.messages[0] && state.requestBody.messages[0].content_block && state.requestBody.messages[0].content_block[0] && state.requestBody.messages[0].content_block[0].content && state.requestBody.messages[0].content_block[0].content.text_block && state.requestBody.messages[0].content_block[0].content.text_block.text; if (typeof first === 'string') sentText = first; if (\"{{requireJson}}\" === 'true') { try { JSON.parse(reply); } catch { throw new Error('doubao API reply is not complete JSON'); } } return { conversationId, reply, replyRaw, replySource: 'api', sentText }; })();"
+        }
+      },
+      "page": "doubao",
+      "gate": {
+        "all": [
+          "composerReady",
+          "replyEnded"
+        ]
+      }
+    },
+    {
+      "goal": "组装稳定输出 JSON",
+      "verify": {
+        "actionSucceeded": true
+      },
+      "onFail": "escalate",
+      "action": {
+        "method": "local.eval",
+        "params": {
+          "code": [
+            "const unwrap = r => {",
+            "  const v = r && r.value;",
+            "  return v && typeof v === 'object' && 'value' in v ? v.value : v;",
+            "};",
+            "const out = [...results]",
+            "  .map(unwrap)",
+            "  .reverse()",
+            "  .find(v => v && typeof v === 'object' && typeof v.reply === 'string');",
+            "if (!out || !out.reply) throw new Error('doubao API output missing');",
+            "return JSON.stringify(",
+            "  {",
+            "    conversationId: out.conversationId || '',",
+            "    reply: out.reply,",
+            "    replyRaw: out.replyRaw || '',",
+            "    replySource: 'api',",
+            "    sentText: out.sentText || ''",
+            "  },",
+            "  null,",
+            "  2",
+            ");"
+          ]
+        }
+      },
+      "page": "doubao",
+      "gate": {
+        "all": [
+          "composerReady"
+        ]
+      }
+    },
+    {
+      "goal": "写入 reports/{{outputFile}}",
+      "verify": {
+        "actionSucceeded": true
+      },
+      "onFail": "escalate",
+      "action": {
+        "method": "local.writeFile",
+        "params": {
+          "path": "{{outputFile}}",
+          "overwrite": "overwrite"
+        }
+      },
+      "page": "doubao",
+      "gate": {
+        "all": [
+          "composerReady"
+        ]
+      }
+    },
+    {
+      "goal": "关闭本次豆包工作 tab",
+      "verify": {
+        "actionSucceeded": true
+      },
+      "onFail": "escalate",
+      "action": {
+        "method": "browser.closeTab",
+        "params": {}
+      },
+      "page": "doubao",
+      "gate": {
+        "all": [
+          "composerReady"
+        ]
+      }
+    }
+  ],
+  "deliveries": [
+    {
+      "kind": "file",
+      "artifact": "{{outputFile}}"
+    }
+  ],
+  "schemaVersion": 2,
+  "pages": {
+    "doubao": {
+      "description": "豆包对话页(独立工作窗口)",
+      "signals": {
+        "composerReady": {
+          "condition": {
+            "selector": ".ql-editor, [contenteditable=true]",
+            "state": "visible"
+          },
+          "description": "富文本编辑器已就绪"
+        },
+        "replyReady": {
+          "condition": {
+            "textPresent": "回答"
+          },
+          "description": "回复已生成(宽松占位,实际以 verify 为准)"
+        },
+        "replyEnded": {
+          "condition": {
+            "script": {
+              "code": [
+                "(() => {",
+                "  const s = window.__bcpDoubaoApi;",
+                "  if (!s) return false;",
+                "  return (s.chunks || []).join('').includes('SSE_REPLY_END') || !!s.done;",
+                "})()"
+              ]
+            }
+          },
+          "timeoutMs": 170000,
+          "description": "豆包 /chat/completion SSE 流已正常结束(收到 SSE_REPLY_END 或 hook 标记 done)。等待必须走信号门而不是 browser.eval 的轮询循环——eval 在扩展侧有 15s 硬上限(EVAL_TIMEOUT_MS)，写多长的 deadline 都会被它截断；waitSignal 自带 500ms 轮询且传输层给到 180s"
+        }
+      }
+    }
+  },
+  "outputSchema": {
+    "type": "string",
+    "minLength": 1
+  }
+}

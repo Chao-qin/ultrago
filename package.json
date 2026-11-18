@@ -1,0 +1,60 @@
+{
+  "name": "ultrago",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "UltraGo is an open-source MCP browser automation stack driven by a real Chrome browser through an extension.",
+  "type": "module",
+  "scripts": {
+    "desktop:start": "pnpm --filter @bcp/desktop start",
+    "desktop:check": "pnpm --filter @bcp/desktop check",
+    "desktop:test": "pnpm --filter @bcp/desktop test",
+    "desktop:package:win": "pnpm --filter @bcp/desktop package:win",
+    "desktop:package:win:zip": "pnpm --filter @bcp/desktop package:win:zip",
+    "dev": "bash scripts/backend.sh dev",
+    "dev:ext": "pnpm --filter @bcp/extension dev",
+    "lumen:dev": "pnpm --filter @bcp/lumen-studio dev",
+    "lumen:start": "pnpm --filter @bcp/lumen-studio start",
+    "init": "bash scripts/init.sh",
+    "python:setup": "bash scripts/setup-python.sh",
+    "python:check": "bash scripts/python.sh scripts/check-python-runtime.py --montage --report",
+    "python": "bash scripts/python.sh",
+    "test:python": "bash scripts/test-python.sh",
+    "start": "pnpm python:check && pnpm build:core && bash scripts/backend.sh start",
+    "start:no-weclaw": "pnpm python:check && pnpm build:core && BCP_WECLAW_DISABLE=1 bash scripts/backend.sh start",
+    "kill": "bash scripts/backend.sh kill",
+    "build": "pnpm -r build",
+    "build:core": "pnpm -r --filter '!@bcp/lumen-studio' build",
+    "restart": "pnpm python:check && bash scripts/backend.sh kill && bash scripts/backend.sh start",
+    "playbooks:generate": "pnpm --filter @bcp/shared run playbooks:generate",
+    "reports:compress": "node scripts/compress-reports.mjs",
+    "llm:pull": "pnpm --filter @bcp/llm pull",
+    "llm:setup": "pnpm --filter @bcp/llm run setup",
+    "llm:migrate": "pnpm --filter @bcp/llm migrate",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "check:dom": "pnpm --filter @bcp/extension check:dom",
+    "check:books": "node scripts/check-books.mjs",
+    "check:convergence": "node scripts/check-convergence.mjs",
+    "check:soft-delete": "node scripts/check-soft-delete.mjs",
+    "lint": "node scripts/lint.mjs"
+  },
+  "engines": {
+    "node": "^20.19.0 || ^22.13.0 || >=24"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "electron",
+      "@prisma/client",
+      "@prisma/engines",
+      "prisma",
+      "@nestjs/core"
+    ]
+  },
+  "devDependencies": {
+    "eslint": "^9.39.1",
+    "typescript-eslint": "^8.48.0"
+  },
+  "packageManager": "pnpm@10.24.0"
+}

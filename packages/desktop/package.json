@@ -1,0 +1,63 @@
+{
+  "name": "@bcp/desktop",
+  "version": "0.1.7",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "main": "src/main.mjs",
+  "description": "UltraGo desktop client",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.mjs",
+    "check": "node scripts/check.mjs",
+    "build": "node scripts/check.mjs --source",
+    "workspace:build": "pnpm --filter @bcp/shared --filter @bcp/weclaw --filter @bcp/backend --filter @bcp/llm --filter @bcp/console-web --filter @bcp/extension build && pnpm --filter @bcp/console build:server",
+    "native:build": "node scripts/build-native.mjs",
+    "windows:engines": "node scripts/prepare-windows.mjs",
+    "windows:python": "node scripts/prepare-python.mjs",
+    "package:win:zip": "pnpm workspace:build && pnpm native:build && pnpm windows:engines && pnpm windows:python && pnpm check && electron-builder --win --x64 --dir --publish never && node scripts/audit-package.mjs && node scripts/audit-runtime.mjs && electron-builder --win zip --x64 --publish never --prepackaged release/win-unpacked",
+    "package:win": "pnpm workspace:build && pnpm native:build && pnpm windows:engines && pnpm windows:python && pnpm check && node scripts/package-windows.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@bcp/backend": "workspace:*",
+    "@bcp/console": "workspace:*",
+    "@bcp/llm": "workspace:*",
+    "prisma": "^5.20.0"
+  },
+  "devDependencies": {
+    "electron": "45.2.3",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.ultrago.desktop",
+    "productName": "UltraGo",
+    "asar": true,
+    "asarUnpack": ["**/node_modules/.prisma/**", "**/node_modules/@prisma/**", "**/node_modules/prisma/**"],
+    "files": [
+      "src/**", "ui/**", "package.json",
+      "!**/.env*", "!**/channels.json", "!**/keys.json", "!**/resource/**",
+      "!**/reports/**", "!**/*.db*", "!**/scripts/.llm-runtime.json",
+      "!**/.opencode-home/**", "!**/.cache/**", "!**/.git/**", "!**/.venv/**",
+      "!**/node_modules/@bcp/*/{config,bin,scripts,src,web,dist-web,opencode-sandbox}/**",
+      { "from": "native/bin/prisma-client", "to": "node_modules/.prisma/client", "filter": ["**/*"] }
+    ],
+    "extraResources": [
+      { "from": "../extension/.output/chrome-mv3", "to": "extension", "filter": ["**/*", "!runtime-config.json"] },
+      { "from": "../console/prisma", "to": "prisma", "filter": ["schema.prisma", "migrations/**/*"] },
+      { "from": "../console/dist-web", "to": "console-web" },
+      { "from": "native/bin/bcp-native-host.exe", "to": "native/bcp-native-host.exe" },
+      { "from": "src/mcp-entry.cjs", "to": "mcp-entry.cjs" },
+      { "from": "native/bin/prisma", "to": "prisma-engines" },
+      { "from": "build/app-icon.png", "to": "branding/app-icon.png" },
+      { "from": "native/bin/python", "to": "runtime/python", "filter": ["**/*", "!**/__pycache__/**", "!**/*.pyc"] },
+      { "from": "templates", "to": "templates" },
+      { "from": "../../resource/playbooks/baidu-hot-search.json", "to": "templates/baidu-hot-search.json" },
+      { "from": "../../resource/playbooks/1688-offer-snatch.json", "to": "templates/1688-offer-snatch.json" },
+      { "from": "../../.claude/skills/product-preprocess/raw-1688-offer.schema.json", "to": "contracts/raw-1688-offer@2.json" }
+    ],
+    "directories": { "output": "release" },
+    "win": { "target": [{ "target": "nsis", "arch": ["x64"] }], "icon": "build/app-icon.png", "signExecutable": false },
+    "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": "always", "createStartMenuShortcut": true, "include": "build/installer.nsh", "artifactName": "UltraGo-${version}-win-x64-setup.${ext}" }
+  }
+}

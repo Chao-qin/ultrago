@@ -1,0 +1,32 @@
+{
+  "name": "desktop-readonly-demo",
+  "schemaVersion": 2,
+  "goal": "打开本地虚构商品示例页并读取清单，不提交或修改任何店铺数据。",
+  "params": [
+    { "name": "sampleUrl", "required": false, "default": "desktop://sample", "description": "客户端自动提供的示例页，无需修改。", "schema": { "type": "string" } }
+  ],
+  "pages": {
+    "desktopDemo": {
+      "signals": {
+        "ready": { "condition": { "all": [{ "urlIncludes": "/__desktop/sample" }, { "settled": true }, { "textPresent": "示例商品清单" }] }, "timeoutMs": 15000 }
+      }
+    }
+  },
+  "steps": [
+    {
+      "goal": "打开本地商品示例页",
+      "page": "desktopDemo",
+      "action": { "method": "browser.newWindow", "params": { "url": "{{sampleUrl}}", "focused": true, "minimized": false } },
+      "verify": { "actionSucceeded": true },
+      "onFail": "escalate"
+    },
+    {
+      "goal": "读取商品清单并展示结果",
+      "page": "desktopDemo",
+      "gate": { "all": ["ready"] },
+      "action": { "method": "browser.readContent", "params": { "maxChars": 10000 } },
+      "verify": { "noErrors": true },
+      "onFail": "escalate"
+    }
+  ]
+}

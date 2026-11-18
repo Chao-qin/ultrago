@@ -1,0 +1,977 @@
+{
+  "id": "46a7764a-3e82-5600-8f9f-da09423e6067",
+  "revision": 0,
+  "last_node_id": 35,
+  "last_link_id": 18,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "Fast Groups Bypasser (rgthree)",
+      "pos": [
+        400,
+        -220
+      ],
+      "size": [
+        460,
+        200
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "OPT_CONNECTION",
+          "type": "*",
+          "links": []
+        }
+      ],
+      "properties": {
+        "matchColors": "",
+        "matchTitle": "可选：",
+        "showNav": true,
+        "sort": "position",
+        "customSortAlphabet": "",
+        "toggleRestriction": "default"
+      },
+      "widgets_values": [],
+      "title": "开关：可选功能"
+    },
+    {
+      "id": 2,
+      "type": "bcp:wechat_article",
+      "pos": [
+        0,
+        0
+      ],
+      "size": [
+        360,
+        340
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "title",
+          "type": "STRING",
+          "links": [
+            9
+          ]
+        },
+        {
+          "name": "article",
+          "type": "STRING",
+          "links": [
+            1,
+            2
+          ]
+        },
+        {
+          "name": "cover",
+          "type": "STRING",
+          "links": [
+            3
+          ]
+        },
+        {
+          "name": "images",
+          "type": "STRING",
+          "links": [
+            13
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "bcp:wechat_article"
+      },
+      "widgets_values": [
+        "主题：在这里写文章主题\n要点：\n1. ……\n2. ……\n3. ……",
+        "专业、亲切、口语化",
+        1500,
+        3,
+        0,
+        "randomize",
+        ""
+      ]
+    },
+    {
+      "id": 3,
+      "type": "SaveText",
+      "pos": [
+        0,
+        380
+      ],
+      "size": [
+        300,
+        120
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "text",
+          "type": "STRING",
+          "link": 1
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "SaveText"
+      },
+      "widgets_values": [
+        "公众号/文章",
+        "md"
+      ]
+    },
+    {
+      "id": 4,
+      "type": "PreviewAny",
+      "pos": [
+        0,
+        540
+      ],
+      "size": [
+        380,
+        220
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "source",
+          "type": "*",
+          "link": 2
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "PreviewAny"
+      },
+      "widgets_values": [],
+      "title": "文章预览"
+    },
+    {
+      "id": 5,
+      "type": "bcp:shot_spec",
+      "pos": [
+        0,
+        800
+      ],
+      "size": [
+        340,
+        330
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "spec",
+          "type": "STRING",
+          "links": [
+            4,
+            14
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "bcp:shot_spec"
+      },
+      "widgets_values": [
+        "默认",
+        "默认",
+        "默认",
+        "默认",
+        "默认",
+        "默认",
+        "默认",
+        ""
+      ],
+      "title": "统一风格（封面和配图共用）"
+    },
+    {
+      "id": 10,
+      "type": "bcp:skill",
+      "pos": [
+        400,
+        0
+      ],
+      "size": [
+        340,
+        300
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "spec",
+          "type": "STRING",
+          "link": 4
+        },
+        {
+          "name": "batch",
+          "type": "STRING",
+          "link": null
+        },
+        {
+          "name": "input",
+          "type": "STRING",
+          "widget": {
+            "name": "input"
+          },
+          "link": 3
+        }
+      ],
+      "outputs": [
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "links": [
+            5
+          ]
+        },
+        {
+          "name": "size",
+          "type": "STRING",
+          "links": [
+            6
+          ]
+        },
+        {
+          "name": "skill",
+          "type": "STRING",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "bcp:skill"
+      },
+      "widgets_values": [
+        "公众号封面",
+        "",
+        "",
+        ""
+      ],
+      "title": "技能：封面"
+    },
+    {
+      "id": 20,
+      "type": "bcp:openai_image",
+      "pos": [
+        780,
+        0
+      ],
+      "size": [
+        380,
+        440
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image_1",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_2",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_3",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_4",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_5",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_6",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_7",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_8",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "mask",
+          "shape": 7,
+          "type": "MASK",
+          "link": null
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "widget": {
+            "name": "prompt"
+          },
+          "link": 5
+        },
+        {
+          "name": "size",
+          "type": "STRING",
+          "widget": {
+            "name": "size"
+          },
+          "link": 6
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": [
+            7,
+            11,
+            15
+          ]
+        },
+        {
+          "name": "alpha",
+          "type": "MASK",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "bcp:openai_image"
+      },
+      "widgets_values": [
+        "gpt-image-2.5",
+        "",
+        "auto",
+        "medium",
+        1,
+        "auto",
+        0,
+        "randomize"
+      ],
+      "title": "出图：封面"
+    },
+    {
+      "id": 30,
+      "type": "ImageScale",
+      "pos": [
+        1200,
+        0
+      ],
+      "size": [
+        300,
+        180
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 7
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            8
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ImageScale"
+      },
+      "widgets_values": [
+        "lanczos",
+        900,
+        383,
+        "center"
+      ],
+      "title": "首图 900x383"
+    },
+    {
+      "id": 31,
+      "type": "bcp:title_overlay",
+      "pos": [
+        1200,
+        220
+      ],
+      "size": [
+        320,
+        260
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 4,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 8
+        },
+        {
+          "name": "text",
+          "type": "STRING",
+          "widget": {
+            "name": "text"
+          },
+          "link": 9
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": [
+            10
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "bcp:title_overlay"
+      },
+      "widgets_values": [
+        "",
+        8.0,
+        "#ffffff",
+        "top",
+        true
+      ],
+      "title": "中文标题"
+    },
+    {
+      "id": 32,
+      "type": "SaveImage",
+      "pos": [
+        1560,
+        0
+      ],
+      "size": [
+        340,
+        400
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 10
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "SaveImage"
+      },
+      "widgets_values": [
+        "公众号/首图"
+      ]
+    },
+    {
+      "id": 33,
+      "type": "ImageScale",
+      "pos": [
+        1200,
+        540
+      ],
+      "size": [
+        300,
+        180
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 11
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            12
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ImageScale"
+      },
+      "widgets_values": [
+        "lanczos",
+        200,
+        200,
+        "center"
+      ],
+      "title": "次图 200x200（取首图中间）"
+    },
+    {
+      "id": 34,
+      "type": "SaveImage",
+      "pos": [
+        1560,
+        440
+      ],
+      "size": [
+        340,
+        400
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 12
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "SaveImage"
+      },
+      "widgets_values": [
+        "公众号/次图"
+      ]
+    },
+    {
+      "id": 11,
+      "type": "bcp:skill",
+      "pos": [
+        400,
+        480
+      ],
+      "size": [
+        340,
+        300
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "spec",
+          "type": "STRING",
+          "link": 14
+        },
+        {
+          "name": "batch",
+          "type": "STRING",
+          "link": null
+        },
+        {
+          "name": "input",
+          "type": "STRING",
+          "widget": {
+            "name": "input"
+          },
+          "link": 13
+        }
+      ],
+      "outputs": [
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "links": [
+            16
+          ]
+        },
+        {
+          "name": "size",
+          "type": "STRING",
+          "links": [
+            17
+          ]
+        },
+        {
+          "name": "skill",
+          "type": "STRING",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "bcp:skill"
+      },
+      "widgets_values": [
+        "公众号配图",
+        "",
+        "参考图是文章封面，色调和画面风格与它统一",
+        ""
+      ],
+      "title": "技能：配图（每条描述各出一张）"
+    },
+    {
+      "id": 21,
+      "type": "bcp:openai_image",
+      "pos": [
+        780,
+        480
+      ],
+      "size": [
+        380,
+        440
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image_1",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 15
+        },
+        {
+          "name": "image_2",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_3",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_4",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_5",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_6",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_7",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_8",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "mask",
+          "shape": 7,
+          "type": "MASK",
+          "link": null
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "widget": {
+            "name": "prompt"
+          },
+          "link": 16
+        },
+        {
+          "name": "size",
+          "type": "STRING",
+          "widget": {
+            "name": "size"
+          },
+          "link": 17
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": [
+            18
+          ]
+        },
+        {
+          "name": "alpha",
+          "type": "MASK",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "bcp:openai_image"
+      },
+      "widgets_values": [
+        "gpt-image-2.5",
+        "",
+        "auto",
+        "medium",
+        1,
+        "auto",
+        0,
+        "randomize"
+      ],
+      "title": "出图：正文配图"
+    },
+    {
+      "id": 35,
+      "type": "SaveImage",
+      "pos": [
+        1560,
+        880
+      ],
+      "size": [
+        340,
+        400
+      ],
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 18
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "SaveImage"
+      },
+      "widgets_values": [
+        "公众号/配图"
+      ]
+    },
+    {
+      "id": 6,
+      "type": "Note",
+      "pos": [
+        400,
+        980
+      ],
+      "size": [
+        340,
+        360
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "Note"
+      },
+      "widgets_values": [
+        "1. 在「公众号文章」里写主题和要点，调口吻、字数、配图张数（要先在 设置 → BCP 配文本模型）。\n2. 文本模型写出标题、Markdown 正文（带【配图1】等占位）、封面和每张配图的画面描述。\n3. 封面裁成首图 900x383 和次图 200x200；正文配图参考封面统一风格，按顺序对应【配图N】。\n4. 首图要叠标题：在「开关」里打开，标题自动取文章标题。\n5. 全部存在 output/公众号/。\n\n注意：每次 Run 调用 1 次文本模型 + (1 + 配图张数) 次出图。"
+      ],
+      "title": "使用说明"
+    }
+  ],
+  "links": [
+    [
+      1,
+      2,
+      1,
+      3,
+      0,
+      "STRING"
+    ],
+    [
+      2,
+      2,
+      1,
+      4,
+      0,
+      "*"
+    ],
+    [
+      3,
+      2,
+      2,
+      10,
+      2,
+      "STRING"
+    ],
+    [
+      4,
+      5,
+      0,
+      10,
+      0,
+      "STRING"
+    ],
+    [
+      5,
+      10,
+      0,
+      20,
+      9,
+      "STRING"
+    ],
+    [
+      6,
+      10,
+      1,
+      20,
+      10,
+      "STRING"
+    ],
+    [
+      7,
+      20,
+      0,
+      30,
+      0,
+      "IMAGE"
+    ],
+    [
+      8,
+      30,
+      0,
+      31,
+      0,
+      "IMAGE"
+    ],
+    [
+      9,
+      2,
+      0,
+      31,
+      1,
+      "STRING"
+    ],
+    [
+      10,
+      31,
+      0,
+      32,
+      0,
+      "IMAGE"
+    ],
+    [
+      11,
+      20,
+      0,
+      33,
+      0,
+      "IMAGE"
+    ],
+    [
+      12,
+      33,
+      0,
+      34,
+      0,
+      "IMAGE"
+    ],
+    [
+      13,
+      2,
+      3,
+      11,
+      2,
+      "STRING"
+    ],
+    [
+      14,
+      5,
+      0,
+      11,
+      0,
+      "STRING"
+    ],
+    [
+      15,
+      20,
+      0,
+      21,
+      0,
+      "IMAGE"
+    ],
+    [
+      16,
+      11,
+      0,
+      21,
+      9,
+      "STRING"
+    ],
+    [
+      17,
+      11,
+      1,
+      21,
+      10,
+      "STRING"
+    ],
+    [
+      18,
+      21,
+      0,
+      35,
+      0,
+      "IMAGE"
+    ]
+  ],
+  "groups": [
+    {
+      "id": 1,
+      "title": "可选：首图叠加文章标题",
+      "bounding": [
+        1180,
+        160,
+        360,
+        340
+      ],
+      "color": "#3f789e",
+      "font_size": 24,
+      "flags": {}
+    }
+  ],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.6,
+      "offset": [
+        200,
+        460
+      ]
+    }
+  },
+  "version": 0.4
+}

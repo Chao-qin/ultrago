@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bcp.local/schemas/product-preprocess-config.schema.json",
+  "title": "Product preprocess config",
+  "description": "商品预处理策略配置。SchemaRecord 保存的 data 是一次运行要使用的策略；修改或新建 SchemaRecord 后，后续 Flow 运行即可使用新的策略。所有金额单位均为人民币元，图片序号从 1 开始且区间两端都包含。@2 起 configId 与 shopProfile 都是可选的：只想覆盖定价或文案时，写一个片段（如 {\"pricing\":{\"markup\":3}}）即可，两个字段各有自己的回退来源。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "configId": { "type": "string", "minLength": 1, "description": "配置业务标识，写入 canonical.preprocessConfig.configId，便于审计。省略时记为 default —— 每次运行的完整入参另有 paramsJson 存档，所以省略不会丢掉可追溯性。" },
+    "shopProfile": { "description": "完整店铺发布配置，直接复用 shop-profile@2；包含客服电话、运费模板、发布行为、售后和品牌字段。省略时回退到 Flow 的 profile 参数；两者都给出时以本字段为准。", "x-bcp-schema-ref": { "name": "shop-profile", "version": 2 } },
+    "pricing": {
+      "type": "object", "additionalProperties": false,
+      "description": "商品售价计算策略，存在时覆盖 shopProfile.pricing，金额单位为元。",
+      "properties": {
+        "strategy": { "type": "string", "enum": ["fixed_amount", "percentage", "percentage_plus_fixed", "min_max"], "default": "fixed_amount", "description": "定价方式：固定金额、百分比、百分比加固定金额或加价后限制上下限。" },
+        "markup": { "type": "number", "minimum": 0, "default": 10, "description": "固定加价金额，单位元；fixed_amount 和 min_max 使用。" },
+        "markupPercent": { "type": "number", "minimum": 0, "description": "百分比加价数值，例如 20 表示增加 20%；percentage 和 percentage_plus_fixed 使用。" },
+        "markupFixed": { "type": "number", "minimum": 0, "description": "百分比加价后追加的固定金额，单位元；percentage_plus_fixed 使用。" },
+        "minPriceYuan": { "type": "number", "minimum": 0, "description": "最终售价下限，单位元；min_max 使用。" },
+        "maxPriceYuan": { "type": "number", "minimum": 0, "description": "最终售价上限，单位元；min_max 使用，必须不小于 minPriceYuan。" },
+        "minMarginYuan": { "type": "number", "minimum": 0, "description": "毛利风险提示阈值，单位元；低于该值记录风险，不改变售价。" }
+      },
+      "allOf": [
+        { "if": { "properties": { "strategy": { "const": "percentage" } } }, "then": { "required": ["markupPercent"] } },
+        { "if": { "properties": { "strategy": { "const": "percentage_plus_fixed" } } }, "then": { "required": ["markupPercent", "markupFixed"] } },
+        { "if": { "properties": { "strategy": { "const": "min_max" } } }, "then": { "required": ["minPriceYuan", "maxPriceYuan"] } }
+      ]
+    },
+    "text": {
+      "type": "object", "additionalProperties": false,
+      "description": "对外文案处理策略，仅作用于标题、规格名/规格值和详情文本；原始采集字段保留用于溯源。",
+      "properties": {
+        "removeSensitiveByAi": { "type": "boolean", "default": false, "description": "是否使用 AI 去除敏感字符或敏感表达；AI 失败会阻断商品。" },
+        "removeBrandByAi": { "type": "boolean", "default": false, "description": "是否使用 AI 去除商标和品牌名；AI 失败会阻断商品。" },
+        "replaceRules": {
+          "type": "array", "description": "按数组顺序执行的确定性正则替换规则。",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["pattern", "replacement", "description"],
+            "properties": {
+              "pattern": { "type": "string", "minLength": 1, "description": "Python 正则表达式。" },
+              "replacement": { "type": "string", "description": "匹配文本的替换结果；空字符串表示删除。" },
+              "flags": { "type": "string", "pattern": "^[ims]*$", "description": "正则 flags：i 忽略大小写、m 多行、s 点号匹配换行。" },
+              "description": { "type": "string", "minLength": 1, "description": "这条替换规则的用途和业务原因。" }
+            }
+          }
+        },
+        "enableAiShortTitle": { "type": "boolean", "default": false, "description": "是否启用 AI 生成 title.shortName；结果必须非空且不超过 20 个字符。" }
+      }
+    },
+    "sku": {
+      "type": "object", "additionalProperties": false,
+      "description": "SKU 过滤策略；价格小于等于 0 的 SKU 始终按现有质量规则剔除。",
+      "properties": { "dropZeroStock": { "type": "boolean", "default": true, "description": "是否剔除库存为 0 的 SKU；默认 true，关闭时保留零库存记录。" } }
+    },
+    "images": {
+      "type": "object", "additionalProperties": false,
+      "description": "主图和详情图选择策略：先按 1-based 闭区间选择，再随机打乱，最后按抖店上限裁剪。",
+      "properties": {
+        "main": { "$ref": "#/$defs/imageSelection", "description": "主图选择策略。" },
+        "detail": { "$ref": "#/$defs/imageSelection", "description": "详情图选择策略。" },
+        "seed": { "type": ["integer", "null"], "minimum": 0, "description": "随机顺序 seed；提供时同一批输入可复现，为 null 时不保证复现。" }
+      }
+    }
+  },
+  "$defs": {
+    "imageSelection": {
+      "type": "object", "additionalProperties": false,
+      "description": "单组图片选择规则。start/end 是 1-based 闭区间。",
+      "properties": {
+        "start": { "type": "integer", "minimum": 1, "default": 1, "description": "保留起始图片序号，包含该张。" },
+        "end": { "type": ["integer", "null"], "minimum": 1, "description": "保留结束图片序号，包含该张；null 或省略表示直到末尾。" },
+        "shuffle": { "type": "boolean", "default": false, "description": "是否对选中的图片独立随机打乱。" }
+      }
+    }
+  }
+}

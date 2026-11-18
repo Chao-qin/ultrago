@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bcp.local/schemas/doudian-shop-profile.schema.json",
+  "title": "Doudian shop profile",
+  "description": "抖店店铺资料快照；不包含身份证、营业执照照片或完整证件号码等敏感材料。",
+  "type": "object",
+  "required": ["shopId", "shopName", "status", "sourceUrl", "capturedAt"],
+  "additionalProperties": false,
+  "properties": {
+    "shopId": { "type": "string", "minLength": 1 },
+    "shopName": { "type": "string", "minLength": 1 },
+    "status": { "type": "string" },
+    "shopType": { "type": "string" },
+    "openedAt": { "type": "string" },
+    "serviceMobile": { "type": "string" },
+    "merchantExperienceScore": { "type": ["number", "null"] },
+    "sourceUrl": { "type": "string", "format": "uri" },
+    "capturedAt": { "type": "string", "format": "date-time" }
+  }
+}

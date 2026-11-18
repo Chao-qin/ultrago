@@ -1,0 +1,14 @@
+# WeClaw binary — downloaded by scripts/install.sh
+bin/
+
+# WeChat login state — keep local, never commit
+config/accounts/
+config/accounts.bak-*/
+config/*.sync.json
+config/*.log
+config/*.pid
+config/workspace/
+
+# Editor / OS
+.DS_Store
+*.log

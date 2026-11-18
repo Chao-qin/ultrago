@@ -1,0 +1,1286 @@
+{
+  "schemaVersion": 2,
+  "name": "doudian-after-watch-config",
+  "goal": "抖店「看后搜配置」：给一条**已发布**的内容补上承接商品与看后搜词，让它从「待配置」变成有承接的状态。入口由 entryUrl + scene 两个参数决定，共三条已实测路径：①图文 = content-tool/image-text-operation（默认，scene=self）②自营短视频 = content-tool/short-video（scene=self）③达人视频 = mcompass/search/video（scene=author，需先切「非自营视频」tab）。三条路径共用同一套配置抽屉、选品组件与 commit_v2 提交接口（2026-09-20/21 实测），故选品与提交步骤逐字通用，分路径的只有：列表入口 URL、就绪判据、行内入口按钮文案、以及「已配过」的判据。⚠️ 已知限制：①自营视频管理「数据周期」默认只有近 7 天，更早的视频需先人工放宽；②达人视频提交后行内按钮【不变】（仍是「立即配置」），只有状态翻成「审核中」，所以 author 的已配判据只能看状态；③本 book 只做首次配置——承接商品已有内容时应走人工改配。这是唯一一个作用于**存量内容**的推广动作：不新增内容、不吃发布配额、失败也不产生公开物。三段式：①承接商品（≤5，主推品享流量激励，加优惠券还有发券动画）②看后搜词（≤3，选填）③内容标题（本 book 不动它——那是已发布文案，改它的收益远小于风险）。两条硬纪律与图文发布 book 一致：会变的量一律读不猜；调用方的自由文本只经 type 进页面、绝不拼进 eval。",
+  "paramSchemaRef": "book-input-doudian-after-watch-config@1",
+  "outputSchemaRef": "book-output-doudian-after-watch-config@1",
+  "params": [
+    {
+      "name": "itemId",
+      "required": true,
+      "description": "内容 ID。listPage=image-text-operation 时是图文 ID（「图文管理」行内的 ID，也就是 doudian-image-text-publish 的产出 itemId）；listPage=short-video 时是短视频 ID（「视频管理」行内的 ID）。",
+      "schema": {
+        "type": "string",
+        "pattern": "^[0-9]{10,25}$"
+      }
+    },
+    {
+      "name": "entryUrl",
+      "required": false,
+      "default": "https://fxg.jinritemai.com/ffa/content-tool/image-text-operation?activeTab=management",
+      "description": "内容列表页入口 URL。三个已实测的值：①图文 = https://fxg.jinritemai.com/ffa/content-tool/image-text-operation?activeTab=management（默认，与 v1 逐字等价）②自营短视频 = https://fxg.jinritemai.com/ffa/content-tool/short-video?activeTab=management ③达人视频 = https://fxg.jinritemai.com/ffa/mcompass/search/video —— 注意第③个是 compass 下的独立页，不在 content-tool 根下，所以这里传完整 URL 而不是路径片段；它还需要 scene=author 才能正确切 tab 与认按钮。",
+      "schema": {
+        "type": "string",
+        "pattern": "^https://fxg\\.jinritemai\\.com/ffa/"
+      }
+    },
+    {
+      "name": "scene",
+      "required": false,
+      "default": "self",
+      "description": "操作场景，决定行内按钮文案与列表结构。self=自营内容（图文/短视频）：列表是表格行，入口按钮「配置看后搜」，提交后变「查看看后搜配置」/「更改看后搜」。author=达人视频（compass「非自营视频」tab）：需先切 tab，入口按钮「立即配置」，已配过是「立即修改」，**提交后行内按钮不变、只有状态翻成「审核中」**（2026-09-21 实测），所以回执判据只能靠状态变化，不能靠按钮文案。",
+      "schema": {
+        "type": "string",
+        "enum": [
+          "self",
+          "author"
+        ]
+      }
+    },
+    {
+      "name": "commit",
+      "required": true,
+      "description": "落点。dry-run=把配置按入参填好、跑完自检就停（不提交）；submit=真的按「立即提交」。提交后状态变「审核中」，本 book 不支持改配（行内入口会变成「查看看后搜配置」）。",
+      "schema": {
+        "type": "string",
+        "enum": [
+          "dry-run",
+          "submit"
+        ]
+      }
+    },
+    {
+      "name": "withProduct",
+      "required": false,
+      "default": "no",
+      "description": "是否配置承接商品。yes 时必须同时给 primaryProductId。抖店支持最多 5 个承接商品，本 book v1 只做**主推品**那一个——它是唯一享流量激励的，其余 4 个是附加承接位，收益差一个量级。",
+      "schema": {
+        "type": "string",
+        "enum": [
+          "yes",
+          "no"
+        ]
+      }
+    },
+    {
+      "name": "primaryProductId",
+      "required": false,
+      "description": "主推承接商品的抖店商品 ID。选中后必须点「设置主推」才能确定（不设会弹「请设置视频同款主推」且抽屉不动），本 book 已经把这一步做进去了。",
+      "schema": {
+        "type": "string",
+        "pattern": "^[0-9]{6,25}$"
+      }
+    },
+    {
+      "name": "keywords",
+      "required": false,
+      "description": "看后搜词，最多 3 个，选填。「你设置的看后搜词有一定概率曝光给消费者」，建议结合品牌调性与热点。",
+      "schema": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 3,
+        "items": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20
+        }
+      }
+    }
+  ],
+  "pages": {
+    "doudian": {
+      "description": "抖店「图文运营 → 图文管理」列表页。看后搜配置是页面内的两层抽屉（配置抽屉 + 承接商品选品抽屉），全程不换 URL。",
+      "url": "https://fxg.jinritemai.com/ffa/content-tool/image-text-operation?activeTab=management",
+      "signals": {
+        "manageReady": {
+          "condition": {
+            "all": [
+              {
+                "any": [
+                  {
+                    "urlIncludes": "/ffa/content-tool/"
+                  },
+                  {
+                    "urlIncludes": "/ffa/mcompass/search/video"
+                  }
+                ]
+              },
+              {
+                "script": {
+                  "code": "(() => { const t = (document.body.innerText || '').replace(/\\s+/g, ''); return /(图文|视频)类型|内容体裁/.test(t) && /ID\\d{10,}/.test(t); })()"
+                }
+              }
+            ]
+          },
+          "timeoutMs": 40000,
+          "description": "内容列表已加载。用 ?activeTab=management 直接进这一页，不用去点 tab —— 少一次点击就少一处会点空的地方。判据兼容三条路径：图文管理的筛选区文案是「图文类型」，自营视频管理是「视频类型」，达人视频（compass）是「内容体裁」（2026-09-21 实测）；再加一条「行里有 ID+10 位以上数字」确认列表真的出行了，而不只是骨架。"
+        },
+        "configDrawerOpen": {
+          "condition": {
+            "script": {
+              "code": "(() => [...document.querySelectorAll('.auxo-drawer-body')].some(b => /设置看后搜词/.test(b.innerText || '')))()"
+            }
+          },
+          "timeoutMs": 25000,
+          "description": "「设置看后搜」抽屉已打开（三段：承接商品 / 看后搜词 / 图文标题）。以「设置看后搜词」这段文案为准。"
+        },
+        "pickerOpen": {
+          "condition": {
+            "any": [
+              {
+                "script": {
+                  "code": "(() => (window.__bcpAw || {}).withProduct !== 'yes')()"
+                }
+              },
+              {
+                "script": {
+                  "code": "(() => !!document.querySelector('input[placeholder=\"请输入商品ID/商品名称\"]'))()"
+                }
+              }
+            ]
+          },
+          "timeoutMs": 25000,
+          "description": "「看后搜承接商品」选品抽屉已打开，**或者这一趟根本不需要它**（withProduct=no）。它盖在配置抽屉之上、同样是 .auxo-drawer-body，所以判据用它独有的搜索框，不用抽屉本身。【为什么带短路】这个门只被「写搜索框 / 发查询 / 勾选设主推」三步用，而这三步都只在 withProduct=yes 时有事可做：step「打开选品抽屉」在 no 时整步 no-op，于是抽屉永远不会出现，后面三步的门就会一直等到超时——2026-09-16 实测，withProduct=no 必然卡死在这里。作者本想用 optional 丢弃这几步，但 optional【只对槽位解析生效】，而这三步里只有「写搜索框」带 {{primaryProductId}}，另外两步没有槽位，标了也不生效。把短路做进门里是代价最小且不新增判据副本的解法，与本书 submitSettled 在 commit=dry-run 时恒真是同一手法。"
+        },
+        "searchApplied": {
+          "description": "选品搜索的结果已经到位：列表里出现了搜索框里那个 ID，或者列表确实为空（= 这个 ID 不在承接池里）。【为什么必须是 signal 而不是 verify】verify 是瞬时检查、不等待；而「结果到位」天生需要等——抖店这个列表在一次查询里会连着走默认列表 → 中间态 → 结果好几拍。2026-09-16 实测：action 已经判到命中并返回 ok:true，紧接着 162ms 后 verify 看到的却还是默认那 10 条（给 verify 临时加 _vdiag 探针抓到的，ids 正是默认前十、目标不在其中），于是恒定报「evalCheck false」，而真实原因跟商品本身毫无关系——我曾据此误判成「这个商品不符合提报要求」，还跑去查了它的好评率。判据本身没错，错的是放在了不会等的槽里。withProduct=no 时整条判据短路为真，与本书 submitSettled 同一写法。",
+          "timeoutMs": 25000,
+          "condition": {
+            "script": {
+              "code": "(() => { const s = window.__bcpAw || {}; if (s.withProduct !== 'yes') return true; const inp = document.querySelector('input[placeholder=\"请输入商品ID/商品名称\"]'); if (!inp) return false; const code = String(inp.value || '').trim(); if (!code) return false; const rows = [...document.querySelectorAll('tr,[class*=row]')].filter(x => /ID\\s*\\d{10,}/.test(x.innerText || '') && x.querySelector('input[type=checkbox]')); return rows.some(r => (r.innerText || '').replace(/\\s+/g, '').indexOf('ID' + code) >= 0) || rows.length === 0; })()"
+            }
+          }
+        },
+        "pickerClosed": {
+          "condition": {
+            "not": {
+              "script": {
+                "code": "(() => !!document.querySelector('input[placeholder=\"请输入商品ID/商品名称\"]'))()"
+              }
+            }
+          },
+          "timeoutMs": 20000,
+          "description": "选品抽屉已收起，回到配置抽屉。没有这个门就会对着盖在上面的选品抽屉找配置项。"
+        },
+        "submitSettled": {
+          "condition": {
+            "script": {
+              "code": "(() => { const s = window.__bcpAw || {}; if (s.commit !== 'submit') return true; return ![...document.querySelectorAll('.auxo-drawer-body')].some(b => /设置看后搜词/.test(b.innerText || '')); })()"
+            }
+          },
+          "timeoutMs": 45000,
+          "description": "提交已落地：配置抽屉关掉。commit=dry-run 时恒真——演练不提交，这个门不该把它卡住。"
+        },
+        "listFiltered": {
+          "condition": {
+            "script": {
+              "code": "(() => { if ((window.__bcpAwPre || {}).scene !== 'author') return true; const inp = [...document.querySelectorAll('input')].find(x => x.value && /^\\d{10,}$/.test(x.value)); if (!inp) return false; const rows = [...document.querySelectorAll('tr,[class*=row]')].filter(x => /ID\\s*\\d{10,}/.test(x.innerText || '')); return rows.length <= 3; })()"
+            }
+          },
+          "timeoutMs": 20000,
+          "description": "按 itemId 筛完的列表已经回来了：不筛是一页 10 条，筛中之后只剩 1 条（放宽到 ≤3 留余量）。判据必须是 signal 而不是 verify —— 点下查询到列表换回来要走一趟网络，verify 不等，看到的还是旧的 10 条。另外要求输入框里确实有一串纯数字，否则「还没写进去」和「筛完只剩 0 条」看起来一样。scene!=author 时整条短路为真（self 路径不走筛选），与本书 pickerOpen / submitSettled 同一手法。"
+        }
+      }
+    }
+  },
+  "steps": [
+    {
+      "goal": "在独立后台窗口打开内容列表页，具体哪一页由 entryUrl 决定（图文 / 自营短视频 / 达人视频）。verify 只验能自证动作本身的东西——newWindow 是非幂等动作，就绪判据放下一步的门里，否则每等超时一次就多开一个窗口。urlIncludes 收到 /ffa/ 这个三条路径唯一的公共前缀：精确的页面判据在 manageReady 门里（它同时看 URL 与列表特征文案）。",
+      "page": "doudian",
+      "action": {
+        "method": "browser.newWindow",
+        "params": {
+          "url": "{{entryUrl}}",
+          "focused": false,
+          "minimized": false,
+          "restoreFocus": true
+        }
+      },
+      "verify": {
+        "urlIncludes": "/ffa/",
+        "actionSucceeded": true
+      },
+      "onFail": "retry",
+      "maxRetries": 2
+    },
+    {
+      "goal": "scene=author 时先切到「非自营视频」tab。compass 这个页面默认停在「自营视频」，不切的话后面按 itemId 找行【必然找不到】，而 step「定位行」会把它报成 item-row-not-found（itemId 写错 / 不在当前筛选）—— 又是一次把「没切 tab」伪装成「ID 不对」的误诊。scene=self 时整步 no-op：图文 / 自营短视频的列表页根本没有这个 tab。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "manageReady"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "    (async () => {",
+            "      if ('{{scene}}' !== 'author') return { ok: true, skipped: 'scene=self' };",
+            "      const vis = bcpDom.visible;",
+            "      const tabs = [...document.querySelectorAll('[role=tab],[class*=tab]')]",
+            "        .filter(e => vis(e) && (e.innerText || '').trim() === '非自营视频');",
+            "      if (!tabs.length)",
+            "        return { ok: false, reason: 'author-tab-not-found', hint: 'entryUrl 多半不是 compass 的 /ffa/mcompass/search/video' };",
+            "      const selected = t =>",
+            "        t.getAttribute('aria-selected') === 'true' || /active|selected/i.test(String(t.className || ''));",
+            "      if (tabs.some(selected)) return { ok: true, note: '已在非自营视频 tab' };",
+            "      tabs.sort((a, b) => a.getElementsByTagName('*').length - b.getElementsByTagName('*').length);",
+            "      bcpDom.press(tabs[0]);",
+            "      /* 判据用「联系达人」——那是达人视频行独有的按钮，自营列表不会出现它。",
+            "         不用 tab 自己的 aria-selected：它在点下的那一刻就翻成 true 了，而列表还是旧的一批，",
+            "         照它放行会让下一步在自营列表里找达人 itemId，然后报 item-row-not-found。 */",
+            "      const loaded = await bcpWait.until(",
+            "        () => (/联系达人/.test(document.body.innerText || '') ? true : null), 10000, 300);",
+            "      if (!loaded) return { ok: false, reason: 'author-list-not-loaded' };",
+            "      return { ok: true }",
+            "    })()"
+          ]
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { if ('{{scene}}' !== 'author') return true; return /联系达人/.test(document.body.innerText || ''); })()"
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 2
+    },
+    {
+      "goal": "按 itemId 把列表筛到只剩这一条，再去找行。**没有这一步，本 book 对绝大多数目标都是废的**：达人视频列表一页 10 条、共 13 页，而 rowOf 只看当前 DOM —— 2026-09-21 实测，一条 145 万观看的达人视频排在第 2 页，不筛就必然 item-row-not-found，而那个 hint 会把「没筛」读成「itemId 写错」。筛选框用「内容ID」这个可见文本定位（不是易变 class），取它右侧同一行最近的 input；写值走 bcpDom.setValue + 一次 input 事件（React 受控，learn 2026-09-14），再点「查询」。scene=self 时整步 no-op：content-tool 那两页的筛选项叫「短视频ID」/「图文ID」，文案没实测过，不写死；self 路径本来就只处理第 1 页内的目标，行为与 v1 一致。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "manageReady"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "    (async () => {",
+            "      window.__bcpAwPre = { scene: '{{scene}}' };",
+            "      if ('{{scene}}' !== 'author') return { ok: true, skipped: 'scene=self' };",
+            "      const ITEM = '{{itemId}}';",
+            "      const vis = bcpDom.visible;",
+            "      const labs = [...document.querySelectorAll('*')].filter(",
+            "        e => vis(e) && (e.innerText || '').trim() === '内容ID' && e.children.length <= 1",
+            "      );",
+            "      if (!labs.length) return { ok: false, reason: 'itemid-label-not-found' };",
+            "      const lr = labs[labs.length - 1].getBoundingClientRect();",
+            "      const cands = [...document.querySelectorAll('input')]",
+            "        .filter(vis)",
+            "        .map(i => { const r = i.getBoundingClientRect(); return { i, dx: r.x - lr.x, dy: Math.abs(r.y - lr.y) }; })",
+            "        .filter(o => o.dy < 34 && o.dx > 0)",
+            "        .sort((a, b) => a.dx - b.dx);",
+            "      if (!cands.length) return { ok: false, reason: 'itemid-input-not-found' };",
+            "      const inp = cands[0].i;",
+            "      /* 原生 setter 交给原语（skill §3.5：手抄 value 描述符是被 lint 拦的形态）；",
+            "         setValue 故意不发事件，由这里决定发哪个 —— 这个筛选框认 input。 */",
+            "      bcpDom.setValue(inp, ITEM);",
+            "      inp.dispatchEvent(new Event('input', { bubbles: true }));",
+            "      const q = [...document.querySelectorAll('button')].find(",
+            "        b => (b.innerText || '').trim() === '查询' && vis(b)",
+            "      );",
+            "      if (!q) return { ok: false, reason: 'query-button-not-found' };",
+            "      bcpDom.press(q);",
+            "      return { ok: true, filtered: ITEM }",
+            "    })()"
+          ]
+        }
+      },
+      "after": {
+        "all": [
+          "listFiltered"
+        ]
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { if ('{{scene}}' !== 'author') return true; const i = [...document.querySelectorAll('input')].find(x => x.value === '{{itemId}}'); return !!i; })()"
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 2
+    },
+    {
+      "goal": "按 itemId 找到那一行，读它当前的看后搜配置状态，并判断这一趟到底能不能配。三种情况必须分开：①行根本不在（itemId 错了，或不在当前筛选/分页里）；②行在、但操作区是「查看看后搜配置」而不是「配置看后搜」——说明**已经配过了**（状态是审核中/已配置），这时候继续走下去只会点空；③行在且可配。把结果连同 commit 一起写进 window.__bcpAw 供后续步骤 fail-closed 检查。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "manageReady"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "    (() => {",
+            "      const ITEM = '{{itemId}}';",
+            "      const COMMIT = '{{commit}}';",
+            "      const WITH_PRODUCT = '{{withProduct}}';",
+            "      const SCENE = '{{scene}}';",
+            "",
+            "const vis = bcpDom.visible;",
+            "const press = bcpDom.press;",
+            "/* 文档序里外层容器排在真按钮前面，取最外层不报错、只会点空（见 learn 2026-09-08）。 */",
+            "const innermost = (root, text) => {",
+            "  /* 判据交给引擎原语：bcpDom.innermost 用 checkVisibility + 「直接子节点不再命中」定义",
+            "     innermost，被 check:dom 在真 Chromium 里跑过。这里只保留本书原有的选择规则",
+            "     （多命中取后代最少的那个），调用点一行未动。 */",
+            "  const m = bcpDom.innermost(root, text, { exact: true, selector: 'button,div,span,a' });",
+            "  m.sort((a, b) => a.getElementsByTagName('*').length - b.getElementsByTagName('*').length);",
+            "  return m[0] ?? null;",
+            "};",
+            "const drawerBy = re =>",
+            "  [...document.querySelectorAll('.auxo-drawer-body')].filter(vis).find(b => re.test(b.innerText || ''));",
+            "const rowOf = id =>",
+            "  [...document.querySelectorAll('tr,[class*=row]')].find(",
+            "    r => (r.innerText || '').replace(/\\s+/g, '').indexOf('ID' + id) >= 0",
+            "  );",
+            "      const row = rowOf(ITEM);",
+            "      if (!row)",
+            "        return {",
+            "          ok: false,",
+            "          reason: 'item-row-not-found',",
+            "          itemId: ITEM,",
+            "          hint: '这一页的列表里没有这条内容 —— itemId 写错了，或者它在别的分页/筛选条件下（⚠️ 视频管理的「数据周期」默认只有近 7 天，更早发布的视频不在默认列表里）'",
+            "        };",
+            "      const flat = (row.innerText || '').replace(/\\s+/g, '');",
+            "      const status = (flat.match(/(待配置|配置中|审核中|已配置|审核驳回|审核不通过|待优化|已优化)/) || [])[1] || null;",
+            "      /* 入口按钮文案按场景分（2026-09-21 实测）：自营列表是「配置看后搜」，达人视频列表是「立即配置」。 */",
+            "      const ENTRY = SCENE === 'author' ? '立即配置' : '配置看后搜';",
+            "      const canConfigure = !!innermost(row, ENTRY);",
+            "      /* 「已配过」的判据两条路径完全不同：",
+            "         self —— 行内换成「查看看后搜配置」（图文）或「更改看后搜」（短视频）；",
+            "         author —— 行内按钮【不变】，仍是「立即配置」，只有状态翻成「审核中」/「已优化」，",
+            "         被拒时才多出「立即修改」。所以 author 必须看状态，看按钮会把已提交的行当成可配，重复提交。 */",
+            "      const alreadyConfigured = SCENE === 'author'",
+            "        ? (status === '审核中' || status === '已优化' || !!innermost(row, '立即修改'))",
+            "        : (!!innermost(row, '查看看后搜配置') || !!innermost(row, '更改看后搜'));",
+            "      if (alreadyConfigured)",
+            "        return {",
+            "          ok: false,",
+            "          reason: 'already-configured',",
+            "          itemId: ITEM,",
+            "          status: status,",
+            "          hint: '这条内容已经配过看后搜了（self=「查看看后搜配置」/「更改看后搜」；author=状态已是审核中/已优化）。本 book 只做首次配置，改配请人工去页面上做'",
+            "        };",
+            "      if (!canConfigure)",
+            "        return {",
+            "          ok: false,",
+            "          reason: 'config-entry-not-found',",
+            "          itemId: ITEM,",
+            "          status: status,",
+            "          hint: '行找到了，但既没有入口按钮「' + ENTRY + '」，状态也不像已配过 —— 更像选择器失效，不是状态问题'",
+            "        };",
+            "      window.__bcpAw = {",
+            "        ok: true,",
+            "        itemId: ITEM,",
+            "        commit: COMMIT,",
+            "        withProduct: WITH_PRODUCT,",
+            "        statusBefore: status,",
+            "        title: (row.innerText || '').trim().split('\\n')[0].slice(0, 40),",
+            "        startedAt: new Date().toISOString()",
+            "      };",
+            "      return window.__bcpAw",
+            "    })()"
+          ]
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { const s = window.__bcpAw; return !!(s && s.ok === true && s.itemId); })()"
+        }
+      },
+      "onFail": "escalate"
+    },
+    {
+      "goal": "点开这一行的「配置看后搜」。抽屉是单例，已经开着就直接返回，所以可以安全 retry。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "manageReady"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "    (async () => {",
+            "      const DL = bcpDeadline;",
+            "      const s = window.__bcpAw;",
+            "      if (!s || !s.ok) return { ok: false, reason: 'gate-state-missing' };",
+            "",
+            "const vis = bcpDom.visible;",
+            "const press = bcpDom.press;",
+            "/* 文档序里外层容器排在真按钮前面，取最外层不报错、只会点空（见 learn 2026-09-08）。 */",
+            "const innermost = (root, text) => {",
+            "  /* 判据交给引擎原语：bcpDom.innermost 用 checkVisibility + 「直接子节点不再命中」定义",
+            "     innermost，被 check:dom 在真 Chromium 里跑过。这里只保留本书原有的选择规则",
+            "     （多命中取后代最少的那个），调用点一行未动。 */",
+            "  const m = bcpDom.innermost(root, text, { exact: true, selector: 'button,div,span,a' });",
+            "  m.sort((a, b) => a.getElementsByTagName('*').length - b.getElementsByTagName('*').length);",
+            "  return m[0] ?? null;",
+            "};",
+            "const drawerBy = re =>",
+            "  [...document.querySelectorAll('.auxo-drawer-body')].filter(vis).find(b => re.test(b.innerText || ''));",
+            "const rowOf = id =>",
+            "  [...document.querySelectorAll('tr,[class*=row]')].find(",
+            "    r => (r.innerText || '').replace(/\\s+/g, '').indexOf('ID' + id) >= 0",
+            "  );",
+            "      if (drawerBy(/设置看后搜词/)) return { ok: true, note: '抽屉已经开着' };",
+            "      const row = rowOf(s.itemId);",
+            "      if (!row) return { ok: false, reason: 'item-row-vanished' };",
+            "      /* 与 step1 同一套文案映射，见那里的注释。 */",
+            "      const ENTRY = '{{scene}}' === 'author' ? '立即配置' : '配置看后搜';",
+            "      const btn = innermost(row, ENTRY);",
+            "      if (!btn) return { ok: false, reason: 'config-button-not-found' };",
+            "      btn.scrollIntoView({ block: 'center' });",
+            "      press(btn);",
+            "      const open = await bcpWait.until(() => (drawerBy(/设置看后搜词/) ? true : null), 8000, 250);",
+            "      if (!open)",
+            "        return { ok: false, reason: 'config-drawer-did-not-open', deadlineLeftMs: DL - Date.now() };",
+            "      return { ok: true }",
+            "    })()"
+          ]
+        }
+      },
+      "after": {
+        "all": [
+          "configDrawerOpen"
+        ]
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => [...document.querySelectorAll('.auxo-drawer-body')].some(b => { const t = b.innerText || ''; return /设置看后搜词/.test(t) && /添加承接商品/.test(t); }))()"
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 1
+    },
+    {
+      "goal": "withProduct=yes 时打开「看后搜承接商品」选品抽屉。它盖在配置抽屉之上，两层都是 .auxo-drawer-body，所以后续每一步都得靠各自独有的文案/控件区分，不能只按 class 找。withProduct=no 时整步 no-op。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "configDrawerOpen"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "    (async () => {",
+            "      const DL = bcpDeadline;",
+            "      const s = window.__bcpAw || {};",
+            "      if (s.withProduct !== 'yes') return { ok: true, skipped: 'withProduct=no' };",
+            "",
+            "const vis = bcpDom.visible;",
+            "const press = bcpDom.press;",
+            "/* 文档序里外层容器排在真按钮前面，取最外层不报错、只会点空（见 learn 2026-09-08）。 */",
+            "const innermost = (root, text) => {",
+            "  /* 判据交给引擎原语：bcpDom.innermost 用 checkVisibility + 「直接子节点不再命中」定义",
+            "     innermost，被 check:dom 在真 Chromium 里跑过。这里只保留本书原有的选择规则",
+            "     （多命中取后代最少的那个），调用点一行未动。 */",
+            "  const m = bcpDom.innermost(root, text, { exact: true, selector: 'button,div,span,a' });",
+            "  m.sort((a, b) => a.getElementsByTagName('*').length - b.getElementsByTagName('*').length);",
+            "  return m[0] ?? null;",
+            "};",
+            "const drawerBy = re =>",
+            "  [...document.querySelectorAll('.auxo-drawer-body')].filter(vis).find(b => re.test(b.innerText || ''));",
+            "const rowOf = id =>",
+            "  [...document.querySelectorAll('tr,[class*=row]')].find(",
+            "    r => (r.innerText || '').replace(/\\s+/g, '').indexOf('ID' + id) >= 0",
+            "  );",
+            "      if (document.querySelector('input[placeholder=\"请输入商品ID/商品名称\"]'))",
+            "        return { ok: true, note: '选品抽屉已经开着' };",
+            "      const cfg = drawerBy(/设置看后搜词/);",
+            "      if (!cfg) return { ok: false, reason: 'config-drawer-gone' };",
+            "      const box = [...cfg.querySelectorAll('div')]",
+            "        .filter(vis)",
+            "        .filter(e => /^添加承接商品/.test((e.textContent || '').trim()))",
+            "        .sort((a, b) => a.getElementsByTagName('*').length - b.getElementsByTagName('*').length)[0];",
+            "      if (!box) return { ok: false, reason: 'add-product-box-not-found' };",
+            "      press(box);",
+            "      const open = await bcpWait.until(",
+            "        () => (document.querySelector('input[placeholder=\"请输入商品ID/商品名称\"]') ? true : null),",
+            "        8000, 250",
+            "      );",
+            "      if (!open) return { ok: false, reason: 'picker-did-not-open', deadlineLeftMs: DL - Date.now() };",
+            "      return { ok: true }",
+            "    })()"
+          ]
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { const s = window.__bcpAw || {}; if (s.withProduct !== 'yes') return true; return !!document.querySelector('input[placeholder=\"请输入商品ID/商品名称\"]'); })()"
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 1
+    },
+    {
+      "goal": "把 primaryProductId 写进选品抽屉的搜索框。**不用 submit:true** —— 这个搜索框没有外层 form，回车提交不了（工具会如实报 `form was NOT submitted`），查询由下一步点放大镜发出。调用方的数据只经 browser.type 进页面、绝不拼进 eval 源码（learn 2026-08-23）。没传就整步丢弃。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "configDrawerOpen",
+          "pickerOpen"
+        ]
+      },
+      "optional": true,
+      "action": {
+        "method": "browser.type",
+        "params": {
+          "css": "input[placeholder=\"请输入商品ID/商品名称\"]",
+          "text": "{{primaryProductId}}"
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { const i = document.querySelector('input[placeholder=\"请输入商品ID/商品名称\"]'); return !!(i && String(i.value || '').trim().length >= 6); })()"
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 2
+    },
+    {
+      "goal": "把查询真正发出去。这一步要跨三道坎，全是 2026-09-14 实测踩出来的：\n① **React 收不到 browser.type 写的值**。搜索框是受控组件，React 只信 input._valueTracker 里记的「上次的值」，比对后认为没变就不触发 onChange，state 始终是空串 —— 查询于是用空关键词发出，返回【默认列表】。现象极具欺骗性：框里明明显示着 ID，列表却是一堆不相干的近期商品。\n解法是改 tracker 而**不改 DOM 值**：`inp._valueTracker.setValue('')` 再派发一次 input。⚠️ 不要图省事写成「原生 setter 清空 → 派发 → 写回 → 再派发」—— 那次清空本身是一次合法的值变更，React 会拿空关键词再查一遍，于是两个请求赛跑：空查询回来把列表刷成默认列表，目标查询回来才是结果行。这会造出「action ok:true 而紧随其后的 verify false」这种看着不可能的组合（真的发生过）。\n② **回车提交不了**：这个搜索框没有外层 form，browser.type 每次都如实报 form was NOT submitted。查询靠点按钮发出，按钮是 button.ecom-btn.ecom-btn-icon-only.ecom-input-search-button，**不在 inp.closest('[class*=input]') 里**（那个容器命中 .ecom-input，内部 svg 数为 0），得从输入框向上逐级找，锚点取 class 里的 search-button。\n③ **等待要用 netIdle，不能用 until 轮询 DOM**。搜索期间页面连着走三态：默认列表 → 清空(显示「暂无搜索结果」) → 结果。拿 until 盯 DOM 等于在一条还在动的曲线上随机取点，撞上中间那一态就会判成「确认搜不到这个商品」。skill §2 写明：netIdle 读的是引擎注入的在途请求集合，eval 里手写轮询够不到那个信号。先前把 until 超时从 12s 调到 25s、30s，三次表现完全一样 —— 问题从来不是等多久，是判的时机不对（而且 bcpWait.* 还会被 bcpDeadline 二次封顶）。\n判据：网络静下来之后，列表里**有没有这个 ID**；有就是命中，列表空且有空态文案就是确认没有，两者都不是（还是那堆默认商品）说明关键词根本没生效 —— 这三种结局必须分开，否则会把一次没生效的搜索报成「商品不存在」。\n\n【2026-09-16 补 · 三处订正，动手前先读】\n① **本步的成功判据放在 `after`（signal searchApplied），不在 `verify`**。verify 是瞬时检查、不等待；而「搜索结果到位」天生要等好几拍。实测：action 已判到命中并返回 ok:true，紧接着 162ms 后 verify 看到的还是默认那 10 条，于是恒定报 evalCheck false —— 判据没错，槽位错了。变异检验：摘掉 after 立刻变红，装回即绿。\n② **verify 不要改成 `networkOk`**。搜索接口确实是 /compass_api/shop/mall/dd_search/after_watch/video/related_products_v2（钩 fetch/XHR 实测抓的），按 skill §5 它也确实是最强谓词 —— 但 withProduct=no 时本步不发任何请求，而 networkOk 在【无匹配请求】时是明确失败（orchestrator：`no matching request since this step began`），且它无法表达 withProduct 短路。所以这里只能留 evalCheck。试过一次，是回退，别再来。\n③ 失败分支全部经 `bail()` 写 window.__bcpAw._diag。原因：引擎报失败时只吐 verify 的原始代码，action 算出的reason 会被整个丢掉 —— 我曾因此把「组件没就绪」误读成「这个商品不符合提报要求」，还跑去查了它的好评率。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "configDrawerOpen",
+          "pickerOpen"
+        ]
+      },
+      "after": {
+        "all": [
+          "searchApplied"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "const vis = bcpDom.visible;",
+            "const press = bcpDom.press;",
+            "const productRows = () => [...document.querySelectorAll('tr,[class*=row]')].filter(",
+            "  x => /ID\\s*\\d{10,}/.test(x.innerText || '') && x.querySelector('input[type=checkbox]')",
+            ");",
+            "(async () => {",
+            "  const s = window.__bcpAw || {};",
+            "  if (s.withProduct !== 'yes') return { ok: true, skipped: 'withProduct=no' };",
+            "  // 每个失败分支都必须留痕。引擎报失败时只吐 verify 的原始 evalCheck 代码，action 算出的",
+            "  // reason 会被整个丢掉 —— 2026-09-16 实测：三个早退分支都不写 _diag，于是「组件没就绪」",
+            "  // 在外部看起来和「商品不存在」一模一样，我照着后者查了半天商品好评率才发现方向错了。",
+            "  // bail 只做留痕，不改任何判据。",
+            "  const bail = (o) => { window.__bcpAw = Object.assign(s, { _diag: Object.assign({ at: 'step5-search' }, o) }); return o; };",
+            "  const inp = document.querySelector('input[placeholder=\"请输入商品ID/商品名称\"]');",
+            "  if (!inp) return bail({ ok: false, reason: 'picker-closed' });",
+            "  const code = String(inp.value || '').trim();",
+            "  if (!code) return bail({ ok: false, reason: 'search-box-empty', hint: '上一步的 type 没落地', boxValue: String(inp.value || '') });",
+            "  const findBtn = () => {",
+            "    for (let n = inp.parentElement; n; n = n.parentElement) {",
+            "      const cand = n.querySelector('button[class*=search-button]');",
+            "      if (cand && vis(cand)) return cand;",
+            "    }",
+            "    return null;",
+            "  };",
+            "  // 一次完整的「让 React 收到值 + 把查询发出去」。写成函数是因为要重复做：",
+            "  // 抽屉刚打开时组件可能还没挂载完，那一刻做的一切都会静默落空 —— 手动复现时",
+            "  // 组件早就绪，所以一次就成；book 是开箱即动手，于是只在某些时候成。与其去赌一个",
+            "  // 就绪信号（试过「等默认列表」，反而成了新的阻塞点），不如隔几秒重做一次，",
+            "  // 组件哪一刻活过来都能接住。重做是幂等的：同样的关键词再查一次而已。",
+            "  const fire = () => {",
+            "    inp.focus();",
+            "    // 让 React 认账，但【不改 DOM 里的值】。此前的写法是「清空 → 派发 input → 写回 → 再派发」，",
+            "    // 那次清空会让 React 以空关键词再查一次 —— 于是两个请求赛跑：空查询回来把列表刷成默认列表，",
+            "    // 目标查询回来才是那一行结果。action 撞上后者判成功，verify 紧接着撞上前者判失败，",
+            "    // 表现就是「action ok:true 而 verify false」这种看着不可能的组合（2026-09-14 实测到）。",
+            "    // React 把「上次的值」记在 input._valueTracker 上，直接把它改成空，再派发一次 input，",
+            "    // React 比对后就认为值变了并触发 onChange —— 全程只发一个查询。",
+            "    const tracker = inp._valueTracker;",
+            "    if (tracker && typeof tracker.setValue === 'function') tracker.setValue('');",
+            "    else bcpDom.setValue(inp, code);",
+            "    inp.dispatchEvent(new Event('input', { bubbles: true }));",
+            "    const btn = findBtn();",
+            "    if (btn) press(btn);",
+            "    return !!btn;",
+            "  };",
+            "  if (!findBtn()) {",
+            "    // 正交取证：按钮【存在但不可见】=组件还在挂载/动画中；【压根不存在】=选择器或 DOM 结构变了。",
+            "    // 这两件事的修法完全相反，混成一个 reason 就等于没诊断（skill §7）。",
+            "    const raw = [...document.querySelectorAll('button[class*=search-button]')];",
+            "    return bail({ ok: false, reason: 'search-button-not-found', rawBtnCount: raw.length, rawBtnVisible: raw.map(b => bcpDom.visible(b)), rowsNow: productRows().length });",
+            "  }",
+            "  const DL = bcpDeadline;",
+            "  // 触发查询后【等网络静下来】再判，而不是盯着 DOM 猜 —— 这是本轮最贵的一个教训。",
+            "  // 搜索期间页面会连着走好几个中间态：默认列表 → 清空(并显示「暂无搜索结果」) → 结果。",
+            "  // 用 bcpWait.until 轮询 DOM，等于在一条还在动的曲线上随机取点拍板：撞上中间那一态",
+            "  // 就会判成「确认搜不到」，而几秒后结果其实就到了。skill §2 写得很清楚：netIdle 读的是",
+            "  // 引擎注入的在途请求集合，eval 里手写轮询【根本够不到这个信号，只能近似，而近似不出来】。",
+            "  // 我先后把 until 的超时从 12s 调到 25s、30s，三次表现完全一样 —— 因为问题从来不是等得够不够久，",
+            "  // 是判的时机不对。",
+            "  let fires = 0, settled = false;",
+            "  for (const attempt of [1, 2]) {",
+            "    fire(); fires++;",
+            "    settled = await bcpWait.netIdle(600, 20000);",
+            "    const rows0 = productRows();",
+            "    if (rows0.some(r => (r.innerText || '').replace(/\\s+/g, '').indexOf('ID' + code) >= 0)) break;",
+            "    if (!rows0.length) break;",
+            "  }",
+            "  const rows = productRows();",
+            "  const hit = rows.find(r => (r.innerText || '').replace(/\\s+/g, '').indexOf('ID' + code) >= 0);",
+            "  if (hit) return { ok: true, code: code, rowsAfter: rows.length, fires: fires, netSettled: settled };",
+            "  const emptyNow = !rows.length && /暂无搜索结果|暂无数据|暂无商品/.test(document.body.innerText || '');",
+            "  window.__bcpAw = Object.assign(s, {",
+            "    _diag: { at: 'step5-search', reason: emptyNow ? 'product-not-found' : 'search-never-applied', fires: fires, netSettled: settled, rowsNow: rows.length, leftNow: DL - Date.now(), boxValue: String(inp.value || ''), emptyNow: emptyNow }",
+            "  });",
+            "  if (emptyNow)",
+            "    return { ok: false, reason: 'product-not-found', hint: '网络已静，列表确实为空 —— 这个 ID 不在承接商品池里', code: code, fires: fires };",
+            "  return {",
+            "    ok: false,",
+            "    reason: 'search-never-applied',",
+            "    hint: '网络已静但列表既没筛出这个 ID 也不为空 —— 关键词没生效，别当成「搜不到这个商品」',",
+            "    code: code, fires: fires, netSettled: settled, rowsNow: rows.length",
+            "  }",
+            "})()"
+          ]
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { const s = window.__bcpAw || {}; if (s.withProduct !== 'yes') return true; const inp = document.querySelector('input[placeholder=\"请输入商品ID/商品名称\"]'); return !!(inp && String(inp.value || '').trim().length >= 6); })()"
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 1
+    },
+    {
+      "goal": "勾选搜出来的那一行，**点「设置主推」**，再确定。「设置主推」是这一步最容易漏的一环：2026-09-08 实测，只勾选不设主推，点确定会弹「请设置视频同款主推」而抽屉纹丝不动 —— 而那个 toast 是唯一的线索，DOM 上看不出任何异常，我第一次就误判成了「环境把抽屉冻住了」。所以本步在确定之后必须验到承接商品计数真的涨上去。行文本里商品 ID 的格式是「ID 3840…」（**空格，不是冒号**），跟小黄车那个选品器不一样。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "configDrawerOpen",
+          "pickerOpen"
+        ]
+      },
+      "optional": true,
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "    (async () => {",
+            "      /* 失败留痕（2026-09-16 加）。引擎报步骤失败时只吐 verify 的原始 evalCheck 代码，action 算出的",
+            "         reason 会被整个丢掉 —— step5 就因此把「组件没就绪」在外部看成了「商品不符合提报要求」。",
+            "         本步有 9 个失败分支，逐个改必漏；用一层外壳统一记，body 一行未动。 */",
+            "      const __r = await (async () => {",
+            "      const DL = bcpDeadline;",
+            "      const s = window.__bcpAw || {};",
+            "      if (s.withProduct !== 'yes') return { ok: true, skipped: 'withProduct=no' };",
+            "",
+            "const vis = bcpDom.visible;",
+            "const press = bcpDom.press;",
+            "/* 文档序里外层容器排在真按钮前面，取最外层不报错、只会点空（见 learn 2026-09-08）。 */",
+            "const innermost = (root, text) => {",
+            "  /* 判据交给引擎原语：bcpDom.innermost 用 checkVisibility + 「直接子节点不再命中」定义",
+            "     innermost，被 check:dom 在真 Chromium 里跑过。这里只保留本书原有的选择规则",
+            "     （多命中取后代最少的那个），调用点一行未动。 */",
+            "  const m = bcpDom.innermost(root, text, { exact: true, selector: 'button,div,span,a' });",
+            "  m.sort((a, b) => a.getElementsByTagName('*').length - b.getElementsByTagName('*').length);",
+            "  return m[0] ?? null;",
+            "};",
+            "const drawerBy = re =>",
+            "  [...document.querySelectorAll('.auxo-drawer-body')].filter(vis).find(b => re.test(b.innerText || ''));",
+            "const rowOf = id =>",
+            "  [...document.querySelectorAll('tr,[class*=row]')].find(",
+            "    r => (r.innerText || '').replace(/\\s+/g, '').indexOf('ID' + id) >= 0",
+            "  );",
+            "      const inp = document.querySelector('input[placeholder=\"请输入商品ID/商品名称\"]');",
+            "      if (!inp) return { ok: false, reason: 'picker-closed' };",
+            "      const code = String(inp.value || '').trim();",
+            "      if (!code)",
+            "        return { ok: false, reason: 'needs-primaryProductId', hint: 'withProduct=yes 却没传 primaryProductId' };",
+            "      const rows = await bcpWait.until(() => {",
+            "        const r = [...document.querySelectorAll('tr,[class*=row]')].filter(",
+            "          x => /ID\\s*\\d{10,}/.test(x.innerText || '') && x.querySelector('input[type=checkbox]')",
+            "        );",
+            "        return r.length ? r : null;",
+            "      }, 8000, 250);",
+            "      if (!rows) {",
+            "        const empty = /暂无数据|暂无商品|无搜索结果/.test(document.body.innerText || '');",
+            "        return {",
+            "          ok: false,",
+            "          reason: empty ? 'product-not-found' : 'product-rows-never-rendered',",
+            "          code: code,",
+            "          hint: empty ? '按 ID 确实搜不到这个商品' : '搜索发出去了却一行没渲染 —— 更像选择器/接口坏了'",
+            "        };",
+            "      }",
+            "      const row =",
+            "        rows.find(r => (r.innerText || '').replace(/\\s+/g, '').indexOf('ID' + code) >= 0) ||",
+            "        (rows.length === 1 ? rows[0] : null);",
+            "      if (!row) return { ok: false, reason: 'no-row-matched', code: code, rowCount: rows.length };",
+            "      const cb = row.querySelector('input[type=checkbox]');",
+            "      if (!cb.checked) press(cb.closest('label') || cb);",
+            "      const picked = await bcpWait.until(",
+            "        () => (/已选商品（[1-5]\\/5）/.test(document.body.innerText || '') ? true : null), 5000, 150",
+            "      );",
+            "      if (!picked) return { ok: false, reason: 'checkbox-did-not-select', code: code };",
+            "      const setMain = innermost(document.body, '设置主推');",
+            "      if (!setMain)",
+            "        return { ok: false, reason: 'set-primary-button-not-found', hint: '没有它就过不了确定那一关' };",
+            "      press(setMain);",
+            "      const isMain = await bcpWait.until(",
+            "        () => (/已成功设为主推品|主推品/.test(document.body.innerText || '') ? true : null), 5000, 150",
+            "      );",
+            "      if (!isMain) return { ok: false, reason: 'set-primary-did-not-apply' };",
+            "      const ok = innermost(document.body, '确定');",
+            "      if (!ok) return { ok: false, reason: 'confirm-not-found' };",
+            "      press(ok);",
+            "      const landed = await bcpWait.until(() => {",
+            "        const cfg = drawerBy(/设置看后搜词/);",
+            "        if (!cfg) return null;",
+            "        const m = (cfg.innerText || '').match(/(\\d)\\/5/);",
+            "        return m && Number(m[1]) > 0 ? Number(m[1]) : null;",
+            "      }, 8000, 250);",
+            "      if (!landed) {",
+            "        const warn = /请设置视频同款主推/.test(document.body.innerText || '');",
+            "        return {",
+            "          ok: false,",
+            "          reason: warn ? 'primary-not-set' : 'product-not-applied',",
+            "          code: code,",
+            "          deadlineLeftMs: DL - Date.now()",
+            "        };",
+            "      }",
+            "      return { ok: true, productId: code, cartCount: landed }",
+            "      })();",
+            "      if (__r && __r.ok === false) {",
+            "        const __s = window.__bcpAw || {};",
+            "        window.__bcpAw = Object.assign(__s, { _diag: Object.assign({ at: 'step6-select' }, __r) });",
+            "      }",
+            "      return __r;",
+            "    })()"
+          ]
+        }
+      },
+      "after": {
+        "all": [
+          "pickerClosed"
+        ]
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { const s = window.__bcpAw || {}; if (s.withProduct !== 'yes') return true; const cfg = [...document.querySelectorAll('.auxo-drawer-body')].find(b => /设置看后搜词/.test(b.innerText || '')); if (!cfg) return false; const m = (cfg.innerText || '').match(/(\\d)\\/5/); return !!m && Number(m[1]) > 0; })()"
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 1
+    },
+    {
+      "goal": "给看后搜词输入框打标记，并把盖在它上面的 placeholder 浮层设成 pointer-events:none。为什么需要这一步：tag 型输入框的 placeholder 是一个**独立的 div 浮层**，只要输入框是空的它就盖在上面，而 browser.type 的可达性检查（reachTarget 的 hit-test）会因此拒绝写入——报 「type intercepted: div.ecom-input-tag-placeholder covers input.ecom-input」。真人能打字是因为键盘事件走焦点、不走坐标；工具那道检查是为了防「往一个被弹窗盖住的字段里打字还报成功」，不能绕过它，但可以把这个纯装饰的浮层从命中测试里摘出去 —— pointer-events:none 不改布局、不改可见性，只让它不再拦截，是这里代价最小的解法。\n\n2026-09-14 补：光 defuse placeholder 还不够。抽屉底部那条固定操作栏（立即提交 / 取消）会压住贴近视口底边的输入框，hit-test 命中的是 footer 而不是 placeholder —— 报错长得一模一样，原因完全不同。所以本步在测可达性之前先把输入框 scrollIntoView 到视口中间；真失败时会把【到底是谁挡着】连同输入框的 rect 一起交出来，不用再靠猜。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "configDrawerOpen",
+          "pickerClosed"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "    (async () => {",
+            "",
+            "const vis = bcpDom.visible;",
+            "const press = bcpDom.press;",
+            "/* 文档序里外层容器排在真按钮前面，取最外层不报错、只会点空（见 learn 2026-09-08）。 */",
+            "const innermost = (root, text) => {",
+            "  /* 判据交给引擎原语：bcpDom.innermost 用 checkVisibility + 「直接子节点不再命中」定义",
+            "     innermost，被 check:dom 在真 Chromium 里跑过。这里只保留本书原有的选择规则",
+            "     （多命中取后代最少的那个），调用点一行未动。 */",
+            "  const m = bcpDom.innermost(root, text, { exact: true, selector: 'button,div,span,a' });",
+            "  m.sort((a, b) => a.getElementsByTagName('*').length - b.getElementsByTagName('*').length);",
+            "  return m[0] ?? null;",
+            "};",
+            "const drawerBy = re =>",
+            "  [...document.querySelectorAll('.auxo-drawer-body')].filter(vis).find(b => re.test(b.innerText || ''));",
+            "const rowOf = id =>",
+            "  [...document.querySelectorAll('tr,[class*=row]')].find(",
+            "    r => (r.innerText || '').replace(/\\s+/g, '').indexOf('ID' + id) >= 0",
+            "  );",
+            "      const cfg = drawerBy(/设置看后搜词/);",
+            "      if (!cfg) return { ok: false, reason: 'config-drawer-gone' };",
+            "      const inp = [...cfg.querySelectorAll('input')].filter(vis).find(i => /ecom-input/.test(i.className));",
+            "      if (!inp) return { ok: false, reason: 'keyword-input-not-found' };",
+            "      inp.setAttribute('data-bcp', 'aw-keyword');",
+            "      const covers = [...cfg.querySelectorAll('[class*=tag-placeholder]')];",
+            "      covers.forEach(c => { c.style.pointerEvents = 'none'; });",
+            "      // 底部那条固定操作栏（立即提交 / 取消）会压住贴近视口底边的输入框 —— 2026-09-14 实测：",
+            "      // placeholder 明明已经 defuse 掉了，hit-test 命中的却是 footer，于是这一步在一个",
+            "      // 【其实完全可以写入】的场景下必红，整本 book 就停在这儿。先滚到视口中间让它离开",
+            "      // footer 的覆盖范围，再测可达性。滚动是 action 的副作用，放这里合规；verify 只读，",
+            "      // 它看到的是滚完之后的稳定位置。",
+            "      inp.scrollIntoView({ block: 'center', inline: 'nearest' });",
+            "      const hitOf = () => {",
+            "        const r = inp.getBoundingClientRect();",
+            "        return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);",
+            "      };",
+            "      const ok = await bcpWait.until(() => {",
+            "        const top = hitOf();",
+            "        return top && (top === inp || inp.contains(top) || (top.contains && top.contains(inp))) ? { top: top } : null;",
+            "      }, 3000, 150);",
+            "      if (!ok) {",
+            "        // 说清楚到底是谁挡着，别让下一个人再猜一遍「是不是 placeholder 没 defuse 干净」",
+            "        const blocker = hitOf();",
+            "        return {",
+            "          ok: false,",
+            "          reason: 'keyword-input-unreachable',",
+            "          placeholdersDefused: covers.length,",
+            "          blockedBy: blocker ? (blocker.className || blocker.tagName) : 'null(视口外)',",
+            "          rect: (() => { const r = inp.getBoundingClientRect(); return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }; })()",
+            "        };",
+            "      }",
+            "      return { ok: true, placeholdersDefused: covers.length, reachable: true }",
+            "    })()"
+          ]
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { const i = document.querySelector('[data-bcp=\"aw-keyword\"]'); if (!i) return false; const r = i.getBoundingClientRect(); const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return !!(top && (top === i || i.contains(top) || top.contains(i))); })()"
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 1
+    },
+    {
+      "goal": "写第 1 个看后搜词（上限 3 个，选填）。输入框是 tag 型：打字 + 回车成为一个词条，browser.type 的 submit:true 走的正是 Enter。没传就整步丢弃。**判据只能看计数 N/3，不能看词条文本** —— 2026-09-08 实测，窗口被完全遮挡时渲染冻结、rc-overflow 的 ResizeObserver 不触发，词条 chip 根本不渲染（页面上只剩一个「+0…」），但计数是对的。拿文本当判据会在一个明明成功的场景下红。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "configDrawerOpen",
+          "pickerClosed"
+        ]
+      },
+      "optional": true,
+      "action": {
+        "method": "browser.type",
+        "params": {
+          "css": "[data-bcp=\"aw-keyword\"]",
+          "text": "{{keywords.0}}",
+          "submit": true
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { const cfg = [...document.querySelectorAll('.auxo-drawer-body')].find(b => /设置看后搜词/.test(b.innerText || '')); if (!cfg) return false; const m = (cfg.innerText || '').match(/(\\d)\\/3/); return !!m && Number(m[1]) >= 1; })()"
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 1
+    },
+    {
+      "goal": "写第 2 个看后搜词（上限 3 个，选填）。输入框是 tag 型：打字 + 回车成为一个词条，browser.type 的 submit:true 走的正是 Enter。没传就整步丢弃。**判据只能看计数 N/3，不能看词条文本** —— 2026-09-08 实测，窗口被完全遮挡时渲染冻结、rc-overflow 的 ResizeObserver 不触发，词条 chip 根本不渲染（页面上只剩一个「+0…」），但计数是对的。拿文本当判据会在一个明明成功的场景下红。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "configDrawerOpen",
+          "pickerClosed"
+        ]
+      },
+      "optional": true,
+      "action": {
+        "method": "browser.type",
+        "params": {
+          "css": "[data-bcp=\"aw-keyword\"]",
+          "text": "{{keywords.1}}",
+          "submit": true
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { const cfg = [...document.querySelectorAll('.auxo-drawer-body')].find(b => /设置看后搜词/.test(b.innerText || '')); if (!cfg) return false; const m = (cfg.innerText || '').match(/(\\d)\\/3/); return !!m && Number(m[1]) >= 2; })()"
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 1
+    },
+    {
+      "goal": "写第 3 个看后搜词（上限 3 个，选填）。输入框是 tag 型：打字 + 回车成为一个词条，browser.type 的 submit:true 走的正是 Enter。没传就整步丢弃。**判据只能看计数 N/3，不能看词条文本** —— 2026-09-08 实测，窗口被完全遮挡时渲染冻结、rc-overflow 的 ResizeObserver 不触发，词条 chip 根本不渲染（页面上只剩一个「+0…」），但计数是对的。拿文本当判据会在一个明明成功的场景下红。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "configDrawerOpen",
+          "pickerClosed"
+        ]
+      },
+      "optional": true,
+      "action": {
+        "method": "browser.type",
+        "params": {
+          "css": "[data-bcp=\"aw-keyword\"]",
+          "text": "{{keywords.2}}",
+          "submit": true
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { const cfg = [...document.querySelectorAll('.auxo-drawer-body')].find(b => /设置看后搜词/.test(b.innerText || '')); if (!cfg) return false; const m = (cfg.innerText || '').match(/(\\d)\\/3/); return !!m && Number(m[1]) >= 3; })()"
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 1
+    },
+    {
+      "goal": "提交前把配置读一遍。这一步是 commit=dry-run 时的产出物，也是 submit 时的最后一道闸：承接商品和看后搜词至少得有一样，两样都空就没有什么可提交的 —— 与其提交一份空配置，不如在这里停下来。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "configDrawerOpen",
+          "pickerClosed"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "    (() => {",
+            "      const s = window.__bcpAw || {};",
+            "",
+            "const vis = bcpDom.visible;",
+            "const press = bcpDom.press;",
+            "/* 文档序里外层容器排在真按钮前面，取最外层不报错、只会点空（见 learn 2026-09-08）。 */",
+            "const innermost = (root, text) => {",
+            "  /* 判据交给引擎原语：bcpDom.innermost 用 checkVisibility + 「直接子节点不再命中」定义",
+            "     innermost，被 check:dom 在真 Chromium 里跑过。这里只保留本书原有的选择规则",
+            "     （多命中取后代最少的那个），调用点一行未动。 */",
+            "  const m = bcpDom.innermost(root, text, { exact: true, selector: 'button,div,span,a' });",
+            "  m.sort((a, b) => a.getElementsByTagName('*').length - b.getElementsByTagName('*').length);",
+            "  return m[0] ?? null;",
+            "};",
+            "const drawerBy = re =>",
+            "  [...document.querySelectorAll('.auxo-drawer-body')].filter(vis).find(b => re.test(b.innerText || ''));",
+            "const rowOf = id =>",
+            "  [...document.querySelectorAll('tr,[class*=row]')].find(",
+            "    r => (r.innerText || '').replace(/\\s+/g, '').indexOf('ID' + id) >= 0",
+            "  );",
+            "      const cfg = drawerBy(/设置看后搜词/);",
+            "      if (!cfg) return { ok: false, reason: 'config-drawer-gone' };",
+            "      const t = cfg.innerText || '';",
+            "      const products = Number((t.match(/(\\d)\\/5/) || [])[1] ?? -1);",
+            "      const words = Number((t.match(/(\\d)\\/3/) || [])[1] ?? -1);",
+            "      const problems = [];",
+            "      if (products < 0) problems.push('读不到承接商品计数（N/5）—— 选择器可能失效了');",
+            "      if (words < 0) problems.push('读不到看后搜词计数（N/3）—— 选择器可能失效了');",
+            "      if (products === 0 && words === 0)",
+            "        problems.push('承接商品和看后搜词都是空的，没有可提交的配置');",
+            "      if (s.withProduct === 'yes' && products === 0)",
+            "        problems.push('withProduct=yes 但承接商品是 0 —— 商品没加上');",
+            "      const pf = {",
+            "        ok: problems.length === 0,",
+            "        problems: problems,",
+            "        itemId: s.itemId,",
+            "        commit: s.commit,",
+            "        productCount: products,",
+            "        keywordCount: words,",
+            "        primary: /主推品/.test(t),",
+            "        statusBefore: s.statusBefore",
+            "      };",
+            "      window.__bcpAw = Object.assign(s, { preflight: pf });",
+            "      return pf",
+            "    })()"
+          ]
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { const p = (window.__bcpAw || {}).preflight; return !!(p && p.ok === true); })()"
+        }
+      },
+      "onFail": "escalate"
+    },
+    {
+      "goal": "落点。commit=dry-run 时【什么都不点】，把自检结果原样带走；commit=submit 才按「立即提交」。唯一的闸就是入参 commit。判据要两样都看：抽屉关掉，以及 /compass_api/shop/mall/dd_search/after_watch/commit_v2 这个请求真的发生过 —— 注意它挂在 compass_api 下，不在 /api/content/* 里，是 2026-09-08 用 fetch 钩子实测抓到的，不是从 bundle 里推断的。不用 performance resource timing：这页资源早就把 250 条的 buffer 撑满了，满了之后新条目直接不记（图文发布 book 在这上面栽过一次，判据恒假）。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "configDrawerOpen",
+          "pickerClosed"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "    (async () => {",
+            "      const DL = bcpDeadline;",
+            "      const s = window.__bcpAw || {};",
+            "      if (!s.preflight || !s.preflight.ok)",
+            "        return { ok: false, reason: 'preflight-not-ok', preflight: s.preflight || null };",
+            "      if (s.commit !== 'submit') return { ok: true, skipped: 'dry-run', preflight: s.preflight };",
+            "",
+            "const vis = bcpDom.visible;",
+            "const press = bcpDom.press;",
+            "/* 文档序里外层容器排在真按钮前面，取最外层不报错、只会点空（见 learn 2026-09-08）。 */",
+            "const innermost = (root, text) => {",
+            "  /* 判据交给引擎原语：bcpDom.innermost 用 checkVisibility + 「直接子节点不再命中」定义",
+            "     innermost，被 check:dom 在真 Chromium 里跑过。这里只保留本书原有的选择规则",
+            "     （多命中取后代最少的那个），调用点一行未动。 */",
+            "  const m = bcpDom.innermost(root, text, { exact: true, selector: 'button,div,span,a' });",
+            "  m.sort((a, b) => a.getElementsByTagName('*').length - b.getElementsByTagName('*').length);",
+            "  return m[0] ?? null;",
+            "};",
+            "const drawerBy = re =>",
+            "  [...document.querySelectorAll('.auxo-drawer-body')].filter(vis).find(b => re.test(b.innerText || ''));",
+            "const rowOf = id =>",
+            "  [...document.querySelectorAll('tr,[class*=row]')].find(",
+            "    r => (r.innerText || '').replace(/\\s+/g, '').indexOf('ID' + id) >= 0",
+            "  );",
+            "      const cfg = drawerBy(/设置看后搜词/);",
+            "      const btn = cfg && innermost(cfg, '立即提交');",
+            "      if (!btn) return { ok: false, reason: 'submit-button-not-found' };",
+            "      const seen = [];",
+            "      const oFetch = window.fetch;",
+            "      const oOpen = XMLHttpRequest.prototype.open;",
+            "      window.fetch = function (...a) {",
+            "        try { const u = String((a[0] && a[0].url) || a[0] || ''); if (u) seen.push(u); } catch (e) {}",
+            "        return oFetch.apply(this, a);",
+            "      };",
+            "      XMLHttpRequest.prototype.open = function (m, u, ...rest) {",
+            "        try { if (u) seen.push(String(u)); } catch (e) {}",
+            "        return oOpen.call(this, m, u, ...rest);",
+            "      };",
+            "      press(btn);",
+            "      const done = await bcpWait.until(() => {",
+            "        const gone = !drawerBy(/设置看后搜词/);",
+            "        const hit = seen.filter(u => /after_watch\\/commit/i.test(u));",
+            "        if (!gone && !hit.length) return null;",
+            "        return { gone: gone, commitApiSeen: hit.length > 0, urls: hit.slice(0, 2) };",
+            "      }, 10000, 300);",
+            "      window.fetch = oFetch;",
+            "      XMLHttpRequest.prototype.open = oOpen;",
+            "      if (!done) {",
+            "        const toast = [...document.querySelectorAll('[class*=message],[class*=toast]')]",
+            "          .filter(vis)",
+            "          .map(e => (e.innerText || '').trim())",
+            "          .filter(Boolean)",
+            "          .slice(0, 3);",
+            "        return {",
+            "          ok: false,",
+            "          reason: 'submit-did-not-settle',",
+            "          toast: toast,",
+            "          hint: '抖店的校验提示只出现在 toast 里，DOM 上看不出异常 —— 先读它再猜别的',",
+            "          deadlineLeftMs: DL - Date.now()",
+            "        };",
+            "      }",
+            "      window.__bcpAw = Object.assign(s, {",
+            "        submitted: true,",
+            "        submittedAt: new Date().toISOString(),",
+            "        commitApiSeen: done.commitApiSeen,",
+            "        commitUrls: done.urls || []",
+            "      });",
+            "      return { ok: true, submitted: true, settle: done }",
+            "    })()"
+          ]
+        }
+      },
+      "after": {
+        "all": [
+          "submitSettled"
+        ]
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { const s = window.__bcpAw || {}; const open = [...document.querySelectorAll('.auxo-drawer-body')].some(b => /设置看后搜词/.test(b.innerText || '')); if (s.commit !== 'submit') return !!(s.preflight && s.preflight.ok) && open; return s.submitted === true && !open; })()"
+        }
+      },
+      "onFail": "escalate"
+    },
+    {
+      "goal": "读回执：提交之后那一行的看后搜配置状态会从「待配置」变成「审核中」，行内操作也从「配置看后搜」换成「查看看后搜配置」—— 两个都是可观测的事实，比只看一个稳。commit=dry-run 时不去找（本来就没提交），直接把自检结果作为产出返回。这一步的返回值就是本 book 的输出。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "manageReady"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "    (async () => {",
+            "      const DL = bcpDeadline;",
+            "      const s = window.__bcpAw || {};",
+            "      const base = {",
+            "        ok: true,",
+            "        itemId: s.itemId || null,",
+            "        commit: s.commit || null,",
+            "        statusBefore: s.statusBefore || null,",
+            "        preflight: s.preflight || null",
+            "      };",
+            "      if (s.commit !== 'submit')",
+            "        return Object.assign(base, {",
+            "          submitted: false,",
+            "          statusAfter: null,",
+            "          reason: 'commit=dry-run：配置已按入参填好并通过自检，但没有提交'",
+            "        });",
+            "",
+            "const vis = bcpDom.visible;",
+            "const press = bcpDom.press;",
+            "/* 文档序里外层容器排在真按钮前面，取最外层不报错、只会点空（见 learn 2026-09-08）。 */",
+            "const innermost = (root, text) => {",
+            "  /* 判据交给引擎原语：bcpDom.innermost 用 checkVisibility + 「直接子节点不再命中」定义",
+            "     innermost，被 check:dom 在真 Chromium 里跑过。这里只保留本书原有的选择规则",
+            "     （多命中取后代最少的那个），调用点一行未动。 */",
+            "  const m = bcpDom.innermost(root, text, { exact: true, selector: 'button,div,span,a' });",
+            "  m.sort((a, b) => a.getElementsByTagName('*').length - b.getElementsByTagName('*').length);",
+            "  return m[0] ?? null;",
+            "};",
+            "const drawerBy = re =>",
+            "  [...document.querySelectorAll('.auxo-drawer-body')].filter(vis).find(b => re.test(b.innerText || ''));",
+            "const rowOf = id =>",
+            "  [...document.querySelectorAll('tr,[class*=row]')].find(",
+            "    r => (r.innerText || '').replace(/\\s+/g, '').indexOf('ID' + id) >= 0",
+            "  );",
+            "      const read = () => {",
+            "        const row = rowOf(s.itemId);",
+            "        if (!row) return null;",
+            "        const flat = (row.innerText || '').replace(/\\s+/g, '');",
+            "        return {",
+            "          status: (flat.match(/(待配置|配置中|审核中|已配置|审核驳回|审核不通过|待优化|已优化)/) || [])[1] || null,",
+            "          viewEntry: !!innermost(row, '查看看后搜配置')",
+            "        };",
+            "      };",
+            "      const settled = await bcpWait.until(() => {",
+            "        const r = read();",
+            "        if (!r) return null;",
+            "        return r.viewEntry || (r.status && r.status !== s.statusBefore) ? r : null;",
+            "      }, 10000, 500);",
+            "      if (!settled) {",
+            "        const now = read();",
+            "        return Object.assign(base, {",
+            "          submitted: true,",
+            "          submittedAt: s.submittedAt || null,",
+            "          commitApiSeen: s.commitApiSeen === true,",
+            "          statusAfter: now ? now.status : null,",
+            "          reason:",
+            "            '提交已发出（commitApiSeen=' + (s.commitApiSeen === true) +",
+            "            '），但列表这一行还没翻成新状态 —— 抖店列表有延迟，拿 submittedAt 去对账，别当成没提交',",
+            "          deadlineLeftMs: DL - Date.now()",
+            "        });",
+            "      }",
+            "      return Object.assign(base, {",
+            "        submitted: true,",
+            "        submittedAt: s.submittedAt || null,",
+            "        commitApiSeen: s.commitApiSeen === true,",
+            "        commitUrls: s.commitUrls || [],",
+            "        statusAfter: settled.status,",
+            "        viewEntry: settled.viewEntry",
+            "      })",
+            "    })()"
+          ]
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { const s = window.__bcpAw || {}; if (s.commit !== 'submit') return !!(s.preflight && s.preflight.ok); const t = (document.body.innerText || '').replace(/\\s+/g, ''); return /(图文|视频)类型|内容体裁/.test(t) && /ID\\d{10,}/.test(t); })()"
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 2
+    },
+    {
+      "goal": "关掉这一轮自己开的 tab，不留孤儿窗口。产出已经在上一步拿到了。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "manageReady"
+        ]
+      },
+      "action": {
+        "method": "browser.closeTab",
+        "params": {}
+      },
+      "verify": {
+        "actionSucceeded": true
+      },
+      "onFail": "escalate"
+    }
+  ],
+  "outputSchema": {
+    "type": "object",
+    "required": [
+      "ok",
+      "itemId",
+      "commit",
+      "submitted"
+    ],
+    "properties": {
+      "ok": {
+        "type": "boolean"
+      },
+      "itemId": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "commit": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "dry-run / submit"
+      },
+      "submitted": {
+        "type": "boolean"
+      },
+      "submittedAt": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "commitApiSeen": {
+        "type": "boolean",
+        "description": "提交期间是否观察到 after_watch/commit 请求"
+      },
+      "commitUrls": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "命中的提交接口 URL，用来核对抖店有没有换接口"
+      },
+      "statusBefore": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "配置前的看后搜配置状态，实测为「待配置」"
+      },
+      "statusAfter": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "提交后的状态，实测立刻变「审核中」"
+      },
+      "viewEntry": {
+        "type": "boolean",
+        "description": "行内操作是否已变成「查看看后搜配置」——提交生效的第二个独立证据"
+      },
+      "preflight": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "description": "提交前自检：productCount / keywordCount / primary / problems"
+      },
+      "reason": {
+        "type": "string"
+      }
+    }
+  }
+}

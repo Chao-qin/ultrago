@@ -1,0 +1,1704 @@
+{
+  "schemaVersion": 2,
+  "name": "doudian-image-text-publish",
+  "goal": "抖店自带的图文创作（商家后台「流量 → 图文运营 → 发布图文」）：读动态条件（抖音号绑定 / 挂车资格 / 今日挂车配额）→ 按 mode 选挂车或非挂车 → 备料（挂车选品并一键带入商品素材图；非挂车上传本地图）→ 文案 / 音乐 / 自主声明 → 自检 → 按 commit 落点（dry-run 只填不发 / publish 真发）→ 回「图文管理」读图文 ID 与状态。两条硬纪律：①凡是会变的量（配额、资格、素材有没有、AI 有没有生成文案）一律【读】不【猜】，读不到就停；②调用方的自由文本（标题/正文/商品编号）只经 browser.type / browser.paste 进页面，绝不拼进 eval 源码。",
+  "paramSchemaRef": "book-input-doudian-image-text-publish@1",
+  "outputSchemaRef": "book-output-doudian-image-text-publish@1",
+  "params": [
+    {
+      "name": "mode",
+      "required": true,
+      "description": "图文类型。cart=挂车图文（带小黄车商品，有每日条数上限，实测默认 10 条/天）；plain=非挂车图文（不限条数，可另配「承接商品」）。这是抖店创作弹层顶部那两张卡片。",
+      "schema": {
+        "type": "string",
+        "enum": [
+          "cart",
+          "plain"
+        ]
+      }
+    },
+    {
+      "name": "commit",
+      "required": true,
+      "description": "落点。dry-run=把表单按入参填满、跑完自检就停（不可逆动作一步都不做）；publish=真的按下「发布」。发布后内容立即公开，挂车还会消耗当天一条配额。",
+      "schema": {
+        "type": "string",
+        "enum": [
+          "dry-run",
+          "publish"
+        ]
+      }
+    },
+    {
+      "name": "productId",
+      "required": false,
+      "description": "小黄车商品 ID（抖店商品 ID）。mode=cart 时必传；plain 时忽略。按「商品编号」精确检索，搜不到会明确区分「确实没这个商品/不支持挂车」与「选择器坏了」。",
+      "schema": {
+        "type": "string",
+        "pattern": "^[0-9]{6,25}$"
+      }
+    },
+    {
+      "name": "images",
+      "required": false,
+      "description": "图片（最多 35 张，第 1 张是封面）。每项给 url 或 localPath 二选一。不传时：挂车模式会去用「已选商品已有素材图片，一键添加」；非挂车模式没有素材可用，会直接失败。",
+      "schema": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 35,
+        "items": {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "image"
+              ]
+            },
+            "url": {
+              "type": "string",
+              "minLength": 1
+            },
+            "localPath": {
+              "type": "string",
+              "minLength": 1
+            },
+            "filename": {
+              "type": "string"
+            },
+            "mimeType": {
+              "type": "string"
+            }
+          },
+          "oneOf": [
+            {
+              "required": [
+                "url"
+              ],
+              "not": {
+                "required": [
+                  "localPath"
+                ]
+              }
+            },
+            {
+              "required": [
+                "localPath"
+              ],
+              "not": {
+                "required": [
+                  "url"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "copy",
+      "required": false,
+      "default": "ai",
+      "description": "文案来源。ai=用抖店自己生成的标题与正文（挂车选完商品后它会自动写一版，可能失败，失败时本 book 会在自检处停下）；manual=用入参的 title/body 覆盖。选 manual 就必须同时给 title 和 body；选 ai 时不要传 body（会被判为自相矛盾并失败，而不是把两份文案拼在一起）。",
+      "schema": {
+        "type": "string",
+        "enum": [
+          "ai",
+          "manual"
+        ]
+      }
+    },
+    {
+      "name": "title",
+      "required": false,
+      "description": "图文标题。不传则保留抖店 AI 生成的那条。",
+      "schema": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 60
+      }
+    },
+    {
+      "name": "body",
+      "required": false,
+      "description": "正文（含话题标签，上限 1000 字，抖店提示带电商热点话题最高有 10% 流量扶持）。仅在 copy=manual 时生效。 ⚠️ 正文里【禁止出现 #】：抖音话题是编辑器实体，必须在正文里敲 # 后从弹出候选里选中才会生成，而本步用的是 paste，paste 进去的 #xxx 永远是纯文本——发布后点不开、也拿不到抖店说的「点话题，最高享 10%流量扶持」。2026-09-21 实测 Enter / ArrowDown+Enter / 点击候选行三种方式均无法用合成事件选中，所以本 book 造不出话题实体，只能禁止。需要话题就发布后人工补，或改用 copy=ai（抖店自己生成的文案带真实体）。",
+      "schema": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1000
+      }
+    },
+    {
+      "name": "cartTitle",
+      "required": false,
+      "description": "小黄车标题（挂车专有，上限 12 字）。不传则保留抖店 AI 生成的那条。",
+      "schema": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 12
+      }
+    },
+    {
+      "name": "music",
+      "required": false,
+      "default": "auto",
+      "description": "配乐。auto=从「选择音乐」的推荐列表里取第一首；skip=不选（注意：它在表单里是带 * 的必填项，跳过大概率会在提交时被拦）。已经有音乐时两者都不动它。",
+      "schema": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "skip"
+        ]
+      }
+    },
+    {
+      "name": "selfDeclaration",
+      "required": false,
+      "default": "无需添加自主声明",
+      "description": "作者自主声明（抖店弹层里的单选项，原文照抄）。默认与抖店默认值一致，此时本步 no-op。文案若由 AI 生成，按平台要求应选「内容由AI生成」。",
+      "schema": {
+        "type": "string",
+        "enum": [
+          "无需添加自主声明",
+          "内容由AI生成",
+          "内容为个人观点或见解",
+          "内容为转载信息",
+          "内容含营销推广信息",
+          "虚构演绎，仅供娱乐"
+        ]
+      }
+    },
+    {
+      "name": "onQuotaExhausted",
+      "required": false,
+      "default": "fail",
+      "description": "mode=cart 但挂车不可用时（今日配额用尽，或该抖音号 canBind=false / 保证金未缴）的处置。fail=停下并报出实际的配额数字；fallback-plain=自动降级成非挂车继续（产出里的 mode 会是 plain，note 说明降级原因）。",
+      "schema": {
+        "type": "string",
+        "enum": [
+          "fail",
+          "fallback-plain"
+        ]
+      }
+    }
+  ],
+  "pages": {
+    "doudian": {
+      "description": "抖店「图文运营」页（fxg.jinritemai.com/ffa/content-tool/image-text-operation）：上半是配额与经营数据，下半是「图文创作 / 图文管理」两个 tab；发布走的是页面内的抽屉，不换 URL。",
+      "url": "https://fxg.jinritemai.com/ffa/content-tool/image-text-operation",
+      "signals": {
+        "opsReady": {
+          "condition": {
+            "all": [
+              {
+                "urlIncludes": "/ffa/content-tool/image-text-operation"
+              },
+              {
+                "script": {
+                  "code": "[...document.querySelectorAll('button')].some(b => /发布图文/.test(b.innerText || ''))"
+                }
+              }
+            ]
+          },
+          "timeoutMs": 40000,
+          "description": "图文运营页可用。判据不用 settled：抖店这页常年有埋点/轮询在飞，readyState 到 complete 也未必代表创作区挂上了；真正的前提是【「发布图文」这个入口按钮在】——它正是下一步要点的东西。"
+        },
+        "composerOpen": {
+          "condition": {
+            "script": {
+              "code": "(() => { const d = document.querySelector('.auxo-drawer-body'); if (!d) return false; const t = d.innerText || ''; return /上传图片/.test(t) && /挂车图文/.test(t) && /非挂车图文/.test(t); })()"
+            }
+          },
+          "timeoutMs": 25000,
+          "description": "「发布图文」创作抽屉已打开且渲染完：能看到两张模式卡片和上传图片区。抽屉是单例，重复打开不会叠加。"
+        },
+        "productPickerOpen": {
+          "condition": {
+            "script": {
+              "code": "(() => [...document.querySelectorAll('.auxo-form-item')].some(f => /^商品编号/.test((f.innerText || '').trim())))()"
+            }
+          },
+          "timeoutMs": 20000,
+          "description": "抽屉已切到「选择商品」二级页（它不是 modal，是抽屉内换页）：以「商品编号」这一栏出现为准。"
+        },
+        "imagesPicked": {
+          "condition": {
+            "script": {
+              "code": "(() => { const d = document.querySelector('.auxo-drawer-body'); if (!d) return false; const m = (d.innerText || '').match(/（(\\d+)\\/35）/); return !!m && Number(m[1]) > 0; })()"
+            }
+          },
+          "timeoutMs": 25000,
+          "description": "图片已就位：计数器「（N/35）」的 N > 0。上限 35 是抖店自己写在计数器里的，book 不复述这个数字，只读它。"
+        },
+        "noStaleOverlay": {
+          "condition": {
+            "script": {
+              "code": "[...document.querySelectorAll('.aurora-modal-wrap, .auxo-modal-wrap')].every(w => getComputedStyle(w).display === 'none')"
+            }
+          },
+          "timeoutMs": 10000,
+          "description": "没有残留的弹层遮罩。抖店这页混用 auxo 与 aurora 两套组件库，实测（2026-09-08）关掉「作者自主声明」后 .aurora-modal-wrap 会留在 DOM 里：它自己不画任何像素，却仍然吃点击，于是后续点击全被判成 intercepted。所以凡是开过 modal 的步骤，后面都挂这个门。"
+        },
+        "publishSettled": {
+          "condition": {
+            "script": {
+              "code": "(() => { const s = window.__bcpIt || {}; if (s.commit !== 'publish') return true; return !document.querySelector('.auxo-drawer-body') || /发布成功|提交成功/.test(document.body.innerText || ''); })()"
+            }
+          },
+          "timeoutMs": 45000,
+          "description": "发布已落地：抽屉关掉或出现成功提示。commit=dry-run 时恒真——演练不点发布，这个门不该把它卡住。"
+        },
+        "manageReady": {
+          "condition": {
+            "script": {
+              "code": "(() => { const s = window.__bcpIt || {}; if (s.commit !== 'publish') return true; const t = (document.body.innerText || '').replace(/\\s+/g, ''); return /图文类型/.test(t) && /ID\\d{10,}/.test(t); })()"
+            }
+          },
+          "timeoutMs": 30000,
+          "description": "「图文管理」列表已加载：筛选区的「图文类型」在，且至少有一行带 10 位以上的图文 ID。commit=dry-run 时恒真 —— 演练不发布也就不去回执页，这个门不该把它卡住（与 publishSettled 同一处理）。"
+        }
+      }
+    }
+  },
+  "steps": [
+    {
+      "goal": "在独立后台窗口打开抖店「图文运营」页。verify 只验能自证动作本身的东西（URL + 调用返回）——就绪判据放在下一步的门里：newWindow 是非幂等动作，把「页面渲染好了没有」写进 verify + onFail:retry，等于每等超时一次就多开一个窗口（doudian-publish-canonical 2026-09-05 踩过）。",
+      "page": "doudian",
+      "action": {
+        "method": "browser.newWindow",
+        "params": {
+          "url": "https://fxg.jinritemai.com/ffa/content-tool/image-text-operation",
+          "focused": false,
+          "minimized": false,
+          "restoreFocus": true
+        }
+      },
+      "verify": {
+        "urlIncludes": "/ffa/content-tool/image-text-operation",
+        "actionSucceeded": true
+      },
+      "onFail": "retry",
+      "maxRetries": 2
+    },
+    {
+      "goal": "读【动态条件】并决定这一趟到底按哪种模式跑。这是本 book 最要紧的一步：挂车不是「能不能点」的问题，而是三个会天天变的量——①店铺有没有绑定抖音号（没绑时「发布图文」点了只弹绑定引导，不开弹层）；②该抖音号能不能挂车（canBind，跟保证金 depositPaid 挂钩）；③今日挂车条数还剩几条（remainBindNum，非挂车不限）。取数优先走抖店自己的 precheck 接口，读不到再退回页面上「今日挂车图文可发 N/M 条」这行文案；两条都读不到就停，不猜。跨步骤状态存 window.__bcpIt：同 tab 同 document 有效，本 book 到发布前不导航，所以够用；每个下游步骤都对它做 fail-closed 检查，丢了就报错而不是默认放行。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "opsReady"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(async () => {",
+            "  const MODE = '{{mode}}';",
+            "  const COMMIT = '{{commit}}';",
+            "  const ONQ = '{{onQuotaExhausted}}';",
+            "  /* __token 是抖店自己挂在每个请求上的会话参数。不硬编：从本页已经发生过的请求里取一个现成的。 */",
+            "  const tokm = (",
+            "    performance",
+            "      .getEntriesByType('resource')",
+            "      .map(e => e.name)",
+            "      .find(n => /__token=/.test(n)) || ''",
+            "  ).match(/__token=([^&]+)/);",
+            "  const tok = tokm ? '&__token=' + tokm[1] : '';",
+            "  const jget = async u => {",
+            "    try {",
+            "      const r = await fetch(u, { credentials: 'same-origin' });",
+            "      if (!r.ok) return { __http: r.status };",
+            "      return await r.json();",
+            "    } catch (e) {",
+            "      return { __err: String(e) };",
+            "    }",
+            "  };",
+            "  const acc = await jget('/api/content/account/list?appid=1' + tok);",
+            "  const accounts = acc && acc.code === 0 && Array.isArray(acc.data) ? acc.data : null;",
+            "  if (accounts === null)",
+            "    return { ok: false, reason: 'account-list-unreadable', raw: acc };",
+            "  if (!accounts.length)",
+            "    return {",
+            "      ok: false,",
+            "      reason: 'no-douyin-account',",
+            "      hint: '本店没有绑定抖音号 —— 抖店的「发布图文」按钮在这种状态下点了不开弹层，只弹绑定引导'",
+            "    };",
+            "  const account = accounts[0];",
+            "  const pre = await jget(",
+            "    '/api/video/account_shopping_cart_precheck?userID=' +",
+            "      encodeURIComponent(account.userId) +",
+            "      '&mediaType=2&appid=1' +",
+            "      tok",
+            "  );",
+            "  const d = pre && pre.code === 0 && pre.data ? pre.data : null;",
+            "  const m = (document.body.innerText || '').match(",
+            "    /今日挂车图文可发\\s*(\\d+)\\s*\\/\\s*(\\d+)\\s*条/",
+            "  );",
+            "  const remain =",
+            "    d && typeof d.remainBindNum === 'number'",
+            "      ? d.remainBindNum",
+            "      : m",
+            "        ? Number(m[1])",
+            "        : null;",
+            "  const canBind = d ? !!d.canBind : remain === null ? null : remain > 0;",
+            "  const source = d ? 'precheck-api' : m ? 'page-text' : null;",
+            "  if (remain === null || canBind === null)",
+            "    return {",
+            "      ok: false,",
+            "      reason: 'cart-quota-unknown',",
+            "      hint: 'precheck 接口和页面配额文案都读不到 —— 这时候「当成还有额度」就是拿店铺赌，直接停',",
+            "      precheck: pre",
+            "    };",
+            "  let effectiveMode = MODE;",
+            "  let note = '';",
+            "  if (MODE === 'cart' && (!canBind || remain <= 0)) {",
+            "    if (ONQ === 'fallback-plain') {",
+            "      effectiveMode = 'plain';",
+            "      note =",
+            "        '挂车不可用（canBind=' +",
+            "        canBind +",
+            "        '，今日剩余=' +",
+            "        remain +",
+            "        '），按 onQuotaExhausted=fallback-plain 降级为非挂车';",
+            "    } else {",
+            "      return {",
+            "        ok: false,",
+            "        reason: 'cart-unavailable',",
+            "        canBind: canBind,",
+            "        remainBindNum: remain,",
+            "        depositPaid: d ? !!d.depositPaid : null,",
+            "        hint: '想让它自动降级成非挂车，把 onQuotaExhausted 传 fallback-plain'",
+            "      };",
+            "    }",
+            "  }",
+            "  window.__bcpIt = {",
+            "    ok: true,",
+            "    effectiveMode: effectiveMode,",
+            "    requestedMode: MODE,",
+            "    commit: COMMIT,",
+            "    account: { userId: account.userId, userName: account.userName },",
+            "    quota: {",
+            "      canBind: canBind,",
+            "      remainBindNum: remain,",
+            "      bindNum: d ? d.bindNum : null,",
+            "      depositPaid: d ? !!d.depositPaid : null,",
+            "      source: source",
+            "    },",
+            "    note: note,",
+            "    startedAt: new Date().toISOString()",
+            "  };",
+            "  return window.__bcpIt",
+            "})()"
+          ]
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { const s = window.__bcpIt; return !!(s && s.ok === true && (s.effectiveMode === 'cart' || s.effectiveMode === 'plain') && s.quota && typeof s.quota.remainBindNum === 'number'); })()"
+        }
+      },
+      "onFail": "escalate"
+    },
+    {
+      "goal": "点「发布图文」打开创作抽屉。抽屉是单例，已经开着就直接返回，所以这一步可以安全 retry。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "opsReady"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "              (async () => {",
+            "                const DL = bcpDeadline;",
+            "                const s = window.__bcpIt;",
+            "                if (!s || !s.ok)",
+            "                  return { ok: false, reason: 'gate-state-missing', hint: 'window.__bcpIt 不在了 —— 中途导航过？' };",
+            "                if (document.querySelector('.auxo-drawer-body')) return { ok: true, note: '抽屉已经开着' };",
+            "",
+            "const vis = bcpDom.visible;",
+            "const press = bcpDom.press;",
+            "                const card = [...document.querySelectorAll('button')]",
+            "                  .filter(vis)",
+            "                  .find(b => /发布图文/.test(b.innerText || ''));",
+            "                if (!card) return { ok: false, reason: 'entry-button-not-found' };",
+            "                card.scrollIntoView({ block: 'center' });",
+            "                press(card);",
+            "                const opened = await bcpWait.until(() => {",
+            "                  const d = document.querySelector('.auxo-drawer-body');",
+            "                  return d && /上传图片/.test(d.innerText || '') ? d : null;",
+            "                }, 8000, 200);",
+            "                if (!opened)",
+            "                  return {",
+            "                    ok: false,",
+            "                    reason: 'composer-did-not-open',",
+            "                    hint: '按钮点到了但抽屉没开：抖店在「抖音号绑定状态还在拉取」和「未绑定」两种情况下都会吞掉这次点击',",
+            "                    deadlineLeftMs: DL - Date.now()",
+            "                  };",
+            "                return { ok: true }",
+            "              })()"
+          ]
+        }
+      },
+      "after": {
+        "all": [
+          "composerOpen"
+        ]
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { const d = document.querySelector('.auxo-drawer-body'); if (!d) return false; const t = d.innerText || ''; return /上传图片/.test(t) && /挂车图文/.test(t) && /非挂车图文/.test(t); })()"
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 1
+    },
+    {
+      "goal": "把抽屉切到决策出来的模式。判「切到没有」不看卡片的选中态 class（cardSelected-XXXXXX 是带哈希的，改版即失效），看结构差异：挂车会多出「小黄车设置」整块；非挂车没有它，取而代之的是看后搜里的「设置承接商品」。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "composerOpen"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "              (async () => {",
+            "                const DL = bcpDeadline;",
+            "                const s = window.__bcpIt || {};",
+            "                const want = s.effectiveMode;",
+            "                if (want !== 'cart' && want !== 'plain')",
+            "                  return { ok: false, reason: 'effectiveMode-missing' };",
+            "                const d = document.querySelector('.auxo-drawer-body');",
+            "                if (!d) return { ok: false, reason: 'composer-closed' };",
+            "",
+            "const vis = bcpDom.visible;",
+            "const press = bcpDom.press;",
+            "                const hasCart = () => /小黄车设置/.test(d.innerText || '');",
+            "                if (want === 'cart' && hasCart()) return { ok: true, mode: want, note: '已经是挂车' };",
+            "                if (want === 'plain' && !hasCart()) return { ok: true, mode: want, note: '已经是非挂车' };",
+            "                const label = want === 'cart' ? '挂车图文' : '非挂车图文';",
+            "                const tile = [...d.querySelectorAll('div')]",
+            "                  .filter(vis)",
+            "                  .find(e => {",
+            "                    const t = (e.innerText || '').trim();",
+            "                    const r = e.getBoundingClientRect();",
+            "                    return t.indexOf(label) === 0 && r.width > 150 && r.width < 320 && e.querySelectorAll('div').length <= 6;",
+            "                  });",
+            "                if (!tile) return { ok: false, reason: 'mode-tile-not-found', label: label };",
+            "                press(tile);",
+            "                const applied = await bcpWait.until(",
+            "                  () => ((want === 'cart') === hasCart() ? true : null),",
+            "                  5000,",
+            "                  150",
+            "                );",
+            "                if (!applied)",
+            "                  return { ok: false, reason: 'mode-not-applied', label: label, deadlineLeftMs: DL - Date.now() };",
+            "                return { ok: true, mode: want }",
+            "              })()"
+          ]
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { const s = window.__bcpIt || {}; const d = document.querySelector('.auxo-drawer-body'); if (!d) return false; const t = d.innerText || ''; const cart = /小黄车设置/.test(t); return s.effectiveMode === 'cart' ? cart : !cart && /设置承接商品/.test(t); })()"
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 2
+    },
+    {
+      "goal": "挂车模式：打开「选择商品」二级页，并给「商品编号」输入框打上 data-bcp 标记。为什么要打标记：那个框的 placeholder 是「请输入」（和「商品名称」「看后搜词」重名），class 带哈希，唯一稳的锚点是它所在 .auxo-form-item 的可见文案「商品编号」——而 CSS 选不了文本。于是分工成：eval 负责【按文案找到元素并打标记】，下一步的 browser.type 负责【写入调用方的数据】。调用方的自由文本永远不进 eval 源码（learn 2026-08-23：book 的公开参数是业务数据，不能让调用方生成 JS）。非挂车模式整步 no-op。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "composerOpen"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "              (async () => {",
+            "                const DL = bcpDeadline;",
+            "                const s = window.__bcpIt || {};",
+            "                if (s.effectiveMode !== 'cart') return { ok: true, skipped: 'plain-mode' };",
+            "                const drawer = () => document.querySelector('.auxo-drawer-body');",
+            "",
+            "const press = bcpDom.press;",
+            "/* 同一段文案会同时命中【外层容器】和【真正的按钮】，而文档序里外层在前。取最外层的后果",
+            "   不是报错而是点空：press 拿容器中心做 elementFromPoint，落在行内空白处，事件照样派发、",
+            "   照样算「成功」，只是什么都没发生。2026-09-08 首跑实测：'选择商品' 命中了",
+            "   DIV.auxo-row.auxo-zform-item（整行），选品页始终不开，而这一步自己是看不出区别的。",
+            "   所以按后代数量取最内层 —— 与 click_text 的「点最内层匹配元素」同一语义。 */",
+            "const innermost = (root, text) => {",
+            "  /* 判据交给引擎原语：bcpDom.innermost 用 checkVisibility + 「直接子节点不再命中」定义",
+            "     innermost，被 check:dom 在真 Chromium 里跑过。这里只保留本书原有的选择规则",
+            "     （多命中取后代最少的那个），调用点一行未动。 */",
+            "  const m = bcpDom.innermost(root, text, { exact: true, selector: 'button,div,span,a' });",
+            "  m.sort((a, b) => a.getElementsByTagName('*').length - b.getElementsByTagName('*').length);",
+            "  return m[0] ?? null;",
+            "};",
+            "                const boundId = () => {",
+            "                  const d = drawer();",
+            "                  const m = ((d && d.innerText) || '').match(/ID[：:]\\s*(\\d{10,})/);",
+            "                  return m ? m[1] : null;",
+            "                };",
+            "                const already = boundId();",
+            "                if (already) return { ok: true, productId: already, note: '这一轮已经绑过商品了' };",
+            "                const mark = () => {",
+            "                  const f = [...document.querySelectorAll('.auxo-form-item')].find(x =>",
+            "                    /^商品编号/.test((x.innerText || '').trim())",
+            "                  );",
+            "                  const i = f && f.querySelector('input');",
+            "                  if (!i) return false;",
+            "                  i.setAttribute('data-bcp', 'product-code');",
+            "                  return true;",
+            "                };",
+            "                if (mark()) return { ok: true, note: '选品页已经开着' };",
+            "                const d = drawer();",
+            "                if (!d) return { ok: false, reason: 'composer-closed' };",
+            "                const btn = innermost(d, '选择商品');",
+            "                if (!btn) return { ok: false, reason: 'select-product-button-not-found' };",
+            "                press(btn);",
+            "                const ready = await bcpWait.until(() => (mark() ? true : null), 8000, 200);",
+            "                if (!ready)",
+            "                  return { ok: false, reason: 'product-picker-not-ready', deadlineLeftMs: DL - Date.now() };",
+            "                return { ok: true, opened: true }",
+            "              })()"
+          ]
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { const s = window.__bcpIt || {}; if (s.effectiveMode !== 'cart') return true; const d = document.querySelector('.auxo-drawer-body'); return !!document.querySelector('[data-bcp=\"product-code\"]') || /ID[：:]\\s*\\d{10,}/.test((d && d.innerText) || ''); })()"
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 1
+    },
+    {
+      "goal": "把 productId 写进上一步标记好的「商品编号」框。没传 productId 时整步丢弃（optionalWhenSlotMissing）——非挂车根本不需要它。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "composerOpen",
+          "productPickerOpen"
+        ]
+      },
+      "optional": true,
+      "action": {
+        "method": "browser.type",
+        "params": {
+          "css": "[data-bcp=\"product-code\"]",
+          "text": "{{productId}}"
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { const i = document.querySelector('[data-bcp=\"product-code\"]'); return !!(i && String(i.value || '').trim().length >= 6); })()"
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 2
+    },
+    {
+      "goal": "按商品编号查询、勾选、确定。三件事分别有自己的判据：①查不到「查询」按钮 = 选择器坏了；②按了查询但一行都没渲染 + 页面说「暂无数据」= 这个商品确实搜不到（不在售/不支持挂车）；③行渲染出来了才谈勾选。区分②的两种含义，是这类 book 最容易静默出错的地方——把「选择器失效」当成「商品不存在」，就会安静地发一条没挂车的图文出去。勾选态没有 class 可看（React 内部 state），所以以「已选商品（1/1）」这行文案为准；确定之后再等小黄车行出现 ID 才算真的绑上。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "composerOpen"
+        ]
+      },
+      "optional": true,
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "              (async () => {",
+            "                const DL = bcpDeadline;",
+            "                const s = window.__bcpIt || {};",
+            "                if (s.effectiveMode !== 'cart') return { ok: true, skipped: 'plain-mode' };",
+            "",
+            "const vis = bcpDom.visible;",
+            "const press = bcpDom.press;",
+            "                const drawer = () => document.querySelector('.auxo-drawer-body');",
+            "                const boundId = () => {",
+            "                  const d = drawer();",
+            "                  const m = ((d && d.innerText) || '').match(/ID[：:]\\s*(\\d{10,})/);",
+            "                  return m ? m[1] : null;",
+            "                };",
+            "                const input = document.querySelector('[data-bcp=\"product-code\"]');",
+            "                if (!input) {",
+            "                  const b = boundId();",
+            "                  return b",
+            "                    ? { ok: true, productId: b, note: '选品页已关闭且商品已绑定' }",
+            "                    : { ok: false, reason: 'picker-closed-and-nothing-bound' };",
+            "                }",
+            "                const code = String(input.value || '').trim();",
+            "                if (!code)",
+            "                  return {",
+            "                    ok: false,",
+            "                    reason: 'cart-mode-needs-productId',",
+            "                    hint: 'mode=cart 却没传 productId —— 编号框是空的'",
+            "                  };",
+            "                const query = [...document.querySelectorAll('button')]",
+            "                  .filter(vis)",
+            "                  .find(b => (b.innerText || '').trim() === '查询');",
+            "                if (!query)",
+            "                  return { ok: false, reason: 'query-button-not-found', hint: '这是选择器失效，不是「没搜到」' };",
+            "                const rowsOf = () => [...document.querySelectorAll('.auxo-radio-input')].filter(x => x.getBoundingClientRect().width > 0 || x.closest('label'));",
+            "                const rowText = x => ((x.closest('label') || x.parentElement)?.innerText || '').replace(/\\s+/g, '');",
+            "                const signature = rows => rows.map(rowText).join('|');",
+            "                const before = signature(rowsOf());",
+            "                const matchesCode = rows => rows.some(x => new RegExp('ID\\s*[：:]?\\s*' + code + '(?!\\d)').test(rowText(x)));",
+            "                press(query);",
+            "                // 初始列表已有候选行时，不能把「行数非零」当成查询完成。",
+            "                await bcpWait.sleep(150);",
+            "                const networkIdle = await bcpWait.netIdle(400, 5000);",
+            "                if (!networkIdle) return { ok: false, reason: 'product-search-network-never-settled', code: code };",
+            "                const searched = await bcpWait.until(() => {",
+            "                  const r = rowsOf();",
+            "                  const empty = /暂无数据|没有找到|无搜索结果|暂无商品/.test(document.body.innerText || '');",
+            "                  return matchesCode(r) || empty || signature(r) !== before ? { rows: r, empty } : null;",
+            "                }, 3000, 150);",
+            "                if (!searched) return { ok: false, reason: 'product-search-results-never-updated', code: code, rowCount: rowsOf().length, hint: '查询请求结束后候选列表仍是点击前的内容，不能拿初始列表选品' };",
+            "                const rows = searched.rows;",
+            "                if (!rows.length) {",
+            "                  const empty = searched.empty;",
+            "                  return {",
+            "                    ok: false,",
+            "                    reason: empty ? 'product-not-found' : 'product-rows-never-rendered',",
+            "                    code: code,",
+            "                    hint: empty",
+            "                      ? '按商品编号确实搜不到：商品可能不在售，或不支持挂车'",
+            "                      : '查询发出去了却一行都没渲染 —— 更像选择器/接口挂了，不要当成「没有这个商品」'",
+            "                  };",
+            "                }",
+            "                const row =",
+            "                  rows.find(x => new RegExp('ID\\s*[：:]?\\s*' + code + '(?!\\d)').test(rowText(x))) ||",
+            "                  (rows.length === 1 ? rows[0] : null);",
+            "                if (!row)",
+            "                  return { ok: false, reason: 'no-row-matched-productId', code: code, rowCount: rows.length };",
+            "                press(row.closest('label') || row);",
+            "                const picked = await bcpWait.until(",
+            "                  () => (/已选商品（1\\/1）/.test(document.body.innerText || '') ? true : null),",
+            "                  5000,",
+            "                  150",
+            "                );",
+            "                if (!picked) return { ok: false, reason: 'row-click-did-not-select', code: code };",
+            "                const okBtn = [...document.querySelectorAll('button')]",
+            "                  .filter(vis)",
+            "                  .find(b => (b.innerText || '').trim() === '确定');",
+            "                if (!okBtn) return { ok: false, reason: 'confirm-button-not-found' };",
+            "                press(okBtn);",
+            "                const bound = await bcpWait.until(() => (boundId() === code ? code : null), 8000, 250);",
+            "                if (!bound)",
+            "                  return {",
+            "                    ok: false,",
+            "                    reason: 'product-not-bound-after-confirm',",
+            "                    code: code,",
+            "                    deadlineLeftMs: DL - Date.now()",
+            "                  };",
+            "                return { ok: true, productId: bound }",
+            "              })()"
+          ]
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { const d = document.querySelector('.auxo-drawer-body'); const t = (d && d.innerText) || ''; return new RegExp('ID\\s*[：:]?\\s*{{productId}}(?!\\d)').test(t); })()"
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 1
+    },
+    {
+      "goal": "把 images 里的图片灌进那个 multiple 的 file input（accept=image/*，抖店用样式化按钮盖住了它，实测 hidden 也能注入）。没传 images 就整步丢弃——挂车模式下这是常态，图片走下一步的「一键添加」商品素材。onFail 是 escalate 不是 retry：上传是【追加】语义，重试一次就多一份图片。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "composerOpen"
+        ]
+      },
+      "optional": true,
+      "action": {
+        "method": "browser.upload",
+        "params": {
+          "css": "input[type=file][accept=\"image/*\"][multiple]",
+          "attachmentsFrom": "{{images}}"
+        }
+      },
+      "after": {
+        "all": [
+          "imagesPicked"
+        ]
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { const input = document.querySelector('input[type=file][accept=\"image/*\"][multiple]'); const t = input?.parentElement?.innerText || ''; const m = t.match(/（(\\d+)\\/35）/); return !!m && Number(m[1]) > 0; })()"
+        }
+      },
+      "onFail": "escalate"
+    },
+    {
+      "goal": "确保图片确实就位。已经有图就 no-op（所以可以安全 retry）；一张都没有时，才去用挂车选品带出来的「已选商品已有素材图片，一键添加」——注意这条横幅【不一定存在】：商品没有素材图时它就不出现，那种情况下必须如实报 no-images-available，而不是继续往下走发一条没有图的图文。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "composerOpen"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "              (async () => {",
+            "                const DL = bcpDeadline;",
+            "                const d = document.querySelector('.auxo-drawer-body');",
+            "                if (!d) return { ok: false, reason: 'composer-closed' };",
+            "",
+            "const press = bcpDom.press;",
+            "/* 同一段文案会同时命中【外层容器】和【真正的按钮】，而文档序里外层在前。取最外层的后果",
+            "   不是报错而是点空：press 拿容器中心做 elementFromPoint，落在行内空白处，事件照样派发、",
+            "   照样算「成功」，只是什么都没发生。2026-09-08 首跑实测：'选择商品' 命中了",
+            "   DIV.auxo-row.auxo-zform-item（整行），选品页始终不开，而这一步自己是看不出区别的。",
+            "   所以按后代数量取最内层 —— 与 click_text 的「点最内层匹配元素」同一语义。 */",
+            "const innermost = (root, text) => {",
+            "  /* 判据交给引擎原语：bcpDom.innermost 用 checkVisibility + 「直接子节点不再命中」定义",
+            "     innermost，被 check:dom 在真 Chromium 里跑过。这里只保留本书原有的选择规则",
+            "     （多命中取后代最少的那个），调用点一行未动。 */",
+            "  const m = bcpDom.innermost(root, text, { exact: true, selector: 'button,div,span,a' });",
+            "  m.sort((a, b) => a.getElementsByTagName('*').length - b.getElementsByTagName('*').length);",
+            "  return m[0] ?? null;",
+            "};",
+            "                const count = () => {",
+            "                  const m = (d.innerText || '').match(/（(\\d+)\\/35）/);",
+            "                  return m ? Number(m[1]) : null;",
+            "                };",
+            "                const c0 = count();",
+            "                if (c0 === null)",
+            "                  return {",
+            "                    ok: false,",
+            "                    reason: 'image-counter-not-found',",
+            "                    hint: '连「（N/35）」这个计数器都找不到 —— 是选择器坏了，不是「没有图」'",
+            "                  };",
+            "                if (c0 > 0) return { ok: true, imageCount: c0, source: 'uploaded-or-existing' };",
+            "                const banner = innermost(d, '一键添加');",
+            "                if (!banner)",
+            "                  return {",
+            "                    ok: false,",
+            "                    reason: 'no-images-available',",
+            "                    hint: '没传 images，挂车商品也没有可用素材图（「已选商品已有素材图片，一键添加」这条横幅不在）'",
+            "                  };",
+            "                press(banner);",
+            "                const got = await bcpWait.until(() => {",
+            "                  const c = count();",
+            "                  return c && c > 0 ? c : null;",
+            "                }, 8000, 250);",
+            "                if (!got)",
+            "                  return { ok: false, reason: 'one-click-material-did-not-land', deadlineLeftMs: DL - Date.now() };",
+            "                return { ok: true, imageCount: got, source: 'product-material' }",
+            "              })()"
+          ]
+        }
+      },
+      "after": {
+        "all": [
+          "imagesPicked"
+        ]
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { const d = document.querySelector('.auxo-drawer-body'); if (!d) return false; const m = (d.innerText || '').match(/（(\\d+)\\/35）/); if (!m) return false; const n = Number(m[1]); return n > 0 && n <= 35; })()"
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 1
+    },
+    {
+      "goal": "写标题。没传 title 就整步丢弃，保留抖店 AI 生成的那条（选完商品它会自己填）。browser.type 对 <input> 是覆盖写（先清空再逐字符输入），语义正是「设成这个值」。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "composerOpen"
+        ]
+      },
+      "optional": true,
+      "action": {
+        "method": "browser.type",
+        "params": {
+          "css": "input[placeholder=\"请输入标题\"]",
+          "text": "{{title}}"
+        }
+      },
+      "verify": {
+        "elementValue": {
+          "name": "请输入标题",
+          "includes": "{{title}}"
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 2
+    },
+    {
+      "goal": "写小黄车标题（挂车专有，上限 12 字，抖店也会 AI 生成一条）。没传就整步丢弃；非挂车模式下这个输入框根本不存在，同样靠丢弃跳过。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "composerOpen"
+        ]
+      },
+      "optional": true,
+      "action": {
+        "method": "browser.type",
+        "params": {
+          "css": "input[placeholder=\"请输入小黄车标题\"]",
+          "text": "{{cartTitle}}"
+        }
+      },
+      "verify": {
+        "elementValue": {
+          "name": "请输入小黄车标题",
+          "includes": "{{cartTitle}}"
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 2
+    },
+    {
+      "goal": "正文编辑器是字节自研的 editor-kit（contenteditable，不是 input/textarea）。copy=manual 时在这里【等它稳定、留底、打 data-bcp=\"body-target\" 标记并聚焦】，真正的清空交给紧随其后的 Control+a / Delete 两步，下一步的 browser.paste 只认这个标记。为什么清空不在这一步做：execCommand('delete') 只清得掉 DOM，editor-kit 的内部 model 里那份 AI 草稿还在，下一次 paste 会把它整段带回来跟调用方正文拼成一条发出去 —— 2026-09-14 实测：272→339、272→332，而清空的 verify 每次都过（len 确实是 0）、preflight 每次都报 problems:[]，两条真发出去的图文尾巴上都挂着 AI 那段。换成 Control+a / Delete 走真实按键路径后，同一入参得到 272，与入参 body 逐字相等。另一个方向的失同步同样要防：直接改 textContent 会绕过 model，DOM 上看着有字、发出去却是空的。copy=ai 时不但不清空，还要把标记摘掉：这样「copy=ai 却又传了 body」这种自相矛盾的入参会在下一步响亮失败，而不是把 AI 文案和调用方文案拼在一起发出去。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "composerOpen"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(async () => {",
+            "  const DL = bcpDeadline;",
+            "  const COPY = '{{copy}}';",
+            "  const d = document.querySelector('.auxo-drawer-body');",
+            "  if (!d) return { ok: false, reason: 'composer-closed' };",
+            "  const ed =",
+            "    d.querySelector('[contenteditable=\"true\"].editor-kit-container') ||",
+            "    d.querySelector('[contenteditable=\"true\"]');",
+            "  if (!ed) return { ok: false, reason: 'body-editor-not-found' };",
+            "  const len = () => (ed.innerText || '').replace(/[\\s\\u200b]/g, '').length;",
+            "  if (COPY !== 'manual') {",
+            "    ed.removeAttribute('data-bcp');",
+            "    return { ok: true, skipped: 'copy=ai：保留抖店生成的正文', bodyLength: len() };",
+            "  }",
+            "  // 抖店选完商品后会【异步】生成一版作品描述写进这个编辑器。若在它落地之前就清空，",
+            "  // 它会在我们粘完之后追上来，把两份文案拼成一条发出去 —— 2026-09-14 实测两次：",
+            "  // publish 那次正文 272→339、dry-run 那次 272→332，而 step 16 两次都报 problems:[]。",
+            "  // 页面那行「已为你生成作品描述」不能当信号：把正文清成 0/1000 它依然显示，",
+            "  // 它说的是「生成过一版」，不是「此刻已写进编辑器」。所以判据不看文案看长度：",
+            "  // 连续 3 次采样不变才认为写入停了，然后才清空。返回对象而不是数字 —— 空正文",
+            "  // 长度是 0，用 falsy 值当 until 的结果会被判成「没等到」，一路轮询到超时。",
+            "  let lastLen = -1, sameCount = 0;",
+            "  const settled = await bcpWait.until(() => {",
+            "    const n = len();",
+            "    if (n === lastLen) sameCount++; else { sameCount = 0; lastLen = n; }",
+            "    return sameCount >= 3 ? { len: n } : null;",
+            "  }, 8000, 300);",
+            "  // 把清空前编辑器里的东西原样留底 —— 那是抖店 AI 写的作品描述，属于页面自身数据，",
+            "  // 不是调用方的自由文本，进 eval 不违反「参数不拼进源码」。留它是因为：execCommand",
+            "  // ('delete') 只清得掉 DOM，editor-kit 的内部 model 里这份草稿还在，下一步 paste 会",
+            "  // 让它整段复活并跟调用方正文拼在一起（2026-09-14 实测：清空 verify 过了 len===0，",
+            "  // 粘完立刻读到 272→339，回归的 67 字正是这里存的 63 字，口径差 4 个空格）。",
+            "  // 存紧凑形式（连空白一起去），比对时同口径，免得被换行/零宽的差异干扰。",
+            "  window.__bcpIt = Object.assign(window.__bcpIt || {}, {",
+            "    aiDraftBefore: (ed.innerText || '').replace(/[\\s\\u200b]/g, '')",
+            "  });",
+            "  ed.setAttribute('data-bcp', 'body-target');",
+            "  // 只聚焦，不在这里清空 —— execCommand('delete') 清得掉 DOM 却清不掉 editor-kit 的",
+            "  // 内部 model，下一次 paste 会把 model 里那份 AI 草稿整段带回来跟正文拼在一起",
+            "  // （2026-09-14 实测：清空 verify 过了 len===0，粘完立刻 272→339）。清空改走下面两步",
+            "  // 的真实按键 —— 同样是合成事件，但走键盘路径 editor-kit 会更新自己的 model：",
+            "  // 那天手动救场时正是 Control+a + Delete + paste，发出去的正文干干净净。",
+            "  ed.focus();",
+            "  const focused = document.activeElement === ed || ed.contains(document.activeElement);",
+            "  return { ok: true, focused: focused, settledBefore: settled ? settled.len : null, aiDraftLen: (window.__bcpIt.aiDraftBefore || '').length }",
+            "})()"
+          ]
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { const COPY = '{{copy}}'; const d = document.querySelector('.auxo-drawer-body'); if (!d) return false; const ed = d.querySelector('[contenteditable=\"true\"]'); if (!ed) return false; if (COPY !== 'manual') return ed.getAttribute('data-bcp') === null; return ed.getAttribute('data-bcp') === 'body-target' && (document.activeElement === ed || ed.contains(document.activeElement)); })()"
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 1
+    },
+    {
+      "goal": "全选正文。为什么不用 execCommand：见上一步 —— 键盘路径会让 editor-kit 更新它自己的 model，execCommand 只动 DOM。不传 ref，按键发给 activeElement，而上一步刚把焦点放在编辑器上（并已 verify 过）。verify 断言的是【选区真的覆盖了整篇正文】：选中文本去掉空白后的长度要等于编辑器全部内容的长度 —— 只验 actionSucceeded 是弱谓词（check:books 会直接 FAIL），而且「按键送达」证明不了「选中了」。编辑器本来就空时没东西可选，直接放行，清空与否交给下一步的判据。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "composerOpen"
+        ]
+      },
+      "action": {
+        "method": "browser.pressKey",
+        "params": {
+          "key": "Control+a"
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { if ('{{copy}}' !== 'manual') return true; const d = document.querySelector('.auxo-drawer-body'); if (!d) return false; const ed = d.querySelector('[contenteditable=\"true\"][data-bcp=\"body-target\"]'); if (!ed) return false; const compact = (ed.innerText || '').replace(/[\\s\\u200b]/g, ''); if (!compact.length) return true; const sel = window.getSelection(); if (!sel || sel.rangeCount === 0) return false; const r = sel.getRangeAt(0); if (r.collapsed) return false; const inside = ed === r.commonAncestorContainer || ed.contains(r.commonAncestorContainer); return inside && String(sel).replace(/[\\s\\u200b]/g, '').length === compact.length; })()"
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 1
+    },
+    {
+      "goal": "删掉选中的全部正文。这一步的 verify 才是「清空」真正的判据：编辑器去掉空白与零宽字符后长度为 0。重做一次只是再删一次空内容，幂等，所以可以安全 retry。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "composerOpen"
+        ]
+      },
+      "action": {
+        "method": "browser.pressKey",
+        "params": {
+          "key": "Delete"
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { if ('{{copy}}' !== 'manual') return true; const d = document.querySelector('.auxo-drawer-body'); if (!d) return false; const ed = d.querySelector('[contenteditable=\"true\"][data-bcp=\"body-target\"]'); if (!ed) return false; return (ed.innerText || '').replace(/[\\s\\u200b]/g, '').length === 0; })()"
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 1
+    },
+    {
+      "goal": "把 body 粘进正文编辑器。用 paste 不用 type：editor-kit 自己监听 paste 事件并按它的 model 插入，而 type 会先把 textContent 清空（绕过 model）再逐字符 insertText。没传 body 就整步丢弃。onFail=escalate：paste 是追加语义，重试一次就是两份正文。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "composerOpen"
+        ]
+      },
+      "optional": true,
+      "action": {
+        "method": "browser.paste",
+        "params": {
+          "css": "[data-bcp=\"body-target\"]",
+          "text": "{{body}}"
+        }
+      },
+      "verify": {
+        "textPresent": "{{body}}"
+      },
+      "onFail": "escalate"
+    },
+    {
+      "goal": "粘完立刻查一件事：抖店 AI 那版作品描述有没有跟着复活。为什么不是对账长度——本 book 拿不到入参 body 的长度（调用方的自由文本不进 eval），拿「粘完的实测值」当基线等于自证清白：2026-09-14 那轮就是这么写的，污染在取基线之前就已经发生，339 对 339 永远不报警，是一条假防线。真正能判的是页面自己的数据：step 11 留底了清空前的 AI 草稿，它要是重新出现在正文里，就是 editor-kit 的 model 把它带回来了。宁可在这里响亮失败，也不要把拼接文案发出去。copy=ai 时不适用，no-op。 【2026-09-21 追加第二件事】同时查正文里有没有【纯文本话题】。抖音话题是 editor-kit 的实体，paste 塞进去的 #xxx 只是普通文本 span——后台的「查看看后搜配置」抽屉会在渲染时把纯文本 # 临时识别成话题样式，和真实体长得一模一样（都是 <wise contenteditable=false>、都没有 topic id），所以【后台根本验收不出来，只有发布后的原文能分辨】。这条是用户发现的：两条已发布图文的标签全是死的。既然本 book 造不出实体（三种选中方式实测全败），就在这里响亮失败，别再静默发死标签出去。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "composerOpen"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(() => {",
+            "  const s = window.__bcpIt || {};",
+            "  if ('{{copy}}' !== 'manual') return { ok: true, skipped: 'copy=ai：正文本来就该是抖店生成的' };",
+            "  const d = document.querySelector('.auxo-drawer-body');",
+            "  if (!d) return { ok: false, reason: 'composer-closed' };",
+            "  const ed = d.querySelector('[contenteditable=\"true\"]');",
+            "  if (!ed) return { ok: false, reason: 'body-editor-not-found' };",
+            "  const now = (ed.innerText || '').replace(/[\\s\\u200b]/g, '');",
+            "  if (!now.length) return { ok: false, reason: 'body-empty-after-paste', hint: 'paste 没落地，别让它一路空到发布' };",
+            "  const draft = s.aiDraftBefore || '';",
+            "  // 太短的草稿不足以判定（几个字可能恰好和正文重合），8 字以下不做这个判断并说明原因。",
+            "  if (draft.length >= 8 && now.indexOf(draft) !== -1)",
+            "    return {",
+            "      ok: false,",
+            "      reason: 'ai-draft-resurrected',",
+            "      detail: '抖店 AI 的作品描述在 paste 之后重新出现在正文里（editor-kit 的 model 没被清空带回来的），再发下去就是两份文案拼在一起',",
+            "      draftLen: draft.length,",
+            "      bodyLen: now.length,",
+            "      draftTail: draft.slice(-30)",
+            "    };",
+            "  // 话题必须是实体：paste 进来的 #xxx 永远是纯文本，发出去点不开也拿不到流量扶持（2026-09-21）",
+            "  const hashCount = now.split('#').length - 1;",
+            "  if (hashCount > 0)",
+            "    return {",
+            "      ok: false,",
+            "      reason: 'plain-text-topic',",
+            "      detail: '正文里有 ' + hashCount + ' 个 #。抖音话题是编辑器实体，必须在正文里敲 # 后从弹出的候选里【选中】才会生成；paste 进去的永远是纯文本，发布后点不开、也拿不到「点话题，最高享 10%流量扶持」。',",
+            "      hashCount: hashCount,",
+            "      hint: '把话题从 body 里去掉再跑。需要话题就发布后到「图文管理 → 查看看后搜配置 → 设置图文标题」人工补，或改用 copy=ai。'",
+            "    };",
+            "  window.__bcpIt = Object.assign(s, { bodyLenAfterPaste: now.length, aiDraftClean: true, topicsPlain: 0 });",
+            "  return { ok: true, bodyLenAfterPaste: now.length, aiDraftLen: draft.length }",
+            "})()"
+          ]
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { const s = window.__bcpIt || {}; if ('{{copy}}' !== 'manual') return true; return s.aiDraftClean === true && s.topicsPlain === 0; })()"
+        }
+      },
+      "onFail": "escalate"
+    },
+    {
+      "goal": "「添加音乐」在表单里是带 * 的必填项。抖店的坑：发布按钮【从不置灰】，所以「按钮可点」根本不能当成「表单填好了」——校验是提交时才做的。这一步按 music=auto 选推荐列表第一首；已经有音乐就 no-op（可安全 retry）。选中态同样没有 class 可看，唯一可观测信号是弹层里的「确定」从 disabled 变成可用。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "composerOpen"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "              (async () => {",
+            "                const DL = bcpDeadline;",
+            "                const MUSIC = '{{music}}';",
+            "                const drawer = () => document.querySelector('.auxo-drawer-body');",
+            "",
+            "const vis = bcpDom.visible;",
+            "const press = bcpDom.press;",
+            "                const picked = () => {",
+            "                  const d = drawer();",
+            "                  const m = ((d && d.innerText) || '').match(/添加音乐[\\s\\S]{0,80}?(\\d+:\\d{2})/);",
+            "                  return m ? m[1] : null;",
+            "                };",
+            "                const have = picked();",
+            "                if (have) return { ok: true, music: have, note: '已经有音乐了' };",
+            "                if (MUSIC === 'skip')",
+            "                  return { ok: true, skipped: 'music=skip', warn: '「添加音乐」是带 * 的必填项，跳过它很可能在提交时被抖店拦下' };",
+            "                const d = drawer();",
+            "                if (!d) return { ok: false, reason: 'composer-closed' };",
+            "                const btn = [...d.querySelectorAll('button')]",
+            "                  .filter(vis)",
+            "                  .find(b => (b.innerText || '').trim() === '添加音乐');",
+            "                if (!btn) return { ok: false, reason: 'add-music-button-not-found' };",
+            "                press(btn);",
+            "                const modal = await bcpWait.until(() => {",
+            "                  const m = [...document.querySelectorAll('.auxo-modal-content,.auxo-drawer-content,.aurora-modal')].find(",
+            "                    x => /选择音乐/.test(x.innerText || '')",
+            "                  );",
+            "                  return m || null;",
+            "                }, 8000, 250);",
+            "                if (!modal) return { ok: false, reason: 'music-picker-not-open' };",
+            "                const rows = await bcpWait.until(() => {",
+            "                  const r = [...modal.querySelectorAll('*')].filter(e => {",
+            "                    const b = e.getBoundingClientRect();",
+            "                    return (",
+            "                      b.height > 50 &&",
+            "                      b.height < 90 &&",
+            "                      b.width > 300 &&",
+            "                      /\\d+:\\d{2}/.test(e.innerText || '') &&",
+            "                      e.children.length <= 4",
+            "                    );",
+            "                  });",
+            "                  return r.length ? r : null;",
+            "                }, 8000, 250);",
+            "                if (!rows) return { ok: false, reason: 'music-list-empty' };",
+            "                press(rows[0]);",
+            "                const okBtn = await bcpWait.until(() => {",
+            "                  const b = [...modal.querySelectorAll('button')].find(",
+            "                    x => (x.innerText || '').trim() === '确定'",
+            "                  );",
+            "                  return b && !b.disabled ? b : null;",
+            "                }, 5000, 150);",
+            "                if (!okBtn)",
+            "                  return {",
+            "                    ok: false,",
+            "                    reason: 'music-confirm-never-enabled',",
+            "                    hint: '行没有选中态 class，「确定」由 disabled 变可用是唯一能证明选上了的信号'",
+            "                  };",
+            "                press(okBtn);",
+            "                const landed = await bcpWait.until(() => picked(), 8000, 250);",
+            "                if (!landed)",
+            "                  return { ok: false, reason: 'music-not-applied', deadlineLeftMs: DL - Date.now() };",
+            "                return { ok: true, music: landed }",
+            "              })()"
+          ]
+        }
+      },
+      "after": {
+        "all": [
+          "noStaleOverlay"
+        ]
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { const MUSIC = '{{music}}'; const d = document.querySelector('.auxo-drawer-body'); if (!d) return false; const has = /添加音乐[\\s\\S]{0,80}?\\d+:\\d{2}/.test(d.innerText || ''); return MUSIC === 'skip' ? true : has; })()"
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 1
+    },
+    {
+      "goal": "自主声明也是带 * 的必填项，但抖店默认就填了「无需添加自主声明」，所以默认入参下这一步是 no-op。只有调用方显式要改（比如图文文案是 AI 写的、按平台要求得声明「内容由AI生成」）才会去开那个弹层。为什么默认不碰它：实测 2026-09-08，这个 aurora 弹层关掉后 .aurora-modal-wrap 会留在 DOM 里、不画像素却继续吃点击，把后面所有点击判成 intercepted。所以这一步后面挂了 noStaleOverlay 门，能少开一次就少开一次。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "composerOpen"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "              (async () => {",
+            "                const DL = bcpDeadline;",
+            "                const WANT = '{{selfDeclaration}}';",
+            "                const drawer = () => document.querySelector('.auxo-drawer-body');",
+            "",
+            "const vis = bcpDom.visible;",
+            "const press = bcpDom.press;",
+            "                const current = () => {",
+            "                  const d = drawer();",
+            "                  const m = ((d && d.innerText) || '').match(/自主声明\\s*\\n?\\s*([^\\n]+)/);",
+            "                  return m ? m[1].trim() : null;",
+            "                };",
+            "                const cur = current();",
+            "                if (cur === WANT) return { ok: true, declaration: cur, note: '已经是目标值，没开弹层' };",
+            "                const d = drawer();",
+            "                if (!d) return { ok: false, reason: 'composer-closed' };",
+            "                const row = [...d.querySelectorAll('div,span')]",
+            "                  .filter(vis)",
+            "                  .find(e => (e.textContent || '').trim() === cur && e.children.length === 0);",
+            "                if (!row) return { ok: false, reason: 'declaration-row-not-found', current: cur };",
+            "                press(row);",
+            "                const modal = await bcpWait.until(() => {",
+            "                  const m = [...document.querySelectorAll('.aurora-modal,.auxo-modal-content')].find(x =>",
+            "                    /作者自主声明/.test(x.innerText || '')",
+            "                  );",
+            "                  return m || null;",
+            "                }, 8000, 250);",
+            "                if (!modal) return { ok: false, reason: 'declaration-modal-not-open' };",
+            "                const opt = [...modal.querySelectorAll('span,div,label')]",
+            "                  .filter(vis)",
+            "                  .find(e => (e.textContent || '').trim() === WANT);",
+            "                if (!opt)",
+            "                  return {",
+            "                    ok: false,",
+            "                    reason: 'declaration-option-not-found',",
+            "                    want: WANT,",
+            "                    options: [...modal.querySelectorAll('span,div,label')]",
+            "                      .filter(e => e.children.length === 0)",
+            "                      .map(e => (e.textContent || '').trim())",
+            "                      .filter(Boolean)",
+            "                      .slice(0, 12)",
+            "                  };",
+            "                press(opt);",
+            "                const okBtn = [...modal.querySelectorAll('button')]",
+            "                  .filter(vis)",
+            "                  .find(b => (b.innerText || '').trim() === '确定');",
+            "                if (!okBtn) return { ok: false, reason: 'declaration-confirm-not-found' };",
+            "                press(okBtn);",
+            "                const applied = await bcpWait.until(() => (current() === WANT ? WANT : null), 8000, 250);",
+            "                if (!applied)",
+            "                  return { ok: false, reason: 'declaration-not-applied', want: WANT, deadlineLeftMs: DL - Date.now() };",
+            "                return { ok: true, declaration: applied }",
+            "              })()"
+          ]
+        }
+      },
+      "after": {
+        "all": [
+          "noStaleOverlay"
+        ]
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { const WANT = '{{selfDeclaration}}'; const d = document.querySelector('.auxo-drawer-body'); if (!d) return false; const m = (d.innerText || '').match(/自主声明\\s*\\n?\\s*([^\\n]+)/); return !!m && m[1].trim() === WANT; })()"
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 1
+    },
+    {
+      "goal": "本 book 只发「立即发布」，所以这一步不是「设置」而是【断言】：确认选中的确实是立即发布。抖店的定时发布入口已经探明（同组 radio 里的「定时发布」+ 一个预填 now+2h 的日期框，选中后还会提示「内容会先发布但用户不可见，到达设定时间后自动变为公开可见状态」），但 2026-09-08 那轮探测没有实测过写入，所以不在这里替调用方按下去 —— 与其发一个没验证过的定时，不如把这条路留白并写清楚位置。顺带的好处：万一哪天抖店把默认改成定时，这一步会红，而不是安静地发出一条没人看得见的图文。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "composerOpen"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "              (() => {",
+            "                const d = document.querySelector('.auxo-drawer-body');",
+            "                if (!d) return { ok: false, reason: 'composer-closed' };",
+            "",
+            "const vis = bcpDom.visible;",
+            "const press = bcpDom.press;",
+            "                const radios = [...d.querySelectorAll('input[type=radio]')].filter(r => {",
+            "                  const l = r.closest('label') || r.parentElement;",
+            "                  return l && /立即发布|定时发布/.test(l.innerText || '');",
+            "                });",
+            "                const now = radios.find(r => {",
+            "                  const l = r.closest('label') || r.parentElement;",
+            "                  return /立即发布/.test(l.innerText || '');",
+            "                });",
+            "                if (!now) return { ok: false, reason: 'publish-time-radio-not-found' };",
+            "                if (!now.checked) press(now.closest('label') || now);",
+            "                return { ok: true, immediate: !!now.checked || true, radioCount: radios.length }",
+            "              })()"
+          ]
+        }
+      },
+      "verify": {
+        "elementChecked": "立即发布"
+      },
+      "onFail": "retry",
+      "maxRetries": 1
+    },
+    {
+      "goal": "发布前把整张表单读一遍，逐条对照决策结果。这一步是 commit=dry-run 时的【产出物】，也是 publish 时的最后一道闸。读的是页面已渲染的事实（模式、图片数、标题、正文、绑定商品、音乐、声明），不是我们以为自己填了什么。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "composerOpen"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(() => {",
+            "  const s = window.__bcpIt || {};",
+            "  const d = document.querySelector('.auxo-drawer-body');",
+            "  if (!d) return { ok: false, reason: 'composer-closed' };",
+            "  const t = d.innerText || '';",
+            "  const imgs = (t.match(/（(\\d+)\\/35）/) || [])[1];",
+            "  const imageCount = imgs == null ? null : Number(imgs);",
+            "  const titleEl = d.querySelector('input[placeholder=\"请输入标题\"]');",
+            "  const cartTitleEl = d.querySelector('input[placeholder=\"请输入小黄车标题\"]');",
+            "  const ed = d.querySelector('[contenteditable=\"true\"]');",
+            "  const bodyText = ed ? (ed.innerText || '').replace(/\\u200b/g, '').trim() : '';",
+            "  const boundProduct = (t.match(/ID[：:]\\s*(\\d{10,})/) || [])[1] || null;",
+            "  const cartMode = /小黄车设置/.test(t);",
+            "  const music = (t.match(/添加音乐[\\s\\S]{0,80}?(\\d+:\\d{2})/) || [])[1] || null;",
+            "  const declaration = ((t.match(/自主声明\\s*\\n?\\s*([^\\n]+)/) || [])[1] || '').trim();",
+            "  const title = titleEl ? String(titleEl.value || '').trim() : '';",
+            "  const problems = [];",
+            "  if (!imageCount) problems.push('一张图都没有');",
+            "  if (cartMode !== (s.effectiveMode === 'cart'))",
+            "    problems.push('页面模式与决策不一致：页面挂车=' + cartMode + '，决策=' + s.effectiveMode);",
+            "  if (s.effectiveMode === 'cart' && !boundProduct)",
+            "    problems.push('挂车模式却没绑上商品（多半是 productId 没传或没搜到）');",
+            "  if ('{{copy}}' === 'manual') {",
+            "    if (!title) problems.push('copy=manual 但标题为空 —— title 没传？');",
+            "    if (!bodyText) problems.push('copy=manual 但正文为空 —— body 没传？');",
+            "  } else if (!bodyText) {",
+            "    problems.push('copy=ai 但正文是空的：抖店这次没有生成文案，不要发空正文');",
+            "  }",
+            "  if (!music) problems.push('没有音乐 —— 它在表单里是带 * 的必填项');",
+            "  // 发布前最后一道闸：AI 草稿不得出现在正文里，且正文自粘贴后长度未变。",
+            "  // 断言的是不变量（正文只能是调用方粘进去的那份），不是「AI 追加」这一个具体原因 ——",
+            "  // 将来换成别的东西来改正文，这条同样拦得住。",
+            "  const draftC = s.aiDraftBefore || '';",
+            "  const bodyCompact = bodyText.replace(/[\\s\\u200b]/g, '');",
+            "  if (draftC.length >= 8 && bodyCompact.indexOf(draftC) !== -1)",
+            "    problems.push('正文里混进了抖店 AI 的作品描述（' + draftC.length + ' 字），发出去会是两份文案拼在一起');",
+            "  if (s.bodyLenAfterPaste != null && bodyCompact.length !== s.bodyLenAfterPaste)",
+            "    problems.push('正文自粘贴后被改动过：粘完 ' + s.bodyLenAfterPaste + ' 字，现在 ' + bodyCompact.length + ' 字');",
+            "  const pf = {",
+            "    ok: problems.length === 0,",
+            "    problems: problems,",
+            "    mode: s.effectiveMode,",
+            "    commit: s.commit,",
+            "    imageCount: imageCount,",
+            "    title: title,",
+            "    cartTitle: cartTitleEl ? String(cartTitleEl.value || '') : null,",
+            "    bodyPreview: bodyText.slice(0, 120),",
+            "    bodyLength: bodyText.length,",
+            "    productId: boundProduct,",
+            "    music: music,",
+            "    declaration: declaration",
+            "  };",
+            "  window.__bcpIt = Object.assign(s, { preflight: pf });",
+            "  return pf",
+            "})()"
+          ]
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { const p = (window.__bcpIt || {}).preflight; return !!(p && p.ok === true); })()"
+        }
+      },
+      "onFail": "escalate"
+    },
+    {
+      "goal": "落点。commit=dry-run 时【什么都不点】，把自检结果原样带走；commit=publish 才真的按下「发布」。发布是不可逆的（内容立刻公开、挂车还会吃掉当天一条配额），所以 onFail=escalate、不设重试——重试一次就是多发一条（doudian-publish-canonical 2026-09-02 真的因为重发出现过两个一模一样的在售商品）。【2026-09-08 按 project maintainer 要求去掉 risk:confirm】本步不再每轮停下来要授权，于是**唯一的闸就是入参 commit**：只有显式传 publish 才会真按下发布，dry-run 一个元素都不点。auto 模式下这意味着 commit=publish 会一路跑到底、中途不问。判据要两样都看：抽屉关掉/出现成功提示，以及 /api/image/publish 这个请求真的发生过。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "composerOpen",
+          "noStaleOverlay"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "              (async () => {",
+            "                const DL = bcpDeadline;",
+            "                const s = window.__bcpIt || {};",
+            "                if (!s.preflight || !s.preflight.ok)",
+            "                  return { ok: false, reason: 'preflight-not-ok', preflight: s.preflight || null };",
+            "                if (s.commit !== 'publish')",
+            "                  return { ok: true, skipped: 'dry-run', preflight: s.preflight };",
+            "",
+            "const vis = bcpDom.visible;",
+            "const press = bcpDom.press;",
+            "                const btn = [...document.querySelectorAll('button')]",
+            "                  .filter(vis)",
+            "                  .find(b => (b.innerText || '').trim() === '发布');",
+            "                if (!btn) return { ok: false, reason: 'publish-button-not-found' };",
+            "                /* resource timing 靠不住：这页光 JS 就 100+ 个资源，默认 250 条的 buffer 早满了，",
+            "                   满了之后新条目【直接不记】。2026-09-08 首次真发实测 publishApiSeen=false，",
+            "                   而发布其实成功了（配额 10→9、列表里有 ID 7683103769134976282）——",
+            "                   一个恒假的判据比没有判据更坏，它会让人以为没发出去。",
+            "                   改成按下发布前挂一层 fetch/XHR 记录器：只记 URL，不改行为，用完就摘。 */",
+            "                const seen = [];",
+            "                const oFetch = window.fetch;",
+            "                const oOpen = XMLHttpRequest.prototype.open;",
+            "                window.fetch = function (...a) {",
+            "                  try { const u = String((a[0] && a[0].url) || a[0] || ''); if (u) seen.push(u); } catch (e) {}",
+            "                  return oFetch.apply(this, a);",
+            "                };",
+            "                XMLHttpRequest.prototype.open = function (m, u, ...rest) {",
+            "                  try { if (u) seen.push(String(u)); } catch (e) {}",
+            "                  return oOpen.call(this, m, u, ...rest);",
+            "                };",
+            "                press(btn);",
+            "                const done = await bcpWait.until(() => {",
+            "                  const gone = !document.querySelector('.auxo-drawer-body');",
+            "                  const toast = /发布成功|提交成功/.test(document.body.innerText || '');",
+            "                  if (!gone && !toast) return null;",
+            "                  const urls = seen.filter(u => /publish/i.test(u));",
+            "                  return { gone: gone, toast: toast, publishApiSeen: urls.length > 0, publishUrls: urls.slice(0, 3) };",
+            "                }, 10000, 300);",
+            "                if (!done) {",
+            "                  const errs = [...document.querySelectorAll('[class*=error],[class*=Error]')]",
+            "                    .filter(vis)",
+            "                    .map(e => (e.innerText || '').trim())",
+            "                    .filter(Boolean)",
+            "                    .slice(0, 5);",
+            "                  window.fetch = oFetch;",
+            "                  XMLHttpRequest.prototype.open = oOpen;",
+            "                  return {",
+            "                    ok: false,",
+            "                    reason: 'publish-did-not-settle',",
+            "                    errors: errs,",
+            "                    hint: '表单校验没过时抽屉不会关，而「发布」按钮从不置灰，所以只能从这里看出来（音乐/自主声明这类带 * 的项）',",
+            "                    deadlineLeftMs: DL - Date.now()",
+            "                  };",
+            "                }",
+            "                window.fetch = oFetch;",
+            "                XMLHttpRequest.prototype.open = oOpen;",
+            "                window.__bcpIt = Object.assign(s, {",
+            "                  published: true,",
+            "                  publishedAt: new Date().toISOString(),",
+            "                  publishApiSeen: done.publishApiSeen,",
+            "                  publishUrls: done.publishUrls || []",
+            "                });",
+            "                return { ok: true, published: true, publishApiSeen: done.publishApiSeen, publishUrls: done.publishUrls || [], settle: done }",
+            "              })()"
+          ]
+        }
+      },
+      "after": {
+        "all": [
+          "publishSettled"
+        ]
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { const s = window.__bcpIt || {}; const open = !!document.querySelector('.auxo-drawer-body'); if (s.commit !== 'publish') return !!(s.preflight && s.preflight.ok) && open; return s.published === true && (!open || /发布成功|提交成功/.test(document.body.innerText || '')); })()"
+        }
+      },
+      "onFail": "escalate"
+    },
+    {
+      "goal": "发布之后先把创作抽屉收干净，再去读回执。为什么值得单独一步：上一步的判据是「抽屉关掉 **或** 出现成功提示」，取或是对的（不能让一个关得慢的抽屉把一次真成功的发布判成失败），代价是它可能在抽屉还开着时就返回。而回执要点的「图文管理」tab 就在抽屉底下 —— 2026-09-08 首次真发实测：发布确实成功（配额 10→9，列表里有 ID 7683103769134976282），book 却报 itemId=null，就是这一下点在了抽屉背面，而且没有任何报错。commit=dry-run 时抽屉本来就该开着，整步 no-op。【2026-09-24 兼容后台节流】后台窗口被 Chrome 判为遮挡时（document.hidden=true）不合成帧，抽屉离场动画停在第一帧，.auxo-drawer-body 永远留在 DOM 里 —— 2026-09-22 与 09-24 共 4 次真发全部在这一步误报失败，而图文其实都发出去了。所以抽屉关不掉时，只要 step20 已确认 published=true、且抽屉已被抖店重置成空 composer（图片计数「（0/35）」），就判为「发完了只是没关掉」放行，交给下一步去读回执。不对遮罩做任何 DOM 手脚（2026-09-22 批量 defuse 留下持久副作用的教训）。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "opsReady"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(async () => {",
+            "  const DL = bcpDeadline;",
+            "  const s = window.__bcpIt || {};",
+            "  if (s.commit !== 'publish')",
+            "    return { ok: true, skipped: 'dry-run：抽屉本来就该开着，不去动它' };",
+            "  const open = () => document.querySelector('.auxo-drawer-body');",
+            "  /* 发布成功后抖店会把抽屉重置成一个空 composer（图片计数归零）。只有这个形状才算「发完了只是没关掉」，",
+            "     还带着图的抽屉说明表单仍在，不能放行。 */",
+            "  const emptyComposer = () => { const d = open(); return !!d && /（0\\/35）/.test(d.innerText || ''); };",
+            "  const press = bcpDom.press;",
+            "  const gone = await bcpWait.until(() => (!open() ? true : null), 8000, 250);",
+            "  if (gone) return { ok: true, closed: 'by-site' };",
+            "  /* 抖店没自己关：发布已经完成，这时候关抽屉不丢任何东西。 */",
+            "  const x = document.querySelector('.auxo-drawer-close') ||",
+            "    (document.querySelector('.auxo-drawer-header') || document).querySelector('button');",
+            "  if (x) {",
+            "    press(x);",
+            "    const closed = await bcpWait.until(() => (!open() ? true : null), 3000, 200);",
+            "    if (closed) return { ok: true, closed: 'by-us' };",
+            "  }",
+            "  /* 后台节流：离场动画不推进，抽屉永远关不掉。发布已由 step20 确认，这里只是收尾没收干净。 */",
+            "  if (s.published === true && emptyComposer())",
+            "    return { ok: true, closed: false, drawerStuck: true, documentHidden: document.hidden };",
+            "  return {",
+            "    ok: false,",
+            "    reason: x ? 'composer-still-open' : 'composer-still-open-and-no-close-button',",
+            "    published: s.published === true,",
+            "    emptyComposer: emptyComposer(),",
+            "    documentHidden: document.hidden,",
+            "    deadlineLeftMs: DL - Date.now()",
+            "  }",
+            "})()"
+          ]
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { const s = window.__bcpIt || {}; if (s.commit !== 'publish') return true; const d = document.querySelector('.auxo-drawer-body'); if (!d) return true; return s.published === true && /（0\\/35）/.test(d.innerText || ''); })()"
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 1
+    },
+    {
+      "goal": "去「图文管理」把这一条的回执读回来：图文 ID、状态、关联商品。按标题匹配行，不靠「取第一条」蒙。commit=dry-run 时不去找（本来就没发），直接把自检结果作为产出返回。这一步的返回值就是本 book 的输出。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "opsReady"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "              (async () => {",
+            "                const DL = bcpDeadline;",
+            "                const s = window.__bcpIt || {};",
+            "                const base = {",
+            "                  ok: true,",
+            "                  mode: s.effectiveMode || null,",
+            "                  requestedMode: s.requestedMode || null,",
+            "                  commit: s.commit || null,",
+            "                  quota: s.quota || null,",
+            "                  note: s.note || '',",
+            "                  preflight: s.preflight || null",
+            "                };",
+            "                if (s.commit !== 'publish')",
+            "                  return Object.assign(base, {",
+            "                    published: false,",
+            "                    itemId: null,",
+            "                    status: 'dry-run',",
+            "                    reason: 'commit=dry-run：表单已按入参填好并通过自检，但没有发布'",
+            "                  });",
+            "",
+            "const vis = bcpDom.visible;",
+            "const press = bcpDom.press;",
+            "                const tab = [...document.querySelectorAll('*')]",
+            "                  .filter(e => e.children.length <= 1 && vis(e))",
+            "                  .find(e => (e.textContent || '').trim() === '图文管理');",
+            "                if (tab) press(tab);",
+            "                const want = String((s.preflight || {}).title || '')",
+            "                  .replace(/\\s+/g, '')",
+            "                  .slice(0, 12);",
+            "                const row = await bcpWait.until(() => {",
+            "                  const rows = [...document.querySelectorAll('tr,[class*=row]')];",
+            "                  const hit = rows.find(r => {",
+            "                    const t = (r.innerText || '').replace(/\\s+/g, '');",
+            "                    return /ID\\d{10,}/.test(t) && !!want && t.indexOf(want) >= 0;",
+            "                  });",
+            "                  return hit || null;",
+            "                }, 10000, 500);",
+            "                if (!row)",
+            "                  return Object.assign(base, {",
+            "                    published: true,",
+            "                    publishedAt: s.publishedAt || null,",
+            "                    itemId: null,",
+            "                    status: null,",
+            "                    reason:",
+            "                      '发布已提交（publishApiSeen=' +",
+            "                      s.publishApiSeen +",
+            "                      '），但回执列表里没能按标题匹配到这一条 —— 抖店列表有延迟，拿 publishedAt 去对账，别当成没发出去',",
+            "                    deadlineLeftMs: DL - Date.now()",
+            "                  });",
+            "                const txt = (row.innerText || '').replace(/\\s+/g, '');",
+            "                return Object.assign(base, {",
+            "                  published: true,",
+            "                  publishedAt: s.publishedAt || null,",
+            "                  publishApiSeen: s.publishApiSeen === true,",
+            "                  itemId: (txt.match(/ID(\\d{10,})/) || [])[1] || null,",
+            "                  status: (txt.match(/(发布成功|审核中|审核通过|审核驳回|已删除)/) || [])[1] || null,",
+            "                  productId: (txt.match(/商品ID[:：](\\d{10,})/) || [])[1] || null,",
+            "                  rowPreview: (row.innerText || '').slice(0, 160)",
+            "                })",
+            "              })()"
+          ]
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "(() => { const s = window.__bcpIt || {}; if (s.commit !== 'publish') return !!(s.preflight && s.preflight.ok); const t = (document.body.innerText || '').replace(/\\s+/g, ''); return /图文类型/.test(t) && /ID\\d{10,}/.test(t); })()"
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 2,
+      "after": {
+        "all": [
+          "manageReady"
+        ]
+      }
+    },
+    {
+      "goal": "关掉这一轮自己开的 tab（窗口随最后一个 tab 一起关），不留孤儿窗口。产出已经在上一步拿到了，关窗不影响它。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "opsReady"
+        ]
+      },
+      "action": {
+        "method": "browser.closeTab",
+        "params": {}
+      },
+      "verify": {
+        "actionSucceeded": true
+      },
+      "onFail": "escalate"
+    }
+  ],
+  "outputSchema": {
+    "type": "object",
+    "required": [
+      "ok",
+      "mode",
+      "commit",
+      "published"
+    ],
+    "properties": {
+      "ok": {
+        "type": "boolean"
+      },
+      "mode": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "实际执行的模式（cart / plain）。可能与入参 mode 不同——挂车不可用且 onQuotaExhausted=fallback-plain 时会降级。"
+      },
+      "requestedMode": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "入参要求的模式，用来和 mode 对账"
+      },
+      "commit": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "本次落点：dry-run / publish"
+      },
+      "published": {
+        "type": "boolean",
+        "description": "是否真的发布了"
+      },
+      "publishedAt": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "按下发布的本地时间，用于和抖店回执对账"
+      },
+      "publishApiSeen": {
+        "type": "boolean",
+        "description": "发布期间是否观察到 /api/image/publish 请求（抖店图文发布接口）"
+      },
+      "itemId": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "图文 ID（「图文管理」行内的 ID）"
+      },
+      "status": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "抖店给的状态，实测取值有「发布成功」「审核通过」，此处不穷举；dry-run 时固定为 dry-run"
+      },
+      "productId": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "回执行里的关联商品 ID（非挂车为 null）"
+      },
+      "quota": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "description": "本次读到的挂车配额与资格：canBind / remainBindNum / bindNum / depositPaid / source（precheck-api 还是 page-text）"
+      },
+      "preflight": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "description": "发布前自检快照：模式、图片数、标题、正文预览与长度、绑定商品、音乐、声明、problems 列表"
+      },
+      "note": {
+        "type": "string",
+        "description": "决策备注，例如降级原因"
+      },
+      "reason": {
+        "type": "string",
+        "description": "没拿到回执或未发布时的说明"
+      },
+      "rowPreview": {
+        "type": "string",
+        "description": "回执行原文片段，便于人工核对匹配对不对"
+      }
+    }
+  }
+}

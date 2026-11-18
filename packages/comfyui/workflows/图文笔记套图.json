@@ -1,0 +1,1450 @@
+{
+  "id": "3e1f3078-d5d1-52ec-b21d-14a3cfad291c",
+  "revision": 0,
+  "last_node_id": 60,
+  "last_link_id": 31,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "Fast Groups Bypasser (rgthree)",
+      "pos": [
+        0,
+        -220
+      ],
+      "size": [
+        460,
+        200
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "OPT_CONNECTION",
+          "type": "*",
+          "links": []
+        }
+      ],
+      "properties": {
+        "matchColors": "",
+        "matchTitle": "可选：",
+        "showNav": true,
+        "sort": "position",
+        "customSortAlphabet": "",
+        "toggleRestriction": "default"
+      },
+      "widgets_values": [],
+      "title": "开关：可选功能"
+    },
+    {
+      "id": 2,
+      "type": "LoadImage",
+      "pos": [
+        0,
+        0
+      ],
+      "size": [
+        300,
+        360
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            2,
+            8,
+            14,
+            20
+          ]
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "example.png",
+        "image"
+      ],
+      "title": "主体（产品或人物）"
+    },
+    {
+      "id": 3,
+      "type": "bcp:shot_spec",
+      "pos": [
+        0,
+        420
+      ],
+      "size": [
+        340,
+        330
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "spec",
+          "type": "STRING",
+          "links": [
+            1,
+            7,
+            13,
+            19
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "bcp:shot_spec"
+      },
+      "widgets_values": [
+        "默认",
+        "默认",
+        "默认",
+        "默认",
+        "默认",
+        "默认",
+        "默认",
+        ""
+      ],
+      "title": "统一风格（4 页共用）"
+    },
+    {
+      "id": 10,
+      "type": "bcp:skill",
+      "pos": [
+        380,
+        0
+      ],
+      "size": [
+        340,
+        300
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "spec",
+          "type": "STRING",
+          "link": 1
+        },
+        {
+          "name": "batch",
+          "type": "STRING",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "links": [
+            3
+          ]
+        },
+        {
+          "name": "size",
+          "type": "STRING",
+          "links": [
+            4
+          ]
+        },
+        {
+          "name": "skill",
+          "type": "STRING",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "bcp:skill"
+      },
+      "widgets_values": [
+        "笔记封面",
+        "标题：夏天必备的 3 个降温好物",
+        "图 1 是主体",
+        ""
+      ],
+      "title": "技能：封面"
+    },
+    {
+      "id": 20,
+      "type": "bcp:openai_image",
+      "pos": [
+        760,
+        0
+      ],
+      "size": [
+        380,
+        440
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image_1",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 2
+        },
+        {
+          "name": "image_2",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_3",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_4",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_5",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_6",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_7",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_8",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "mask",
+          "shape": 7,
+          "type": "MASK",
+          "link": null
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "widget": {
+            "name": "prompt"
+          },
+          "link": 3
+        },
+        {
+          "name": "size",
+          "type": "STRING",
+          "widget": {
+            "name": "size"
+          },
+          "link": 4
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": [
+            5,
+            9,
+            15,
+            21
+          ]
+        },
+        {
+          "name": "alpha",
+          "type": "MASK",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "bcp:openai_image"
+      },
+      "widgets_values": [
+        "gpt-image-2.5",
+        "",
+        "auto",
+        "medium",
+        1,
+        "auto",
+        0,
+        "randomize"
+      ],
+      "title": "出图：封面"
+    },
+    {
+      "id": 40,
+      "type": "bcp:title_overlay",
+      "pos": [
+        1160,
+        0
+      ],
+      "size": [
+        320,
+        260
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 4,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 5
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": [
+            6,
+            25
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "bcp:title_overlay"
+      },
+      "widgets_values": [
+        "夏天必备的 3 个降温好物",
+        8.0,
+        "#ffffff",
+        "top",
+        true
+      ],
+      "title": "中文标题"
+    },
+    {
+      "id": 30,
+      "type": "SaveImage",
+      "pos": [
+        1520,
+        0
+      ],
+      "size": [
+        340,
+        400
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 6
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "SaveImage"
+      },
+      "widgets_values": [
+        "图文笔记/01_封面"
+      ]
+    },
+    {
+      "id": 11,
+      "type": "bcp:skill",
+      "pos": [
+        380,
+        500
+      ],
+      "size": [
+        340,
+        300
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "spec",
+          "type": "STRING",
+          "link": 7
+        },
+        {
+          "name": "batch",
+          "type": "STRING",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "links": [
+            10
+          ]
+        },
+        {
+          "name": "size",
+          "type": "STRING",
+          "links": [
+            11
+          ]
+        },
+        {
+          "name": "skill",
+          "type": "STRING",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "bcp:skill"
+      },
+      "widgets_values": [
+        "笔记内页",
+        "第 1 页：好物一，写清楚它是什么、解决什么问题",
+        "图 1 是主体，图 2 是封面",
+        ""
+      ],
+      "title": "技能：内页 1"
+    },
+    {
+      "id": 21,
+      "type": "bcp:openai_image",
+      "pos": [
+        760,
+        500
+      ],
+      "size": [
+        380,
+        440
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image_1",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 8
+        },
+        {
+          "name": "image_2",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 9
+        },
+        {
+          "name": "image_3",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_4",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_5",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_6",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_7",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_8",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "mask",
+          "shape": 7,
+          "type": "MASK",
+          "link": null
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "widget": {
+            "name": "prompt"
+          },
+          "link": 10
+        },
+        {
+          "name": "size",
+          "type": "STRING",
+          "widget": {
+            "name": "size"
+          },
+          "link": 11
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": [
+            12,
+            26
+          ]
+        },
+        {
+          "name": "alpha",
+          "type": "MASK",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "bcp:openai_image"
+      },
+      "widgets_values": [
+        "gpt-image-2.5",
+        "",
+        "auto",
+        "medium",
+        1,
+        "auto",
+        0,
+        "randomize"
+      ],
+      "title": "出图：内页 1"
+    },
+    {
+      "id": 31,
+      "type": "SaveImage",
+      "pos": [
+        1520,
+        500
+      ],
+      "size": [
+        340,
+        400
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 12
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "SaveImage"
+      },
+      "widgets_values": [
+        "图文笔记/02_内页1"
+      ]
+    },
+    {
+      "id": 12,
+      "type": "bcp:skill",
+      "pos": [
+        380,
+        1000
+      ],
+      "size": [
+        340,
+        300
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "spec",
+          "type": "STRING",
+          "link": 13
+        },
+        {
+          "name": "batch",
+          "type": "STRING",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "links": [
+            16
+          ]
+        },
+        {
+          "name": "size",
+          "type": "STRING",
+          "links": [
+            17
+          ]
+        },
+        {
+          "name": "skill",
+          "type": "STRING",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "bcp:skill"
+      },
+      "widgets_values": [
+        "笔记内页",
+        "第 2 页：好物二，展示使用场景",
+        "图 1 是主体，图 2 是封面",
+        ""
+      ],
+      "title": "技能：内页 2"
+    },
+    {
+      "id": 22,
+      "type": "bcp:openai_image",
+      "pos": [
+        760,
+        1000
+      ],
+      "size": [
+        380,
+        440
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image_1",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 14
+        },
+        {
+          "name": "image_2",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 15
+        },
+        {
+          "name": "image_3",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_4",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_5",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_6",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_7",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_8",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "mask",
+          "shape": 7,
+          "type": "MASK",
+          "link": null
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "widget": {
+            "name": "prompt"
+          },
+          "link": 16
+        },
+        {
+          "name": "size",
+          "type": "STRING",
+          "widget": {
+            "name": "size"
+          },
+          "link": 17
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": [
+            18,
+            28
+          ]
+        },
+        {
+          "name": "alpha",
+          "type": "MASK",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "bcp:openai_image"
+      },
+      "widgets_values": [
+        "gpt-image-2.5",
+        "",
+        "auto",
+        "medium",
+        1,
+        "auto",
+        0,
+        "randomize"
+      ],
+      "title": "出图：内页 2"
+    },
+    {
+      "id": 32,
+      "type": "SaveImage",
+      "pos": [
+        1520,
+        1000
+      ],
+      "size": [
+        340,
+        400
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 18
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "SaveImage"
+      },
+      "widgets_values": [
+        "图文笔记/03_内页2"
+      ]
+    },
+    {
+      "id": 13,
+      "type": "bcp:skill",
+      "pos": [
+        380,
+        1500
+      ],
+      "size": [
+        340,
+        300
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "spec",
+          "type": "STRING",
+          "link": 19
+        },
+        {
+          "name": "batch",
+          "type": "STRING",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "links": [
+            22
+          ]
+        },
+        {
+          "name": "size",
+          "type": "STRING",
+          "links": [
+            23
+          ]
+        },
+        {
+          "name": "skill",
+          "type": "STRING",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "bcp:skill"
+      },
+      "widgets_values": [
+        "笔记内页",
+        "第 3 页：好物三，总结推荐理由",
+        "图 1 是主体，图 2 是封面",
+        ""
+      ],
+      "title": "技能：内页 3"
+    },
+    {
+      "id": 23,
+      "type": "bcp:openai_image",
+      "pos": [
+        760,
+        1500
+      ],
+      "size": [
+        380,
+        440
+      ],
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image_1",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 20
+        },
+        {
+          "name": "image_2",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 21
+        },
+        {
+          "name": "image_3",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_4",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_5",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_6",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_7",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_8",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "mask",
+          "shape": 7,
+          "type": "MASK",
+          "link": null
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "widget": {
+            "name": "prompt"
+          },
+          "link": 22
+        },
+        {
+          "name": "size",
+          "type": "STRING",
+          "widget": {
+            "name": "size"
+          },
+          "link": 23
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": [
+            24,
+            30
+          ]
+        },
+        {
+          "name": "alpha",
+          "type": "MASK",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "bcp:openai_image"
+      },
+      "widgets_values": [
+        "gpt-image-2.5",
+        "",
+        "auto",
+        "medium",
+        1,
+        "auto",
+        0,
+        "randomize"
+      ],
+      "title": "出图：内页 3"
+    },
+    {
+      "id": 33,
+      "type": "SaveImage",
+      "pos": [
+        1520,
+        1500
+      ],
+      "size": [
+        340,
+        400
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 24
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "SaveImage"
+      },
+      "widgets_values": [
+        "图文笔记/04_内页3"
+      ]
+    },
+    {
+      "id": 50,
+      "type": "ImageStitch",
+      "pos": [
+        1900,
+        0
+      ],
+      "size": [
+        270,
+        160
+      ],
+      "flags": {},
+      "order": 16,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image1",
+          "type": "IMAGE",
+          "link": 25
+        },
+        {
+          "name": "image2",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 26
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            27
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ImageStitch"
+      },
+      "widgets_values": [
+        "right",
+        true,
+        16,
+        "white"
+      ],
+      "title": "拼接：第 1 行"
+    },
+    {
+      "id": 51,
+      "type": "ImageStitch",
+      "pos": [
+        2190,
+        0
+      ],
+      "size": [
+        270,
+        160
+      ],
+      "flags": {},
+      "order": 17,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image1",
+          "type": "IMAGE",
+          "link": 27
+        },
+        {
+          "name": "image2",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 28
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            29
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ImageStitch"
+      },
+      "widgets_values": [
+        "right",
+        true,
+        16,
+        "white"
+      ],
+      "title": "拼接：第 1 行"
+    },
+    {
+      "id": 52,
+      "type": "ImageStitch",
+      "pos": [
+        2480,
+        0
+      ],
+      "size": [
+        270,
+        160
+      ],
+      "flags": {},
+      "order": 18,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image1",
+          "type": "IMAGE",
+          "link": 29
+        },
+        {
+          "name": "image2",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 30
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            31
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ImageStitch"
+      },
+      "widgets_values": [
+        "right",
+        true,
+        16,
+        "white"
+      ],
+      "title": "拼接：第 1 行"
+    },
+    {
+      "id": 60,
+      "type": "PreviewImage",
+      "pos": [
+        1900,
+        300
+      ],
+      "size": [
+        480,
+        400
+      ],
+      "flags": {},
+      "order": 19,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 31
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      },
+      "widgets_values": [],
+      "title": "4 页预览（不保存）"
+    },
+    {
+      "id": 4,
+      "type": "Note",
+      "pos": [
+        0,
+        820
+      ],
+      "size": [
+        340,
+        360
+      ],
+      "flags": {},
+      "order": 20,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "Note"
+      },
+      "widgets_values": [
+        "1. 「主体」上传产品或人物图；封面写标题，3 个内页各写一页内容。\n2. 先出封面，内页把封面当参考图 2，配色和版式跟着封面走；全部 3:4 竖图。\n3. 标题有错字：封面技能改成「笔记封面（留白）」，再在「开关」里打开「封面叠加中文标题」，字由节点叠加，一定对。\n4. 存在 output/图文笔记/，文件名带页码。\n\n注意：每次 Run 调用 4 次接口；内页要等封面出完。"
+      ],
+      "title": "使用说明"
+    }
+  ],
+  "links": [
+    [
+      1,
+      3,
+      0,
+      10,
+      0,
+      "STRING"
+    ],
+    [
+      2,
+      2,
+      0,
+      20,
+      0,
+      "IMAGE"
+    ],
+    [
+      3,
+      10,
+      0,
+      20,
+      9,
+      "STRING"
+    ],
+    [
+      4,
+      10,
+      1,
+      20,
+      10,
+      "STRING"
+    ],
+    [
+      5,
+      20,
+      0,
+      40,
+      0,
+      "IMAGE"
+    ],
+    [
+      6,
+      40,
+      0,
+      30,
+      0,
+      "IMAGE"
+    ],
+    [
+      7,
+      3,
+      0,
+      11,
+      0,
+      "STRING"
+    ],
+    [
+      8,
+      2,
+      0,
+      21,
+      0,
+      "IMAGE"
+    ],
+    [
+      9,
+      20,
+      0,
+      21,
+      1,
+      "IMAGE"
+    ],
+    [
+      10,
+      11,
+      0,
+      21,
+      9,
+      "STRING"
+    ],
+    [
+      11,
+      11,
+      1,
+      21,
+      10,
+      "STRING"
+    ],
+    [
+      12,
+      21,
+      0,
+      31,
+      0,
+      "IMAGE"
+    ],
+    [
+      13,
+      3,
+      0,
+      12,
+      0,
+      "STRING"
+    ],
+    [
+      14,
+      2,
+      0,
+      22,
+      0,
+      "IMAGE"
+    ],
+    [
+      15,
+      20,
+      0,
+      22,
+      1,
+      "IMAGE"
+    ],
+    [
+      16,
+      12,
+      0,
+      22,
+      9,
+      "STRING"
+    ],
+    [
+      17,
+      12,
+      1,
+      22,
+      10,
+      "STRING"
+    ],
+    [
+      18,
+      22,
+      0,
+      32,
+      0,
+      "IMAGE"
+    ],
+    [
+      19,
+      3,
+      0,
+      13,
+      0,
+      "STRING"
+    ],
+    [
+      20,
+      2,
+      0,
+      23,
+      0,
+      "IMAGE"
+    ],
+    [
+      21,
+      20,
+      0,
+      23,
+      1,
+      "IMAGE"
+    ],
+    [
+      22,
+      13,
+      0,
+      23,
+      9,
+      "STRING"
+    ],
+    [
+      23,
+      13,
+      1,
+      23,
+      10,
+      "STRING"
+    ],
+    [
+      24,
+      23,
+      0,
+      33,
+      0,
+      "IMAGE"
+    ],
+    [
+      25,
+      40,
+      0,
+      50,
+      0,
+      "IMAGE"
+    ],
+    [
+      26,
+      21,
+      0,
+      50,
+      1,
+      "IMAGE"
+    ],
+    [
+      27,
+      50,
+      0,
+      51,
+      0,
+      "IMAGE"
+    ],
+    [
+      28,
+      22,
+      0,
+      51,
+      1,
+      "IMAGE"
+    ],
+    [
+      29,
+      51,
+      0,
+      52,
+      0,
+      "IMAGE"
+    ],
+    [
+      30,
+      23,
+      0,
+      52,
+      1,
+      "IMAGE"
+    ],
+    [
+      31,
+      52,
+      0,
+      60,
+      0,
+      "IMAGE"
+    ]
+  ],
+  "groups": [
+    {
+      "id": 1,
+      "title": "可选：封面叠加中文标题",
+      "bounding": [
+        1140,
+        -60,
+        360,
+        340
+      ],
+      "color": "#3f789e",
+      "font_size": 24,
+      "flags": {}
+    }
+  ],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.6,
+      "offset": [
+        200,
+        460
+      ]
+    }
+  },
+  "version": 0.4
+}

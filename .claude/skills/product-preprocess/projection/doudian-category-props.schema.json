@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bcp.local/schemas/doudian-category-props.schema.json",
+  "title": "抖店叶子类目属性表（单条）",
+  "description": "ONE leaf category's property table —— 发布一个商品实际需要的粒度。\n\n兄弟 schema `doudian-category-schema-capture` 描述的是整份采集产物（reports/doudian-category-properties.json）：一个 4275 条的大字典。那个形状对产物是对的、对下游是错的 —— 发布一个商品只需要一个类目，而读那个 map 意味着把全部载入内存。\n\n记录的 `source` 是 `file:reports/doudian-category-properties.json#<叶子id>`，片段形式 —— 同一个叶子跨多次采集算出来是同一个 source，所以入库脚本按它做 upsert（存在则 PATCH、不存在则 POST），既不会重复也不会留旧代。\n\n**读 payload 之前先读 collection.ok**：ok=true 时 payload 为 null 表示抖店确实没下发这一段；ok=false 时 null 只表示【没采到】，不代表没有要求。把两者混为一谈，就会把一个「需要包装标签图」的类目当成「无要求」放行。\n\n`capturedAt` 逐条带上，是为了让「库里这条是哪一代」成为可查的事实 —— 否则一次没换成的入库会静默留下旧数据。",
+  "type": "object",
+  "required": [
+    "cid",
+    "name",
+    "path",
+    "capturedAt",
+    "collection"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "cid": {
+      "type": "string",
+      "pattern": "^[0-9]+$",
+      "description": "叶子类目 id，与 doudian-category-tree 里 is_leaf=true 的节点一一对应。字符串而非数字：抓下来的原始 key 就是字符串，转成数字会在 JS 里丢精度。"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "description": "类目全路径，斜杠分隔"
+    },
+    "capturedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "本条数据出自哪一次采集。三份产物（树/属性/资质）同一次运行共享此值。"
+    },
+    "collection": {
+      "type": "object",
+      "required": [
+        "ok"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": "string",
+          "description": "ok=false 时的错误原文，不做归纳"
+        },
+        "reason": {
+          "type": "string",
+          "description": "ok=false 时的人话解释"
+        }
+      }
+    },
+    "category_properties": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "抖店下发的原样结构，**不做字段挑选**。这里只把下游确实依赖的字段写出来备查，并不限制 additionalProperties —— 形状归抖店所有，枚举死会让它加一个字段就把校验搞红。",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "required": {
+              "type": "boolean"
+            },
+            "hidden": {
+              "type": "boolean"
+            },
+            "available": {
+              "type": "boolean"
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "label": {
+                    "type": "string",
+                    "description": "显示名。**不是 name** —— 旧形状里叫 name，迁移最容易踩这里。"
+                  },
+                  "required": {
+                    "type": "boolean"
+                  },
+                  "hidden": {
+                    "type": "boolean"
+                  },
+                  "available": {
+                    "type": "boolean"
+                  },
+                  "placeholder": {
+                    "type": "string",
+                    "description": "多选属性的数量上限「最多选N项」写在这里"
+                  },
+                  "required_tips": {
+                    "type": "string"
+                  },
+                  "rules": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  },
+                  "options": {
+                    "type": "array",
+                    "description": "可选值。对象数组，**不是** [value_id, value_name] 二元组。",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "properties": {
+                        "value_id": {
+                          "type": "string"
+                        },
+                        "value_name": {
+                          "type": "string"
+                        },
+                        "additions": {
+                          "type": [
+                            "object",
+                            "null"
+                          ],
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  },
+                  "additions": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "properties": {
+                      "diy_type": {
+                        "type": "integer"
+                      },
+                      "ui_type": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "抖店 getSchema 的 data.model.category_properties 原样。2026-09-03 之前只留 10 个挑出来的字段、options 压成二元组，丢掉了 rules(57%)/placeholder(100%)/required_tips(28%)/additions.diy_type(100%)/options[].additions(58%)。"
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  // 把 opencode 当纯 LLM 用的沙盒。@bcp/llm 的 opencode 适配器会 `--dir` 到这里。
+  //
+  // tools —— 只留 todoread，一个纯内存、零副作用的只读工具。这个"非空"是硬要求：
+  // 2026-09-18 起 OpenCode Zen 的免费层（mimo-v2.5-free 等）只在请求携带**非空
+  // 工具集**时才放行，否则上游回 403 FreeTierError「free tier can only be used
+  // from within OpenCode」。原来这里的 `{"*": false}` 会把工具集清空 —— 于是每
+  // 一次网关调用都被上游当成"裸 API 调用"拒掉。见 src/adapters/opencode.ts 的
+  // layer 1 注释：那一层仍然由请求体显式承担，这里只是兜底。
+  //
+  // 之所以不放开 bash/read/write：opencode 会真的执行它们，模型一旦调用就会在
+  // 这个 workdir 里跑命令、读文件，并进入多轮循环 —— 我们要的是一个纯文本模型。
+  //
+  // 不要加 steps:1 —— 它会往对话里插一条 750 字符的 assistant 消息，命令模型输出
+  // 「最大步数已达 / 工作总结 / 建议下一步」，把输出格式搞脏。
+  "agent": {
+    "llm": {
+      "mode": "primary",
+      "temperature": 0.2,
+      "prompt": "{file:./system.md}",
+      "tools": { "todoread": true }
+    }
+  }
+}

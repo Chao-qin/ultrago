@@ -1,0 +1,609 @@
+{
+  "id": "e5d8c89f-0393-54fe-ad3c-d10ca35dccb9",
+  "revision": 0,
+  "last_node_id": 22,
+  "last_link_id": 10,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "Fast Groups Bypasser (rgthree)",
+      "pos": [
+        0,
+        -220
+      ],
+      "size": [
+        460,
+        200
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "OPT_CONNECTION",
+          "type": "*",
+          "links": []
+        }
+      ],
+      "properties": {
+        "matchColors": "",
+        "matchTitle": "可选：",
+        "showNav": true,
+        "sort": "position",
+        "customSortAlphabet": "",
+        "toggleRestriction": "default"
+      },
+      "widgets_values": [],
+      "title": "开关：可选功能"
+    },
+    {
+      "id": 2,
+      "type": "LoadImage",
+      "pos": [
+        0,
+        0
+      ],
+      "size": [
+        300,
+        360
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            1,
+            4,
+            7
+          ]
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": [
+            2
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "example.png",
+        "image"
+      ],
+      "title": "原图（局部重绘：右键 → Open in MaskEditor 涂要改的地方）"
+    },
+    {
+      "id": 10,
+      "type": "bcp:openai_image",
+      "pos": [
+        380,
+        0
+      ],
+      "size": [
+        380,
+        440
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image_1",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 1
+        },
+        {
+          "name": "image_2",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_3",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_4",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_5",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_6",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_7",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_8",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "mask",
+          "shape": 7,
+          "type": "MASK",
+          "link": 2
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": [
+            3,
+            5
+          ]
+        },
+        {
+          "name": "alpha",
+          "type": "MASK",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "bcp:openai_image"
+      },
+      "widgets_values": [
+        "gpt-image-2.5",
+        "把涂抹区域改成：",
+        "auto",
+        "medium",
+        1,
+        "auto",
+        0,
+        "randomize"
+      ],
+      "title": "局部重绘"
+    },
+    {
+      "id": 11,
+      "type": "SaveImage",
+      "pos": [
+        800,
+        0
+      ],
+      "size": [
+        340,
+        400
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 3
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "SaveImage"
+      },
+      "widgets_values": [
+        "图片编辑/局部重绘"
+      ]
+    },
+    {
+      "id": 12,
+      "type": "ImageStitch",
+      "pos": [
+        800,
+        440
+      ],
+      "size": [
+        270,
+        160
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image1",
+          "type": "IMAGE",
+          "link": 4
+        },
+        {
+          "name": "image2",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 5
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            6
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ImageStitch"
+      },
+      "widgets_values": [
+        "right",
+        true,
+        16,
+        "white"
+      ],
+      "title": "拼接：改前 | 改后"
+    },
+    {
+      "id": 13,
+      "type": "PreviewImage",
+      "pos": [
+        1180,
+        0
+      ],
+      "size": [
+        480,
+        400
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 6
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      },
+      "widgets_values": [],
+      "title": "改前改后对比（不保存）"
+    },
+    {
+      "id": 20,
+      "type": "ImagePadForOutpaint",
+      "pos": [
+        380,
+        760
+      ],
+      "size": [
+        300,
+        220
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 4,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 7
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            8
+          ]
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": [
+            9
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ImagePadForOutpaint"
+      },
+      "widgets_values": [
+        0,
+        0,
+        512,
+        0,
+        40
+      ],
+      "title": "扩展画布"
+    },
+    {
+      "id": 21,
+      "type": "bcp:openai_image",
+      "pos": [
+        720,
+        760
+      ],
+      "size": [
+        380,
+        440
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 4,
+      "inputs": [
+        {
+          "name": "image_1",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 8
+        },
+        {
+          "name": "image_2",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_3",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_4",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_5",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_6",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_7",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_8",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "mask",
+          "shape": 7,
+          "type": "MASK",
+          "link": 9
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": [
+            10
+          ]
+        },
+        {
+          "name": "alpha",
+          "type": "MASK",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "bcp:openai_image"
+      },
+      "widgets_values": [
+        "gpt-image-2.5",
+        "向外延伸画面，补全周围的场景，风格、光线和原图保持一致",
+        "auto",
+        "medium",
+        1,
+        "auto",
+        0,
+        "randomize"
+      ],
+      "title": "扩图"
+    },
+    {
+      "id": 22,
+      "type": "SaveImage",
+      "pos": [
+        1140,
+        760
+      ],
+      "size": [
+        340,
+        400
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 4,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 10
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "SaveImage"
+      },
+      "widgets_values": [
+        "图片编辑/扩图"
+      ]
+    },
+    {
+      "id": 3,
+      "type": "Note",
+      "pos": [
+        0,
+        420
+      ],
+      "size": [
+        340,
+        360
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "Note"
+      },
+      "widgets_values": [
+        "1. 「原图」上传图片，在「开关」里选要做局部重绘还是扩图（两个都开就一次做两件事）。\n2. 局部重绘：右键原图 → Open in MaskEditor 涂出要改的区域 → Save，再在 prompt 里写改成什么。没涂蒙版时整张都不会被当成可修改区域。\n3. 扩图：在「扩展画布」里填四个方向各扩多少像素；扩完的宽高比要在 1:3 到 3:1 之间。\n\n注意：每个打开的功能调用 1 次接口。"
+      ],
+      "title": "使用说明"
+    }
+  ],
+  "links": [
+    [
+      1,
+      2,
+      0,
+      10,
+      0,
+      "IMAGE"
+    ],
+    [
+      2,
+      2,
+      1,
+      10,
+      8,
+      "MASK"
+    ],
+    [
+      3,
+      10,
+      0,
+      11,
+      0,
+      "IMAGE"
+    ],
+    [
+      4,
+      2,
+      0,
+      12,
+      0,
+      "IMAGE"
+    ],
+    [
+      5,
+      10,
+      0,
+      12,
+      1,
+      "IMAGE"
+    ],
+    [
+      6,
+      12,
+      0,
+      13,
+      0,
+      "IMAGE"
+    ],
+    [
+      7,
+      2,
+      0,
+      20,
+      0,
+      "IMAGE"
+    ],
+    [
+      8,
+      20,
+      0,
+      21,
+      0,
+      "IMAGE"
+    ],
+    [
+      9,
+      20,
+      1,
+      21,
+      8,
+      "MASK"
+    ],
+    [
+      10,
+      21,
+      0,
+      22,
+      0,
+      "IMAGE"
+    ]
+  ],
+  "groups": [
+    {
+      "id": 1,
+      "title": "可选：局部重绘",
+      "bounding": [
+        360,
+        -60,
+        1320,
+        680
+      ],
+      "color": "#3f789e",
+      "font_size": 24,
+      "flags": {}
+    },
+    {
+      "id": 2,
+      "title": "可选：扩图",
+      "bounding": [
+        360,
+        700,
+        1140,
+        520
+      ],
+      "color": "#3f789e",
+      "font_size": 24,
+      "flags": {}
+    }
+  ],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.6,
+      "offset": [
+        200,
+        460
+      ]
+    }
+  },
+  "version": 0.4
+}

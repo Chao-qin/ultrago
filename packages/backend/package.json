@@ -1,0 +1,36 @@
+{
+  "name": "@bcp/backend",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "dev": "cd ../.. && pnpm --filter @bcp/shared build && pnpm --filter @bcp/weclaw build && tsx watch packages/backend/src/index.ts",
+    "start": "cd ../.. && node packages/backend/dist/index.js",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test src/*.test.ts",
+    "browser": "tsx src/browser-cli.ts"
+  },
+  "bin": {
+    "bcp-browser": "./dist/browser-cli.js"
+  },
+  "dependencies": {
+    "@bcp/shared": "workspace:*",
+    "@bcp/weclaw": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "ws": "^8.18.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

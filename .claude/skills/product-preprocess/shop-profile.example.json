@@ -1,0 +1,42 @@
+{
+  "$comment": "复制为 shop-profile.json 后填入真实值。带 TODO 的三项必须替换 —— 它们是抖店必填且没有安全默认值，猜一个数字会让发布失败或商品配置错误。",
+  "profileId": "TODO-your-shop-id",
+  "shopName": "TODO-店铺名",
+
+  "listing": {
+    "productType": 0,
+    "reduceType": 1,
+    "commit": false,
+    "serviceMobile": "TODO-客服电话",
+    "startSaleType": 1,
+    "pickupMethod": "0"
+  },
+
+  "shipping": {
+    "freightTemplateId": 0,
+    "presellType": 0,
+    "deliveryDelayDay": 2
+  },
+
+  "afterSale": {
+    "damagedOrderReturn": 1
+  },
+
+  "brand": {
+    "defaultDoudianBrandId": 0
+  },
+
+  "pricing": {
+    "$comment": "4 种 strategy 选一种。详见 SKILL.md「价格策略」节。",
+    "strategy": "fixed_amount",
+    "markup": 10.0,
+
+    "$examples_alternatives": {
+      "percentage":              { "markupPercent": 20.0 },
+      "percentage_plus_fixed":   { "markupPercent": 20.0, "markupFixed": 3.0 },
+      "min_max":                 { "minPriceYuan": 50.0, "maxPriceYuan": 200.0 }
+    },
+
+    "minMarginYuan": 5.0
+  }
+}

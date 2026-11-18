@@ -1,0 +1,274 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bcp.local/schemas/doudian-category-qualification.schema.json",
+  "title": "抖店叶子类目资质要求（整份采集）",
+  "description": "reports/doudian-category-qualification.json 的形状。2026-09-03 首次采集 —— 此前从没采过这一段，所以「这个类目要不要资质」在预处理阶段完全不可知，只能等发布到抖店才发现。\n\n数据源：抖店发布页是 schema 驱动的，没有独立的「取类目属性 / 取类目资质」接口 —— 两者都是按类目下发的发布表单 schema 的一个字段：POST /product/tproduct/getSchema → data.model.category_properties / data.model.qualification。请求体不能自己拼（服务端要求整个 context，含 149 项 gray_components），采集时取页面真实请求当模板，只替换 context.category_id（必须是字符串，传 number 会 code 10002）。\n\n由 resource/playbooks/doudian-category-schema.json 产出，与 doudian-category-tree.json 出自【同一次爬取、同一个快照】，三份共享一个 capturedAt，cid 天然对得上。\n\n**关于 payload 为 null**：先看 collection.ok。ok=true 时 null 表示抖店确实没下发这一段；ok=false 时 null 只表示【没采到】，不代表没有要求。混为一谈就会把一个「需要包装标签图」的类目当成「无要求」放行。\n\n**data 是全集**：条数恒等于叶子类目数，采集失败的类目也在里面（带 collection.ok=false + 错误原文 + 原因）。采集器写盘前断言过这一条，对不上就拒绝写文件。",
+  "type": "object",
+  "required": [
+    "source",
+    "endpoint",
+    "capturedAt",
+    "stats",
+    "legend",
+    "failures",
+    "kind",
+    "data"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "source": {
+      "type": "string"
+    },
+    "endpoint": {
+      "type": "string"
+    },
+    "capturedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "采集时刻。同一次运行产出的三份文件此值相同 —— 这是判断三份是否同一快照的依据。"
+    },
+    "kind": {
+      "const": "category-qualification"
+    },
+    "stats": {
+      "type": "object",
+      "required": [
+        "leaves",
+        "ok",
+        "failed"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "leaves": {
+          "type": "integer",
+          "description": "叶子类目总数。data 条数恒等于它。"
+        },
+        "ok": {
+          "type": "integer"
+        },
+        "failed": {
+          "type": "integer",
+          "description": "ok + failed 恒等于 leaves"
+        },
+        "crawlMs": {
+          "type": "integer"
+        },
+        "totalMs": {
+          "type": "integer"
+        }
+      }
+    },
+    "legend": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "写给读数据的人的说明，重点是 collection.ok=false 时 payload 的 null 该怎么理解。放进数据本身而不是只放 schema 里 —— 拿到文件的人未必会来读 schema。"
+    },
+    "failures": {
+      "type": "array",
+      "description": "未采集成功的类目清单，与 data 里 collection.ok=false 一一对应。2026-08-27 与 2026-09-03 两次独立采集都是同样的 39 个（38 个管制刀具类目 + 有价券）—— 抖店在下发 schema 之前先做平台准入校验，需专门资质报白，重试无用。",
+      "items": {
+        "type": "object",
+        "required": [
+          "cid",
+          "name",
+          "err"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "cid": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "err": {
+            "type": "string",
+            "description": "错误原文，不做归纳"
+          }
+        }
+      }
+    },
+    "data": {
+      "type": "object",
+      "description": "叶子类目 id → 采集结果。条数恒等于 stats.leaves，失败的也在里面。",
+      "propertyNames": {
+        "pattern": "^[0-9]+$",
+        "description": "叶子类目 id，字符串形式（原始 key 就是字符串，转数字会在 JS 里丢精度）"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/entry"
+      }
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "required": [
+        "name",
+        "path",
+        "collection"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "类目全路径，斜杠分隔"
+        },
+        "collection": {
+          "$ref": "#/$defs/collection"
+        },
+        "qualification": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "抖店下发的原样结构，**不做字段挑选**。这里只把下游确实依赖的字段写出来备查，并不限制 additionalProperties —— 形状归抖店所有，枚举死会让它加一个字段就把校验搞红。",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean"
+                },
+                "hidden": {
+                  "type": "boolean"
+                },
+                "available": {
+                  "type": "boolean"
+                },
+                "disabled": {
+                  "type": "boolean"
+                },
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "label": {
+                        "type": "string",
+                        "description": "显示名。**不是 name** —— 旧形状里叫 name，迁移最容易踩这里。"
+                      },
+                      "required": {
+                        "type": "boolean"
+                      },
+                      "hidden": {
+                        "type": "boolean"
+                      },
+                      "available": {
+                        "type": "boolean"
+                      },
+                      "placeholder": {
+                        "type": "string",
+                        "description": "多选属性的数量上限「最多选N项」写在这里"
+                      },
+                      "required_tips": {
+                        "type": "string"
+                      },
+                      "rules": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      },
+                      "options": {
+                        "type": "array",
+                        "description": "可选值。对象数组，**不是** [value_id, value_name] 二元组。",
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": true,
+                          "properties": {
+                            "value_id": {
+                              "type": "string"
+                            },
+                            "value_name": {
+                              "type": "string"
+                            },
+                            "additions": {
+                              "type": [
+                                "object",
+                                "null"
+                              ],
+                              "additionalProperties": true
+                            }
+                          }
+                        }
+                      },
+                      "additions": {
+                        "type": "object",
+                        "additionalProperties": true,
+                        "properties": {
+                          "diy_type": {
+                            "type": "integer"
+                          },
+                          "ui_type": {
+                            "type": "string"
+                          },
+                          "property_type": {
+                            "type": [
+                              "integer",
+                              "string"
+                            ]
+                          },
+                          "important_type": {
+                            "type": "integer"
+                          },
+                          "prop_group": {
+                            "type": [
+                              "object",
+                              "null"
+                            ],
+                            "additionalProperties": true
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "抖店 getSchema 的 data.model.qualification 原样。判「这个类目能不能发」看 items[*].required && !hidden && available !== false —— 2026-09-03 实测 4236 个可采类目里 139 个存在必填资质（134 个要包装标签图、6 个要质检报告）。"
+        }
+      }
+    },
+    "collection": {
+      "type": "object",
+      "required": [
+        "ok"
+      ],
+      "additionalProperties": false,
+      "description": "这一条是采到的还是没采到的。**读 payload 之前先读它** —— 没有这个标记，「采到了且为空」和「没采到」在数据里长得一模一样（都是 null），下游只能靠猜。",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": "string",
+          "description": "ok=false 时的错误原文"
+        },
+        "reason": {
+          "type": "string",
+          "description": "ok=false 时的人话解释：为什么失败、能不能重试、要补什么"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bcp.local/schemas/raw-1688-offer.schema.json",
+  "title": "Raw 1688 offer capture",
+  "description": "1688 详情页抓取的原始商品结构。来源：1688-offer-snatch / 1688-random-offer-snatch 这两本 book 的产出，由 captureMeta 给出抓取诊断统计。\n\n下游消费方（preprocess.py / build_canonical.py / build_doudian_product.py）会把这份 raw 投成 canonical-product@3，再走 doudian-addv2@6 投影。本层不做任何归一化 —— offerId 是 1688 的字符串源 ID、attributes 是 {Label,Value} 扁平对、skus 用 {Price,Quantity,SkuSpec[]} —— 这些语义特征必须保留才能被下游的「防御性分流」（flat→1688 raw 适配）正确处理。\n\nshuiyi.json / reports/asd/canonical.json / reports/测试抖音/canonical.json 都是这个形状的实例。",
+  "type": "object",
+  "required": ["offerId", "sourceUrl", "title", "pageState", "attributes", "skus", "captureMeta"],
+  "additionalProperties": false,
+  "properties": {
+    "offerId": {
+      "type": "string",
+      "pattern": "^[0-9]+$",
+      "description": "1688 商品 ID（数字字符串）。查重与 outer_product_id 映射的源键。"
+    },
+    "sourceUrl": {
+      "type": "string",
+      "format": "uri",
+      "description": "1688 详情页 URL，含 offerId 查询参数。"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "description": "1688 原始标题，未经任何改写。canonical 阶段会按 8–60 字符约束截断到 title.text。"
+    },
+    "pageState": {
+      "type": "string",
+      "description": "抓取时页面状态，如 \"product\"。后续加状态时此字段自然扩展。"
+    },
+    "detailProfile": {
+      "type": "string",
+      "description": "1688 详情页结构标识（当前实例：\"v-detail-p\"）。下游据此选解析路径，留 null 表示未识别。"
+    },
+    "attributes": {
+      "type": "array",
+      "description": "1688 属性列表，每项是 {Label, Value} 扁平对。下游会把「颜色/尺码」等销售规格从这份列表里剔除（防御性分流，preprocess.py:795 段），剩下的才送进 canonical.attributes[].sourceName/rawValue。",
+      "items": {
+        "type": "object",
+        "required": ["Label", "Value"],
+        "additionalProperties": false,
+        "properties": {
+          "Label": { "type": "string", "minLength": 1 },
+          "Value": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "mainImages": {
+      "type": "array",
+      "description": "主图 URL 列表。1688 实例通常 5–17 张；下游会按 canonical.images.main 的 1–5 张约束截取首段。",
+      "items": { "type": "string", "format": "uri" }
+    },
+    "detailImages": {
+      "type": "array",
+      "description": "详情图 URL 列表。",
+      "items": { "type": "string", "format": "uri" }
+    },
+    "skuDimensions": {
+      "type": "array",
+      "description": "规格维度名（[\"颜色\", \"尺码\"]）。下游按这份名单从 skus[].SkuSpec 里聚合出 SkuProperties 的值域。",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "skuImages": {
+      "type": "array",
+      "description": "规格图映射，每项 (propertyName, valueName) → imageUrl。仅主规格（第一维）支持配图。",
+      "items": {
+        "type": "object",
+        "required": ["imageUrl", "propertyName", "valueName"],
+        "additionalProperties": false,
+        "properties": {
+          "imageUrl": { "type": "string", "format": "uri" },
+          "propertyName": { "type": "string", "minLength": 1 },
+          "valueName": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "skus": {
+      "type": "array",
+      "minItems": 1,
+      "description": "SKU 列表，每项含售价 Price（元）、库存 Quantity、与一组 SkuSpec（规格轴上的取值对）。笛卡尔积数量必须等于 skuDimensions 各维度取值数的乘积，抖动会校验。",
+      "items": {
+        "type": "object",
+        "required": ["Price", "Quantity", "SkuSpec"],
+        "additionalProperties": false,
+        "properties": {
+          "Price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "multipleOf": 0.01,
+            "description": "售价，单位【元】，两位小数。投影到 doudian spec_prices[].price 时乘 100 转【分】。"
+          },
+          "Quantity": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "库存。0 仍保留为可售 SKU；抖店允许。"
+          },
+          "SkuSpec": {
+            "type": "array",
+            "minItems": 1,
+            "description": "该 SKU 在每个规格维度上的取值，顺序与 skuDimensions 一致。",
+            "items": {
+              "type": "object",
+              "required": ["PropertyName", "ValueName"],
+              "additionalProperties": false,
+              "properties": {
+                "PropertyName": { "type": "string", "minLength": 1 },
+                "ValueName": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "captureMeta": {
+      "type": "object",
+      "required": ["attributeCount", "skuCount", "mainImageCount", "detailImageCount"],
+      "additionalProperties": false,
+      "description": "抓取诊断统计。实例给出的字段：attributeCount / detailImageCount / mainImageCount / skuCount / skuImageCount / skuWithPrice / skuWithStock。下游不强依赖这些字段，但 schemaErrors 校验失败时它们是最快的证据源。",
+      "properties": {
+        "attributeCount":  { "type": "integer", "minimum": 0 },
+        "skuCount":        { "type": "integer", "minimum": 0 },
+        "mainImageCount":  { "type": "integer", "minimum": 0 },
+        "detailImageCount":{ "type": "integer", "minimum": 0 },
+        "skuImageCount":   { "type": "integer", "minimum": 0 },
+        "skuWithPrice":    { "type": "integer", "minimum": 0 },
+        "skuWithStock":    { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

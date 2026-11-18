@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bcp.local/schemas/shop-profile.schema.json",
+  "title": "Shop profile",
+  "description": "店铺级发布配置。这里放的是【无法从来源商品推导、但抖店必填】的字段 —— 客服电话、运费模板、减库存方式、发货时效、售后政策等。预处理时合并进 canonical 的 listing / shipping / afterSale / pricing 段。一店一份；多店铺时按文件名区分，用 --profile 指定。\n\n为什么单独一层：这些值一年也未必改一次，但每个商品都必须有。写死在 schema default 里会让「改配置」变成「改契约」；每次运行时问会打断零 LLM 路径。",
+  "type": "object",
+  "required": ["profileId", "listing", "shipping"],
+  "additionalProperties": false,
+  "properties": {
+    "profileId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "配置标识，用于在 canonical 里留痕「这批商品用的哪套店铺配置」。"
+    },
+    "shopName": { "type": "string", "description": "店铺名，人可读，不参与投影。" },
+
+    "listing": {
+      "type": "object",
+      "required": ["productType", "reduceType", "commit", "serviceMobile"],
+      "additionalProperties": false,
+      "description": "→ canonical.listing",
+      "properties": {
+        "productType": { "type": "integer", "enum": [0, 3, 6, 7], "default": 0 },
+        "reduceType": { "type": "integer", "enum": [1, 2], "default": 1 },
+        "commit": {
+          "type": "boolean",
+          "default": false,
+          "description": "默认 false（仅存草稿）。改成 true 意味着自动化链路会直接提审 —— 这是个业务决策，不是技术默认值。"
+        },
+        "serviceMobile": { "type": "string", "minLength": 1 },
+        "startSaleType": { "type": "integer", "enum": [0, 1], "default": 1 },
+        "pickupMethod": { "type": "string", "enum": ["0", "1", "2", "3"], "default": "0" }
+      }
+    },
+
+    "shipping": {
+      "type": "object",
+      "required": ["freightTemplateId"],
+      "additionalProperties": false,
+      "description": "→ canonical.shipping",
+      "properties": {
+        "freightTemplateId": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0 = 包邮。非 0 需通过 /freightTemplate/list 拿到真实模板 ID —— 猜一个数字会导致发布失败。"
+        },
+        "presellType": { "type": "integer", "enum": [0, 1, 2], "default": 0 },
+        "deliveryDelayDay": {
+          "type": "integer",
+          "default": 2,
+          "description": "9999 当日发 / 1 次日发 / 2 48小时发。可选范围因类目而异，查 /product/getProductUpdateRule。"
+        },
+        "defaultWeightGram": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "来源未提供重量时的兜底值。省略则不填重量字段，而不是填 0。"
+        }
+      }
+    },
+
+    "afterSale": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "→ canonical.afterSale",
+      "properties": {
+        "sevenDayReturnPolicy": { "type": "string", "description": "格式「N天-政策代号」，N 只支持 7 和 15。" },
+        "damagedOrderReturn": { "type": "integer", "enum": [0, 1] }
+      }
+    },
+
+    "brand": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "→ canonical.brand 的兜底值",
+      "properties": {
+        "defaultDoudianBrandId": {
+          "type": "integer",
+          "default": 596120136,
+          "description": "无品牌时抖店要求的固定 ID。除非店铺有自有品牌，否则不要改。"
+        },
+        "assumeNoBrand": {
+          "type": "boolean",
+          "default": false,
+          "description": "true = 这个店铺所有商品都按\"无品牌\"上架,即使来源声明了品牌名也直接用 defaultDoudianBrandId(596120136),且不写 brand_id_unmapped pending。适用场景:白牌/无授权店铺,品牌不是卖点。不要在有自有品牌或需要按品牌分类的店铺开启 —— 会静默丢掉来源品牌信息。"
+        }
+      }
+    },
+
+    "pricing": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "→ canonical.pricing 的策略参数",
+      "properties": {
+        "strategy": { "type": "string", "default": "source_price_plus_fixed_amount" },
+        "markup": { "type": "number", "default": 10.0, "description": "固定加价额（元）" },
+        "minMarginYuan": {
+          "type": "number",
+          "description": "最低毛利（元）。设置后，预处理会校验加价是否达标，不达标记入 qualityReport.risks。省略则不做利润校验（marginChecked 保持 false）。"
+        }
+      }
+    }
+  }
+}

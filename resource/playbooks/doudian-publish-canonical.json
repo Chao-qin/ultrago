@@ -1,0 +1,3614 @@
+{
+  "name": "doudian-publish-canonical",
+  "goal": "根据 canonical 商品资料填写抖店表单：填写检查通过后按期望落点发布或存草稿；填写检查有错误时保存草稿，回传实际落点与待补内容。",
+  "paramSchemaRef": "book-input-doudian-publish-canonical@9",
+  "outputSchemaRef": "book-output-doudian-publish-canonical@3",
+  "schemaVersion": 2,
+  "params": [
+    {
+      "name": "product",
+      "required": true,
+      "description": "canonical 商品中间层（符合 canonical-product 契约）。图片 url 为预处理后图床 CDN URL。",
+      "schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "mode",
+      "required": true,
+      "description": "auto 按预处理发布条件选择发布或草稿；draft 保存草稿；publish 请求发布。填写检查有错误时保存草稿。",
+      "schema": {
+        "type": "string",
+        "enum": [
+          "draft",
+          "publish",
+          "auto"
+        ]
+      }
+    },
+    {
+      "name": "publication",
+      "required": false,
+      "description": "预处理发布条件；auto 模式必须具备可存草稿条件。",
+      "default": {
+        "canPublish": false,
+        "canDraft": false,
+        "missingRequired": []
+      },
+      "schema": {
+        "type": "object",
+        "required": [
+          "canPublish",
+          "canDraft",
+          "missingRequired"
+        ],
+        "properties": {
+          "canPublish": {
+            "type": "boolean"
+          },
+          "canDraft": {
+            "type": "boolean"
+          },
+          "missingRequired": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "pages": {
+    "doudian": {
+      "description": "抖店商品发布页（向导第 1 页：主图 / 标题 / 类目）",
+      "signals": {
+        "createReady": {
+          "condition": {
+            "all": [
+              {
+                "urlIncludes": "/ffa/g/create"
+              },
+              {
+                "any": [
+                  {
+                    "settled": true
+                  },
+                  {
+                    "all": [
+                      {
+                        "script": {
+                          "code": [
+                            "document.querySelectorAll('input[type=file]').length >= 5"
+                          ]
+                        }
+                      },
+                      {
+                        "script": {
+                          "code": [
+                            "!document.querySelector('.auxo-spin, .ecom-g-spin')"
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "timeoutMs": 30000,
+          "description": "创建页可用：URL 到位 + 【文档加载完 或 表单确实能用】。【为什么是 any 而不是单判 settled】settled 在本引擎里就是 readyState==='complete' 且有内容（orchestrator.ts:739 + dom-runtime.ts:2534），语义没写错；但 2026-09-07 run 9851efaa 撞上 readyState 卡在 interactive 满 30s（某个子资源没回来），门超时，第 0 步之后 34 步全部 skipped。同一时刻手工打开该页：readyState complete、表单完整、登录态正常——不是这台机器上必然卡死，所以严判据要留着，只是不能让它成为唯一出路。【退路判的是什么】5 个主图上传槽的 file input 已挂载 + 没有正在转的 spinner。前者正是本 book 第 2-6 步依赖的前提（「5 个槽位的 input 在文档序里固定为 nth 0-4」），后者防的是「DOM 挂上了但还在转圈」就往下走。抖店用 auxo-/ecom-g- 这套组件库，空闲时 DOM 里只有 *-spin-nested-loading / *-spin-container 两个包装器，裸的 .auxo-spin 只在转圈时渲染——所以 !querySelector('.auxo-spin, .ecom-g-spin') 就是「没在转」。【诚实标注】裸 spin 元素「转圈时出现」这一半没能直接观测到（现在这页加载太快，抓不到那一瞬），只验证了「空闲时不存在」——它不会让门永远不成立，但也别把它当成已经验证过的防线。【为什么不是 selector】那 5 个 input 是 hidden 的（抖店用样式化 label 盖住），selector 条件默认要求可见。【为什么不是 textPresent】2026-09-05 试过匹配「商品正面图」失败，那是可访问名不是可见文本。"
+        },
+        "receiptReady": {
+          "condition": {
+            "all": [
+              {
+                "any": [
+                  {
+                    "urlIncludes": "/ffa/g/draft"
+                  },
+                  {
+                    "urlIncludes": "/ffa/g/list"
+                  }
+                ]
+              },
+              {
+                "script": {
+                  "code": [
+                    "[...document.querySelectorAll('table tr')].some(r => /\\d{10,}/.test(r.innerText || ''))"
+                  ]
+                }
+              }
+            ]
+          },
+          "timeoutMs": 30000,
+          "description": "回执页列表里【已出现带商品 ID 的数据行】。这页上能用的信号只有这一个，另外两个都试过且都不行：① settled(readyState==complete) —— 这页长期停在 interactive，30 秒到不了；② networkIdle —— 页面有一批发往 localhost.bytedance.com:6xxxx/getdid 的请求会 ERR_TIMED_OUT，长期挂在在途集合里，静默窗口永远不出现（我一度测到「3 秒 0 新增」，那是页面加载完 65 秒后测的，那时它们才刚超时退出——测量点选错，结论就反了）。判据只认【行内出现 10 位以上的数字】——那是商品 ID 本身，不认「ID：」这个前缀文案（前缀是抖店可以随时改的东西；表头行、时间戳、库存都不会产生 10 位以上连续数字）。数据行出现证明列表接口已回、且当前文档就是最终文档（抖店保存后会连跳 /ffa/g/draft? → /ffa/g/draft，只判「有 tr」会在中途文档上放行，随后 eval 撞上上下文销毁，报错还伪装成 CSP）。"
+        },
+        "specSectionReady": {
+          "condition": {
+            "all": [
+              {
+                "script": {
+                  "code": [
+                    "(() => {",
+                    "  const vis = bcpDom.visible;",
+                    "  /* 归一化后比较。这条判的是「按钮已消失」，精确相等的失效方向是【假通过】：",
+                    "     文案一变就认不出按钮，于是「还在」被读成「已消失」，门提前放行。 */",
+                    "  const K = /[^\\u4e00-\\u9fa5A-Za-z0-9]/g;",
+                    "  const n = s => String(s || '').replace(K, '');",
+                    "  const want = n('智能识别');",
+                    "  const btnGone = ![...document.querySelectorAll('button,span,div')]",
+                    "    .filter(e => e.children.length === 0 && vis(e))",
+                    "    .some(e => n(e.textContent) === want);",
+                    "  const t = document.body.innerText || '';",
+                    "  const ok = /规格图|与规格值相匹配|规格选项/.test(t);",
+                    "  const failed = /识别错误|系统处理异常|重新上传/.test(t);",
+                    "  return btnGone && (ok || failed);",
+                    "})()"
+                  ]
+                }
+              },
+              {
+                "networkIdle": 1200
+              }
+            ]
+          },
+          "timeoutMs": 150000,
+          "description": "智能识别【有结论】了 —— 成功或失败都算，不是只等成功。判据：①「智能识别」按钮已消失(识别结束) ②页面出现规格区(规格图/与规格值相匹配/规格选项) **或** 出现识别失败态(识别错误/系统处理异常/重新上传) ③网络静了 1.2 秒。\n\n【2026-09-03 实测】原判据只认成功态。抖店识别失败时按钮同样消失，但页面显示的是「识别错误 / 系统处理异常，请稍作等待后再次尝试 / 重新上传」，成功态文案永不出现 —— 于是死等满 150 秒超时，报「gate timed out」，离真因(识别失败)隔着一层。失败态必须进判据，让下一步立刻拿到现场，而不是把 150 秒烧在等一个不会到来的信号上。\n\n原有教训保留：判据是【功能】不是【文案】。写死 textPresent「批量上传规格图」时，3C 一体机类目根本没有这几个字(它写的是「规格添加规格图，宽高比1:1，大小5M内」)。抖店文案随类目变，字面匹配必然按类目一个个炸。不能用 settled：它只是 readyState + 非空 body，不含网络，XHR 还在飞时就为真。识别耗时随 SKU 数涨(实测 4 个约 2.5 秒、75 个数十秒)，超时只当兜底。"
+        },
+        "specPicDrawerOpen": {
+          "condition": {
+            "script": {
+              "code": [
+                "(() => {",
+                "  const vis = bcpDom.visible;",
+                "  const drawers = [...document.querySelectorAll('[class*=drawer]')].filter(vis);",
+                "  if (!drawers.length) return true;",
+                "  return drawers.some(d => d.querySelectorAll('tr[class*=table-row]').length > 0);",
+                "})()"
+              ]
+            }
+          },
+          "timeoutMs": 30000,
+          "description": "规格图抽屉【要么已渲染出行，要么根本不存在】。两种都是合法终态：有规格图的商品由上一步把抽屉打开(上一步自己的 verify 已经等到打开)，此时必须等行渲染完；没有规格图的商品(实测工控机 75 个 SKU、0 张规格图)抽屉永远不会开，门若无条件等抽屉就会白等到超时。判据是【结构】不是【文案】：可见 drawer 元素 + 里面的 table row，不认任何提示语。原来用 textPresent 判过一次——文案先进 DOM、行后渲染，门放行时行还不存在，全速回放就撞上。"
+        },
+        "whiteBgSlotReady": {
+          "condition": {
+            "script": {
+              "code": [
+                "!!document.getElementById('bcp-white-bg')"
+              ]
+            }
+          },
+          "timeoutMs": 30000,
+          "description": "白底图上传槽已被上一步按语义锚定并打上 id。不用 selector 叶子：file input 是隐藏的，selector 默认要求可见"
+        },
+        "imageTabReady": {
+          "condition": {
+            "script": {
+              "code": [
+                "(() => {",
+                "  const vis = bcpDom.visible;",
+                "  /* 归一化后再比：抖店把标签写成「主图 3:4」或全角冒号「主图3：4」都算同一个。",
+                "     仍然是【相等】不是【包含】—— 「主图3:4说明」不会被误当成这个标签。 */",
+                "  const K = /[^\\u4e00-\\u9fa5A-Za-z0-9]/g;",
+                "  const n = s => String(s || '').replace(K, '');",
+                "  const want = n('主图3:4');",
+                "  return [...document.querySelectorAll('button,span,div,a,label')]",
+                "    .filter(e => e.children.length === 0 && vis(e))",
+                "    .some(e => n(e.textContent) === want);",
+                "})()"
+              ]
+            }
+          },
+          "timeoutMs": 30000,
+          "description": "第二页「图文信息」页签的内容已渲染（以「主图3:4」标签为凭，文案归一化后比较，容忍空格与全角/半角冒号）。主图3:4 / 白底图 / 商详图片都在这个页签下。"
+        },
+        "noEditorModal": {
+          "condition": {
+            "script": {
+              "code": [
+                "!(function () {",
+                "  var v = bcpDom.visible;",
+                "  return [].slice",
+                "    .call(document.querySelectorAll('[class*=modal],[role=dialog],[class*=drawer]'))",
+                "    .filter(v)",
+                "    .some(function (d) {",
+                "      return /AI素材工具|AI智能做主图|一键抠图|裁剪旋转/.test(d.innerText || '');",
+                "    });",
+                "})()"
+              ]
+            }
+          },
+          "timeoutMs": 20000,
+          "description": "没有残留的图片编辑器。按【功能特征】识别而不是标题：同一个编辑器在不同入口下叫「AI素材工具」或「AI智能做主图」，而「一键抠图/裁剪旋转」是它独有的工具项。它开着时后面每一步都点在遮罩上，且底下表单不进 innerText，基于文本的门会一起失效"
+        },
+        "categoryPickable": {
+          "condition": {
+            "script": {
+              "code": [
+                "(() => {",
+                "  const vis = bcpDom.visible;",
+                "  const rows = [...document.querySelectorAll('[class*=resultItem],[class*=result-item]')];",
+                "  if (rows.filter(vis).length) return true;",
+                "  return !![...document.querySelectorAll('[class*=selectedCategory]')].filter(vis).length;",
+                "})()"
+              ]
+            }
+          },
+          "timeoutMs": 30000,
+          "description": "类目选择器已处于可操作状态：搜索结果行已渲染，或类目已被选中回填「已选…」。两者取一是因为选类目有两条路——关键词搜索，以及没有搜索框/搜不出结果时的逐级点击，后者不产生任何结果行。旧版只认结果行，于是逐级点击那条路每次都卡在这道门上直到超时。数可见命中而不用 selector 叶子——它只判第一个命中，首行隐藏就永远不成立。"
+        },
+        "categoryPrefillSettled": {
+          "condition": {
+            "script": {
+              "code": [
+                "(() => {",
+                "  const net = window.__bcpNet || [];",
+                "  const q = e => String((e && e.q) || '');",
+                "  /* 抖店的自动类目匹配是一对异步请求（抓包实证）：",
+                "       asyncRefetchSchema?action=category_prefill_check          ← 发起",
+                "       getAsyncRefetchSchema?action=category_prefill_check_result ← 落定",
+                "     落定之前类目区块还会被重渲染一次，把已打开的弹窗一并掀掉。 */",
+                "  const started = net.some(e => /action=category_prefill_check(&|$)/.test(q(e)));",
+                "  const done = net.some(e => /category_prefill_check_result/.test(q(e)) && e.st === 200);",
+                "  if (started) return done;",
+                "  /* 没发起过（某些商品/状态不触发这对请求）就不能靠它——那会把门卡死到超时。",
+                "     退回元素判据：类目区块已经呈现出可操作的终态入口。 */",
+                "  const vis = bcpDom.visible;",
+                "  return [...document.querySelectorAll('span,a,button,div')]",
+                "    .filter(e => e.children.length === 0 && vis(e))",
+                "    .some(e => /^(手动选择类目|更多推荐|修改)$/.test((e.textContent || '').trim()));",
+                "})()"
+              ]
+            }
+          },
+          "timeoutMs": 30000,
+          "description": "抖店的自动类目匹配已落定。判据首选网络：那对异步请求的 result 已 200 —— 这是「平台的活干完了」的直接观测，而不是对时序的猜测。此前 book 是【抢在自动匹配之前】开弹窗（step 8 注释原话「刻意不多等」），赢了成功、输了失败：2026-09-04 同一份代码同一入参，一轮搜出 22 条、一轮零结果，且实测见过已打开的弹窗被这次重渲染当场掀掉。没发起过该请求时退回元素判据，避免在不触发它的商品上把门卡死到超时。"
+        },
+        "detailStageReady": {
+          "condition": {
+            "script": {
+              "code": [
+                "!!document.getElementById('bcp-detail-stage')"
+              ]
+            }
+          },
+          "timeoutMs": 30000,
+          "description": "详情图暂存 input 已就位。它是我们自己 append 的节点、不参与抖店渲染，所以 id 稳定 —— 这正是不拿抖店那个真 input 当上传目标的原因（它每吃一张就被换掉，id 随之消失）。不用 selector 叶子：暂存 input 是隐藏的，selector 默认要求可见。"
+        }
+      }
+    }
+  },
+  "steps": [
+    {
+      "goal": "在独立窗口打开抖店商品发布页并等待其水合（URL 到位不等于可用，以主图上传槽出现为准）",
+      "verify": {
+        "urlIncludes": "/ffa/g/create",
+        "actionSucceeded": true
+      },
+      "onFail": "retry",
+      "action": {
+        "method": "browser.newWindow",
+        "params": {
+          "url": "https://fxg.jinritemai.com/ffa/g/create",
+          "focused": false,
+          "minimized": false,
+          "restoreFocus": true
+        }
+      },
+      "maxRetries": 3,
+      "page": "doudian"
+    },
+    {
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "createReady"
+        ]
+      },
+      "goal": "把发布页切回旧版表单。2026-09-15 抖店把 /ffa/g/create 改成了「上传资料→AI 生成商品」的新版：整页只剩一个接受 20 个文件的上传区，而本书从第 3 步起的全部前提是【5 个槽位的 file input 固定在文档序 nth 0-4】。现象很有欺骗性：主图那一发照样返回 ok:true（注进了那个唯一的 input），第二发就毫无反应 —— 没有 DOM delta、没有 /product/img/batchupload 请求，重试三次一模一样，报错停在 networkOk 上（run badc474e）。页头有「返回旧版」入口，点一下原地切回旧表单（同一 URL、无导航、纯客户端重渲染），5 个槽位就回来了。【为什么不能靠 createReady 挡住】那道门的 any 分支里 settled 在新版页上同样成立——它问的是「文档好了没」，不是「这是不是我认识的那张表」，所以门会放行到错误的页面上。判据只能是【5 个槽位在不在】这个功能事实。【幂等】已经是旧版（或抖店以后默认回旧版）时本步什么都不做，直接过。",
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(async () => {",
+            "  const slots = () => document.querySelectorAll('input[type=file]').length;",
+            "  /* 先看结果再动手：已经是旧版就不点，重跑/续跑都安全。 */",
+            "  if (slots() >= 5) return { ok: true, layout: 'legacy', slots: slots() };",
+            "  /* 锚点只能用可见文案：这个入口的 class 是 CSS-modules 哈希",
+            "     (styles-module_lightButton__vvQte)，每次构建都变，元素上也没有任何 data 属性。 */",
+            "  const hits = bcpDom.innermost(document.body, '返回旧版', { exact: true });",
+            "  if (hits.length !== 1) {",
+            "    return {",
+            "      ok: false,",
+            "      slots: slots(),",
+            "      reason: hits.length",
+            "        ? '「返回旧版」命中 ' + hits.length + ' 个，锚点不够，没敢点'",
+            "        : '新版发布页，且没有「返回旧版」入口 —— 旧版通道可能已下线，本书需要按新版重写，而不是在这里重试'",
+            "    };",
+            "  }",
+            "  const clicked = await bcpDom.click(hits[0], { timeoutMs: 3000 });",
+            "  if (!clicked.ok) return { ok: false, reason: '点不到「返回旧版」：' + clicked.reason, slots: slots() };",
+            "  const n = await bcpWait.until(() => (slots() >= 5 ? slots() : null), 8000, 200);",
+            "  return n",
+            "    ? { ok: true, layout: 'switched', slots: n, attempts: clicked.attempts }",
+            "    : { ok: false, reason: '点过「返回旧版」了，但 8 秒内旧版的 5 个上传槽没出现', slots: slots() };",
+            "})()"
+          ]
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "(() => {",
+            "  /* 钉死第 4-8 步赖以成立的前提：文档序 nth 0-4 就是【我认识的那 5 个槽位】。",
+            "     只数个数不够 —— 2026-09-15 新版页上恰好也有 file input（一个接受 20 个文件的总上传区，",
+            "     外加一个无 label 的游离 input），数量判据在那种页面上照样能成立。",
+            "     实测（旧版页）6 个 input 的 label 依次是：商品正面图*上传主图 / 上传辅助图 ×4 / 空。 */",
+            "  const ins = [...document.querySelectorAll('input[type=file]')];",
+            "  if (ins.length < 5) return false;",
+            "  const lab = el => ((el.closest('label') || {}).innerText || '').replace(/\\s+/g, '');",
+            "  return /商品正面图/.test(lab(ins[0])) && ins.slice(1, 5).every(el => /上传辅助图/.test(lab(el)));",
+            "})()"
+          ]
+        }
+      },
+      "onFail": "escalate"
+    },
+    {
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "createReady"
+        ]
+      },
+      "goal": "一进页面就装网络监听，把本次发布期间抖店【自己】发出的接口调用记进 window.__bcpNet —— 本步不构造任何请求，只旁观：类目资质那类端点只在选中类目后才被调用，事后再开抓包必然赶不上（导航到回执页还会清空 performance 的 resource timing）。【2026-09-03 修】旧版过滤写成 /fxg\\.jinritemai\\.com|jinritemai\\.com\\/product/ 去测原始 u，而抖店的商品接口全部用【相对路径】发（/product/tproduct/refetchSchema?...），两个分支都匹配不上 —— 于是只捞到 5 条恰好用绝对 URL 的 shell 调用，真正想要的一条没进来。现在先 new URL(u, location.href) 归一再按 hostname+pathname 判，相对/绝对一视同仁。资质/类目/属性/schema 相关的端点连请求体一起留（响应 6000 字符、请求 2000 字符），其余只留 200 字符省内存。失败一律吞掉：诊断设施不该影响它观察的流程。",
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(() => {",
+            "  if (window.__bcpNet) return { ok: true, note: '已装过' };",
+            "  window.__bcpNet = [];",
+            "  const KEEP = /qualif|categor|attr|prop|schema|brand|refetch|diagnose/i;",
+            "  const rec = (m, u, st, rq, body) => {",
+            "    try {",
+            "      let U;",
+            "      try {",
+            "        U = new URL(u, location.href);",
+            "      } catch (e) {",
+            "        return;",
+            "      }",
+            "      if (!/(^|\\.)jinritemai\\.com$/.test(U.hostname)) return;",
+            "      const p = U.pathname;",
+            "      if (/\\.(js|css|png|jpe?g|svg|woff2?|gif|html)$/i.test(p)) return;",
+            "      const big = KEEP.test(p + U.search);",
+            "      window.__bcpNet.push({",
+            "        m,",
+            "        u: p,",
+            "        q: U.search.slice(0, 240),",
+            "        st,",
+            "        /* 关注端点(KEEP)不截断:这份 dump 的用途就是回答「填了什么属性 → 抖店要什么",
+            "           资质」，而 category_properties 在请求体后半段、qualification 在响应体后半段 ——",
+            "           2000/6000 的上限正好把配对的两头都砍掉（实测 24 条样本里 21 条 rq 卡在 2000，",
+            "           解析直接 Unterminated string）。非关注端点仍然截断，那些只用来看调了什么。 */",
+            "        rq: big ? String(rq || '') : '',",
+            "        b: big ? String(body || '') : String(body || '').slice(0, 200)",
+            "      });",
+            "      if (window.__bcpNet.length > 2000) window.__bcpNet.shift();",
+            "    } catch (e) {}",
+            "  };",
+            "  const of_ = window.fetch;",
+            "  window.fetch = function (input, init) {",
+            "    const u = typeof input === 'string' ? input : (input && input.url) || '';",
+            "    const m = (init && init.method) || (input && input.method) || 'GET';",
+            "    let rq = '';",
+            "    try {",
+            "      const x = init && init.body;",
+            "      if (typeof x === 'string') rq = x;",
+            "    } catch (e) {}",
+            "    return of_.apply(this, arguments).then(r => {",
+            "      try {",
+            "        r.clone()",
+            "          .text()",
+            "          .then(t => rec(m, u, r.status, rq, t))",
+            "          .catch(() => {});",
+            "      } catch (e) {}",
+            "      return r;",
+            "    });",
+            "  };",
+            "  const oo = XMLHttpRequest.prototype.open,",
+            "    os = XMLHttpRequest.prototype.send;",
+            "  XMLHttpRequest.prototype.open = function (m, u) {",
+            "    this.__m = m;",
+            "    this.__u = u;",
+            "    return oo.apply(this, arguments);",
+            "  };",
+            "  XMLHttpRequest.prototype.send = function (body) {",
+            "    const rq = typeof body === 'string' ? body : '';",
+            "    this.addEventListener('load', () => {",
+            "      try {",
+            "        rec(this.__m, this.__u || '', this.status, rq, this.responseText || '');",
+            "      } catch (e) {}",
+            "    });",
+            "    return os.apply(this, arguments);",
+            "  };",
+            "  return { ok: true, note: '网络监听已装' };",
+            "})()"
+          ]
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "(() => !!window.__bcpNet)()"
+          ]
+        }
+      },
+      "onFail": "retry"
+    },
+    {
+      "goal": "上传主图（商品正面图）= 第 0 个 file input；5 个槽位的 input 在文档序里固定为 nth 0-4，填充后顺序不变，故每步打不同 input、无竞态",
+      "verify": {
+        "networkOk": {
+          "urlIncludes": "/product/img/batchupload",
+          "status": 200
+        },
+        "settled": true
+      },
+      "onFail": "retry",
+      "maxRetries": 2,
+      "action": {
+        "method": "browser.upload",
+        "params": {
+          "css": "input[type=file]",
+          "nth": 0,
+          "attachmentFrom": "{{product.images.main.0}}"
+        }
+      },
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "createReady"
+        ]
+      }
+    },
+    {
+      "goal": "上传辅助图 1 = 第 1 个；5 个槽位的 input 在文档序里固定为 nth 0-4，填充后顺序不变，故每步打不同 input、无竞态。【optional·2026-09-07】canonical 的 images.main 是 1–5 张（schema minItems 1 / maxItems 5），少于 5 张时这一步没有图可传 —— 从前它表现为槽位填不上，整本书在 instantiateSteps 就 throw，35 步一步没跑，报的还是引擎级 unresolved playbook slot，离真因隔着整条链路。标了 optional 之后这一步整步不进 plan（不是「跑到这里再跳过」，见 PlanStep.optional 的注释）。第 0 张不标：主图一张都没有就该当场炸。",
+      "verify": {
+        "networkOk": {
+          "urlIncludes": "/product/img/batchupload",
+          "status": 200
+        },
+        "settled": true
+      },
+      "onFail": "retry",
+      "maxRetries": 2,
+      "optional": true,
+      "action": {
+        "method": "browser.upload",
+        "params": {
+          "css": "input[type=file]",
+          "nth": 1,
+          "attachmentFrom": "{{product.images.main.1}}"
+        }
+      },
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "createReady"
+        ]
+      }
+    },
+    {
+      "goal": "上传辅助图 2 = 第 2 个；5 个槽位的 input 在文档序里固定为 nth 0-4，填充后顺序不变，故每步打不同 input、无竞态。【optional】images.main 允许 1–5 张，这一张不存在时本步整步丢弃而不是让整本书起不来，理由见第 3 步。",
+      "verify": {
+        "networkOk": {
+          "urlIncludes": "/product/img/batchupload",
+          "status": 200
+        },
+        "settled": true
+      },
+      "onFail": "retry",
+      "maxRetries": 2,
+      "optional": true,
+      "action": {
+        "method": "browser.upload",
+        "params": {
+          "css": "input[type=file]",
+          "nth": 2,
+          "attachmentFrom": "{{product.images.main.2}}"
+        }
+      },
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "createReady"
+        ]
+      }
+    },
+    {
+      "goal": "上传辅助图 3 = 第 3 个；5 个槽位的 input 在文档序里固定为 nth 0-4，填充后顺序不变，故每步打不同 input、无竞态。【optional】images.main 允许 1–5 张，这一张不存在时本步整步丢弃而不是让整本书起不来，理由见第 3 步。",
+      "verify": {
+        "networkOk": {
+          "urlIncludes": "/product/img/batchupload",
+          "status": 200
+        },
+        "settled": true
+      },
+      "onFail": "retry",
+      "maxRetries": 2,
+      "optional": true,
+      "action": {
+        "method": "browser.upload",
+        "params": {
+          "css": "input[type=file]",
+          "nth": 3,
+          "attachmentFrom": "{{product.images.main.3}}"
+        }
+      },
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "createReady"
+        ]
+      }
+    },
+    {
+      "goal": "上传辅助图 4 = 第 4 个；5 个槽位的 input 在文档序里固定为 nth 0-4，填充后顺序不变，故每步打不同 input、无竞态。【optional】images.main 允许 1–5 张，这一张不存在时本步整步丢弃而不是让整本书起不来，理由见第 3 步。",
+      "verify": {
+        "networkOk": {
+          "urlIncludes": "/product/img/batchupload",
+          "status": 200
+        },
+        "settled": true
+      },
+      "onFail": "retry",
+      "maxRetries": 2,
+      "optional": true,
+      "action": {
+        "method": "browser.upload",
+        "params": {
+          "css": "input[type=file]",
+          "nth": 4,
+          "attachmentFrom": "{{product.images.main.4}}"
+        }
+      },
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "createReady"
+        ]
+      }
+    },
+    {
+      "goal": "填写商品标题（verify 比对入参标题本身，不绑定任何具体商品；也刻意不多等，多等一拍抖店的自动类目匹配会把「手动选择类目」替换掉）",
+      "verify": {
+        "elementValue": {
+          "name": "请输入2-60个字符",
+          "includes": "{{product.title.text}}"
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 2,
+      "action": {
+        "method": "browser.type",
+        "params": {
+          "text": "{{product.title.text}}",
+          "name": "请输入2-60个字符",
+          "role": "textbox",
+          "css": "#pg-title-input"
+        }
+      },
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "createReady"
+        ]
+      }
+    },
+    {
+      "goal": "等抖店的自动类目匹配落定（网络信号，见 categoryPrefillSettled）后再打开类目选择弹窗，并确认它稳住了。入口有「手动选择类目」和「修改」两种（自动匹配成功与否）。此前是抢在匹配之前开，赢了成功输了失败；改成等确定信号后再开，竞态从根上消掉。判据仍是「搜索框在」而不是「点过了」。",
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "(() =>",
+            "  !![...document.querySelectorAll('input')].find(i =>",
+            "    /类目关键词|商品名/.test(i.placeholder || '')",
+            "  ))()"
+          ]
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 3,
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(async () => {",
+            "  const DL = bcpDeadline;",
+            "  const sleep = ms => new Promise(r => setTimeout(r, Math.max(0, Math.min(ms, DL - Date.now()))));",
+            "  const vis = bcpDom.visible;",
+            "  const box = () =>",
+            "    [...document.querySelectorAll('input')].find(i =>",
+            "      /类目关键词|商品名/.test(i.placeholder || '')",
+            "    );",
+            "  const entry = () => {",
+            "    const leaf = [...document.querySelectorAll('span,a,button')].filter(",
+            "      e => e.children.length === 0 && vis(e)",
+            "    );",
+            "    return (",
+            "      leaf.find(e => /^手动选择类目$/.test((e.textContent || '').trim())) ||",
+            "      leaf.find(e => /^修改$/.test((e.textContent || '').trim()))",
+            "    );",
+            "  };",
+            "  let opened = 0,",
+            "    torn = 0;",
+            "  while (Date.now() < DL) {",
+            "    if (box()) {",
+            "      /* 已经开着：再盯一拍，确认不是正要被重渲染掉的那一个 */ await sleep(1200);",
+            "      if (box()) return { ok: true, opened, torn, note: opened ? '打开并稳住' : '进来时就开着' };",
+            "      torn++;",
+            "      continue;",
+            "    }",
+            "    const e = entry();",
+            "    if (!e) {",
+            "      await sleep(400);",
+            "      continue;",
+            "    }",
+            "    e.click();",
+            "    opened++;",
+            "    await sleep(900);",
+            "  }",
+            "  return { ok: false, reason: '弹窗打不开或每次都被抖店的自动类目匹配掀掉', opened, torn };",
+            "})()"
+          ]
+        }
+      },
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "createReady",
+          "categoryPrefillSettled"
+        ]
+      }
+    },
+    {
+      "goal": "选中目标类目：优先用弹窗顶部的关键词搜索；【没有搜索框、或搜不出结果】时退化为按 doudianPath 逐级点击左侧类目列。两条路都能把叶子选上并回填「已选…」。弹窗随时可能被抖店的异步类目匹配重渲染掉，所以本步自己确认/重开，不假设上一步开的还在。叶子名自带斜杠（实测 771 个叶子如此，例：墙咔/柔性墙板）按整段归一化比对，不切分——切了会多出一层假层级、且最后一段是不存在的类目名。",
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "(() => {",
+            "  const KEEP = /[^一-龥A-Za-z0-9]/g;",
+            "  const norm = s => String(s || '').replace(KEEP, '');",
+            "  const vis = bcpDom.visible;",
+            "  /* 本步有两条路，判据必须同时认：搜索出结果行，或逐级点击已经把类目选上。",
+            "     只认前者的话，逐级点击这条路每次都会在自己的 verify 上失败。 */",
+            "  if ([...document.querySelectorAll('[class*=resultItem],[class*=result-item]')].filter(vis).length)",
+            "    return true;",
+            "  const want = norm((({{product}}.category || {}).doudianPath || []).join(''));",
+            "  if (!want) return false;",
+            "  const el = [...document.querySelectorAll('[class*=selectedCategory]')].filter(vis)[0];",
+            "  return !!el && norm(el.textContent).includes(want);",
+            "})()"
+          ]
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 2,
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(async () => {",
+            "  const DL = bcpDeadline;",
+            "  const sleep = ms => new Promise(r => setTimeout(r, Math.max(0, Math.min(ms, DL - Date.now()))));",
+            "  const vis = bcpDom.visible;",
+            "  const KEEP = /[^一-龥A-Za-z0-9]/g;",
+            "  const norm = s => String(s || '').replace(KEEP, '');",
+            "",
+            "  const p = {{product}};",
+            "  const seg = ((p || {}).category || {}).doudianPath || [];",
+            "  if (!seg.length) return { ok: false, reason: 'canonical 缺 category.doudianPath，无法定位类目' };",
+            "  const leafName = seg[seg.length - 1];",
+            "  const want = norm(seg.join(''));",
+            "",
+            "  const rows = () =>",
+            "    [...document.querySelectorAll('[class*=resultItem],[class*=result-item]')].filter(vis);",
+            "  const searchBox = () =>",
+            "    [...document.querySelectorAll('input')]",
+            "      .filter(vis)",
+            "      .find(i => /类目关键词|商品名/.test(i.placeholder || ''));",
+            "  const entry = () =>",
+            "    [...document.querySelectorAll('span,a,button')]",
+            "      .filter(e => e.children.length === 0 && vis(e))",
+            "      .find(e => /^(手动选择类目|修改)$/.test((e.textContent || '').trim()));",
+            "  const selectedText = () => {",
+            "    const el = [...document.querySelectorAll('[class*=selectedCategory]')].filter(vis)[0];",
+            "    return el ? norm(el.textContent) : '';",
+            "  };",
+            "  const alreadyPicked = () => selectedText().includes(want);",
+            "",
+            "  /* 弹窗随时会被抖店掀掉，所以不假设它还在。",
+            "     2026-09-04 实测：抖店的自动类目匹配是异步的，回来会重渲染整个类目区块，",
+            "     把已经打开的弹窗一并端走 —— 手里正开着的弹窗在清空搜索框那一拍就消失了。",
+            "     上一步只保证「开的那一刻稳住 1200ms」，盖不住之后才回来的那次重渲染。",
+            "     所以这里每一轮自己确认/重开，而不是把它当既成事实。 */",
+            "  const ensureModal = async () => {",
+            "    if (searchBox()) return true;",
+            "    const e = entry();",
+            "    if (!e) return false;",
+            "    e.click();",
+            "    while (Date.now() < DL) {",
+            "      await sleep(300);",
+            "      if (searchBox()) return true;",
+            "    }",
+            "    return false;",
+            "  };",
+            "",
+            "  const bySearch = async () => {",
+            "    const box = searchBox();",
+            "    if (!box) return false;",
+            "    bcpDom.setValue(box, '');",
+            "    box.dispatchEvent(new Event('input', { bubbles: true }));",
+            "    bcpDom.setValue(box, leafName);",
+            "    box.dispatchEvent(new Event('input', { bubbles: true }));",
+            "    box.dispatchEvent(new Event('change', { bubbles: true }));",
+            "    /* 搜索是异步的；同时盯「框还在不在」——框没了说明弹窗又被掀了，",
+            "       继续等结果只会空耗到 deadline，不如立刻回去重开。 */",
+            "    while (Date.now() < DL) {",
+            "      await sleep(400);",
+            "      if (rows().length) return true;",
+            "      if (!searchBox()) return false;",
+            "    }",
+            "    return false;",
+            "  };",
+            "",
+            "  /* 退化档：逐级点击。用在两种情形 ——",
+            "     ① 这个状态下抖店压根不给搜索框（实测存在「只给推荐芯片 + 发起申请」的形态）；",
+            "     ② 给了搜索框但搜不出结果。",
+            "     左侧列是「已开通类目」+「全部类目」两段，逐段按精确文案点，点完等下一段出现。",
+            "     叶子名自带斜杠（实测 771 个叶子如此，例：墙咔/柔性墙板）不影响 —— 归一化后",
+            "     按整段比对，不切分。 */",
+            "  const byCascade = async () => {",
+            "    for (let i = 0; i < seg.length; i++) {",
+            "      const target = norm(seg[i]);",
+            "      let hit = null;",
+            "      while (Date.now() < DL) {",
+            "        hit = [...document.querySelectorAll('div,li,span,a')]",
+            "          .filter(e => e.children.length === 0 && vis(e))",
+            "          .find(e => norm(e.textContent) === target);",
+            "        if (hit) break;",
+            "        await sleep(300);",
+            "      }",
+            "      if (!hit) return { ok: false, at: i + 1, name: seg[i] };",
+            "      hit.click();",
+            "      await sleep(500);",
+            "    }",
+            "    return { ok: true };",
+            "  };",
+            "",
+            "  if (alreadyPicked()) return { ok: true, route: 'already', selected: selectedText() };",
+            "",
+            "  const hasModal = await ensureModal();",
+            "  if (hasModal && (await bySearch())) {",
+            "    return { ok: true, route: 'search', rows: rows().length };",
+            "  }",
+            "  const c = await byCascade();",
+            "  if (!c.ok) {",
+            "    return {",
+            "      ok: false,",
+            "      reason: '搜索与逐级点击都没能定位到该类目',",
+            "      卡在第几级: c.at,",
+            "      卡在: c.name,",
+            "      有搜索框: !!searchBox(),",
+            "      有弹窗入口: !!entry(),",
+            "      已选: selectedText()",
+            "    };",
+            "  }",
+            "  return { ok: true, route: 'cascade', selected: selectedText() };",
+            "})()"
+          ]
+        }
+      },
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "createReady"
+        ]
+      }
+    },
+    {
+      "goal": "确认类目已选中：有搜索结果行就按全路径精确选中；没有结果行则说明上一步走的是逐级点击、叶子已经点上，直接放行。页面上的 > 分隔符是独立 DOM 节点、不进 textContent，所以两边都归一化后再比。",
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "(() => {",
+            "  const K = /[^\\u4e00-\\u9fa5A-Za-z0-9]/g,",
+            "    n = s => String(s || '').replace(K, '');",
+            "  const want = n((({{product}}.category || {}).doudianPath || []).join(''));",
+            "  if (!want) return false;",
+            "  const el = [...document.querySelectorAll('[class*=selectedCategory]')].find(e => {",
+            "    const r = e.getBoundingClientRect();",
+            "    return r.width > 0 && r.height > 0;",
+            "  });",
+            "  return !!el && n(el.textContent).includes(want);",
+            "})()"
+          ]
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 2,
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(() => {",
+            "  const KEEP = /[^一-龥A-Za-z0-9]/g;",
+            "  const norm = s => String(s || '').replace(KEEP, '');",
+            "  const vis = bcpDom.visible;",
+            "  const p = {{product}};",
+            "  const seg = ((p || {}).category || {}).doudianPath || [];",
+            "  const want = norm(seg.join(''));",
+            "  if (!want) return { ok: false, reason: 'canonical 缺 category.doudianPath' };",
+            "  const selectedText = () => {",
+            "    const el = [...document.querySelectorAll('[class*=selectedCategory]')].filter(vis)[0];",
+            "    return el ? norm(el.textContent) : '';",
+            "  };",
+            "  /* 上一步有两条路：搜索出结果行，或逐级点击直接把叶子点中。后者不产生任何",
+            "     结果行，所以「结果为空」不再是失败 —— 先看类目是不是已经选上了。",
+            "     实测（2026-09-04）逐级点击同样会回填 [class*=selectedCategory]，文案形如",
+            "     「已选家装建材墙面材料墙咔柔性墙板」，与本步 verify 用的是同一个锚点。 */",
+            "  const rows = [...document.querySelectorAll('[class*=resultItem],[class*=result-item]')];",
+            "  if (!rows.length) {",
+            "    if (selectedText().includes(want))",
+            "      return { ok: true, how: 'cascade', picked: selectedText(), want };",
+            "    return { ok: false, reason: '既没有搜索结果行，类目也没有被选中', want, 已选: selectedText() };",
+            "  }",
+            "  let hit = rows.find(e => norm(e.textContent) === want);",
+            "  const how = hit ? 'exact' : 'includes';",
+            "  if (!hit) hit = rows.find(e => norm(e.textContent).includes(want));",
+            "  if (!hit) {",
+            "    if (selectedText().includes(want))",
+            "      return { ok: true, how: 'cascade', picked: selectedText(), want };",
+            "    return {",
+            "      ok: false,",
+            "      reason: '结果里没有匹配的类目路径',",
+            "      want,",
+            "      got: rows.slice(0, 5).map(e => norm(e.textContent))",
+            "    };",
+            "  }",
+            "  const picked = norm(hit.textContent);",
+            "  hit.click();",
+            "  return { ok: true, picked, want, how };",
+            "})()"
+          ]
+        }
+      },
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "categoryPickable"
+        ]
+      }
+    },
+    {
+      "goal": "确认类目：弹窗关闭，且类目已回填使「下一步」变为可用",
+      "verify": {
+        "elementEnabled": "下一步",
+        "dialogOpen": false
+      },
+      "onFail": "retry",
+      "maxRetries": 2,
+      "action": {
+        "method": "browser.click",
+        "params": {
+          "name": "确认",
+          "exact": true,
+          "role": "button"
+        }
+      },
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "createReady"
+        ]
+      }
+    },
+    {
+      "goal": "在【第一页】先填一遍类目属性。抖店的字段分布随类目变化——电吹风把「品牌」放在第一页，而属性填充原本只在第二页跑，「下一步」被表单校验拦住却报「找不到保存草稿」，离真因隔了一页。复用同一段逻辑（按标签找控件、找不到即跳过），在哪一页跑都安全且幂等；剩下的由第二页那步补。",
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "(() => {",
+            "  const vis = bcpDom.visible;",
+            "  const K = /[^\\u4e00-\\u9fa5A-Za-z0-9]/g,",
+            "    n = s => String(s || '').replace(K, '');",
+            "  const p = {{product}};",
+            "  const PROPS = ((p.category || {}).categoryProps) || [];",
+            "  const attrs = ((p || {}).attributes || []).filter(",
+            "    a => a.doudianPropertyId != null && (a.doudianValues || []).length",
+            "  );",
+            "  const want = attrs",
+            "    .map(a => PROPS.find(x => Number(x.id) === Number(a.doudianPropertyId)))",
+            "    .filter(x => x && x.ui !== 'multi_value_measure');",
+            "  if (!want.length) return true;",
+            "  let present = 0,",
+            "    filled = 0;",
+            "  for (const prop of want) {",
+            "    /* 遍历所有同名叶子：抖店「填写助手」面板也会列出属性名，只取第一个会锁到没有控件的那个 */ const leaves =",
+            "      [...document.querySelectorAll('span,label,div')].filter(",
+            "        e => e.children.length === 0 && vis(e) && n(e.textContent) === n(prop.name)",
+            "      );",
+            "    /* 同上：优先采纳【已填】的那个候选，没有已填的才退回第一个解析成功的。   只取第一个解析成功的，会把「填写助手」侧恰好挨着输入框的文案当成本属性项，   把已经填好的真表单项误报成未填。 */ let first =",
+            "        null,",
+            "      best = null;",
+            "    for (const leaf of leaves) {",
+            "      let box = leaf;",
+            "      for (let d = 0; d < 8; d++) {",
+            "        const q = box.parentElement;",
+            "        if (!q) break;",
+            "        box = q;",
+            "        const inp = box.querySelector('input,textarea');",
+            "        if (inp) {",
+            "          if ((inp.value || '').trim() || box.querySelector('[class*=select-selection-item]'))",
+            "            best = { box: box, inp: inp };",
+            "          if (!first) first = { box: box, inp: inp };",
+            "          break;",
+            "        }",
+            "      }",
+            "      if (best) break;",
+            "    }",
+            "    if (!best && !first) continue;",
+            "    present++;",
+            "    if (best) filled++;",
+            "  }",
+            "  /* present===0 = 本页没有这些属性项。属性落在第 1 页还是第 2 页随类目变（电吹风的品牌在第 1 页，汤勺的品牌在第 2 页），所以填写器是【机会性】的：本页有就填。要求 present>0 会把「这一页本来就没有」误判成失败。真正的兜底在保存那步——抖店自己会报缺失的必填项。这里只断言【本页出现的都填上了】：字段在却没填，仍然红。 */ return (",
+            "    filled === present",
+            "  );",
+            "})()"
+          ]
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 1,
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "createReady"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(async () => {",
+            "  const K = /[^\\u4e00-\\u9fa5A-Za-z0-9]/g;",
+            "  const norm = s => String(s || '').replace(K, '');",
+            "  const vis = bcpDom.visible;",
+            "  const press = bcpDom.press;",
+            "  const OPT_TREE = '[class*=select-tree-title]';",
+            "  const OPT_PLAIN = '[class*=select-item-option],[role=option]';",
+            "  const optsOf = name => {",
+            "    const scope =",
+            "      [...document.querySelectorAll('[class*=auto-dropdown-id-]')].find(",
+            "        d => vis(d) && (!name || norm(d.className).includes(norm(name)))",
+            "      ) || document;",
+            "    const t = [...scope.querySelectorAll(OPT_TREE)].filter(vis);",
+            "    return t.length ? t : [...scope.querySelectorAll(OPT_PLAIN)].filter(vis);",
+            "  };",
+            "  const alreadyPicked = box =>",
+            "    new Set(",
+            "      [...box.querySelectorAll('[class*=select-selection-item]')].map(x => norm(x.textContent))",
+            "    );",
+            "  const setVal = (el, v) => {",
+            "    bcpDom.setValue(el, v);",
+            "    el.dispatchEvent(new Event('change', { bubbles: true }));",
+            "  };",
+            "  /* 同一个属性名在页面上不止一处：抖店右侧「填写助手」面板也会把属性名当建议列出来（实测 Polo 衫的「面料材质」在文档里有 2 个精确叶子，第一个属于建议面板）。只取第一个匹配就会锁到那个没有控件的文案上，往上爬 8 层爬到「商品信息质量」也找不到 input，于是报「表单里没有该属性项」——而真正的表单项在页面别处，一次都没被碰过。所以要遍历【所有】同名叶子，取第一个真能解析出控件的；某个候选爬不到就换下一个，不是直接放弃。 */ const fieldOf =",
+            "    label => {",
+            "      const want = norm(label);",
+            "      const leaves = [...document.querySelectorAll('span,label,div')].filter(",
+            "        e => e.children.length === 0 && vis(e) && norm(e.textContent) === want",
+            "      );",
+            "      for (const leaf of leaves) {",
+            "        let n = leaf;",
+            "        for (let k = 0; k < 8; k++) {",
+            "          n = n.parentElement;",
+            "          if (!n) break;",
+            "          if (n.querySelectorAll('input').length === 1)",
+            "            return { box: n, input: n.querySelector('input') };",
+            "        }",
+            "      }",
+            "      return null;",
+            "    };",
+            "  const DL = bcpDeadline;",
+            "  const sleep = ms => new Promise(r => setTimeout(r, Math.max(0, Math.min(ms, DL - Date.now()))));",
+            "  const p = {{product}};",
+            "  const PROPS = ((p.category || {}).categoryProps) || [];",
+            "  const attrs = ((p || {}).attributes || []).filter(",
+            "    a => a.doudianPropertyId != null && (a.doudianValues || []).length",
+            "  );",
+            "  const filled = [],",
+            "    skipped = [];",
+            "  for (const a of attrs) {",
+            "    if (Date.now() > DL) {",
+            "      skipped.push({ id: a.doudianPropertyId, why: '超出本步时间预算' });",
+            "      continue;",
+            "    }",
+            "    const prop = PROPS.find(x => Number(x.id) === Number(a.doudianPropertyId));",
+            "    if (!prop) {",
+            "      skipped.push({ id: a.doudianPropertyId, why: 'categoryProps 里没有该 id' });",
+            "      continue;",
+            "    }",
+            "    const f = fieldOf(prop.name);",
+            "    if (!f) {",
+            "      skipped.push({ label: prop.name, why: '当前类目表单里没有该属性项' });",
+            "      continue;",
+            "    }",
+            "    const already = (() => {",
+            "      const i = f.box.querySelector('input,textarea');",
+            "      return !!(",
+            "        f.box.querySelector('[class*=select-selection-item]') ||",
+            "        (i && (i.value || '').trim())",
+            "      );",
+            "    })();",
+            "    if (already) {",
+            "      skipped.push({",
+            "        label: prop.name,",
+            "        ui: prop.ui,",
+            "        why: '已有值，跳过（重复点多选项会取消选中）'",
+            "      });",
+            "      continue;",
+            "    }",
+            "    const val = a.doudianValues[0].name;",
+            "    if (prop.ui === 'text') {",
+            "      setVal(f.input, val);",
+            "      filled.push({ label: prop.name, value: val, ui: 'text' });",
+            "      continue;",
+            "    }",
+            "    if (prop.ui === 'select' || prop.ui === 'search') {",
+            "      press(f.box.querySelector('[class*=select-selector]') || f.box);",
+            "      await sleep(450);",
+            "      const scope =",
+            "        [...document.querySelectorAll('[class*=auto-dropdown-id-]')].find(",
+            "          d => vis(d) && norm(d.className).includes(norm(prop.name))",
+            "        ) || document;",
+            "      const opts = optsOf(prop.name);",
+            "      const hit =",
+            "        opts.find(o => norm(o.textContent) === norm(val)) ||",
+            "        opts.find(o => norm(o.textContent).includes(norm(val)));",
+            "      if (!hit) {",
+            "        skipped.push({",
+            "          label: prop.name,",
+            "          value: val,",
+            "          why: '下拉里没有该值',",
+            "          saw: opts.slice(0, 6).map(o => norm(o.textContent))",
+            "        });",
+            "        press(document.body);",
+            "        await sleep(150);",
+            "        continue;",
+            "      }",
+            "      press(hit);",
+            "      await sleep(250);",
+            "      filled.push({ label: prop.name, value: val, ui: prop.ui });",
+            "      continue;",
+            "    }",
+            "    if (prop.ui === 'multi_select') {",
+            "      /* 平台对多选有数量上限，写在占位符里（实测「请选择，最多选5项」）。 读出来而不是写死 5：不同属性上限不同，写死会在别的类目上悄悄超限。 */ const capTxt =",
+            "        (f.box.innerText || '').match(/最多选\\s*(\\d+)\\s*项/);",
+            "      const cap = capTxt ? Number(capTxt[1]) : Infinity;",
+            "      const seen0 = alreadyPicked(f.box);",
+            "      const wants = [...new Set((a.doudianValues || []).map(v => v.name).filter(Boolean))].filter(",
+            "        w => !seen0.has(norm(w))",
+            "      );",
+            "      press(f.box.querySelector('[class*=select-selector]') || f.box);",
+            "      await sleep(450);",
+            "      const picked = [];",
+            "      for (const w of wants) {",
+            "        if (picked.length >= cap) break;",
+            "        if (Date.now() > DL) break;",
+            "        const opts = optsOf(prop.name);",
+            "        const hit =",
+            "          opts.find(o => norm(o.textContent) === norm(w)) ||",
+            "          opts.find(o => norm(o.textContent).includes(norm(w)));",
+            "        if (!hit) continue;",
+            "        press(hit);",
+            "        await sleep(220);",
+            "        picked.push(w);",
+            "      }",
+            "      press(document.body);",
+            "      await sleep(180);",
+            "      if (picked.length)",
+            "        filled.push({",
+            "          label: prop.name,",
+            "          ui: 'multi_select',",
+            "          values: picked,",
+            "          cap: cap === Infinity ? null : cap,",
+            "          dropped: wants.length > picked.length ? wants.slice(picked.length) : undefined",
+            "        });",
+            "      else",
+            "        skipped.push({",
+            "          label: prop.name,",
+            "          ui: 'multi_select',",
+            "          why: '下拉里没有任何匹配值',",
+            "          saw: wants.slice(0, 3)",
+            "        });",
+            "      continue;",
+            "    }",
+            "    if (prop.ui === 'measure') {",
+            "      /* measure 实测就是一个普通文本框（电压范围「请输入」），单位在框外是静态文字。 来源值形如「220（V）」，把单位括号去掉只留数值；没有数字就原样填。 */ const num =",
+            "        (val.match(/[\\d.]+/) || [])[0];",
+            "      setVal(f.input, num || val);",
+            "      filled.push({ label: prop.name, ui: 'measure', value: num || val });",
+            "      continue;",
+            "    }",
+            "    skipped.push({ label: prop.name, value: val, ui: prop.ui, why: '复合控件，由下一步单独处理' });",
+            "  }",
+            "  return { filled, skipped, total: attrs.length };",
+            "})()"
+          ]
+        }
+      }
+    },
+    {
+      "goal": "【标品门·动态】抖店在标品类目的发布第一页会多渲染一段「选择标品 / 当前类目为标准化商品」，其中品牌与产品名称都是必填。这段不存在就直接放行——门开在 DOM 上而不是数据上：类目快照的 category_properties.additions.support_spu_product 只回答「这个类目是不是标品」（4275 个类目里 353 个为 true，8.3%；同父的消毒湿巾 true / 私护湿巾 false，实测页面行为与之一致），回答不了「这一次抖店要不要我填」，所以它只用来解释失败，不用来预判跳过。填法：品牌优先选商品自己的品牌（按 categoryProps 里「品牌」那一项的 id 去 canonical.attributes 取值，book 里不写死任何品牌名），店铺品牌库里没有就退「无品牌」——那是抖店自己给的正式选项（「可选无品牌」），对 1688 白牌货就是正确答案；产品名称填叶子类目名。【不可让渡】绝不去点标品候选行：实测点中一行，抖店会把该 SPU 的整套资质预填进来，包括别人公司的「消毒品卫生许可证编号 浙卫消证字（2020）第0014号」，那是借证发布。没有这一步时，第一页会被「该项为必填，请输入」卡死，而「保存草稿」按钮在第二页，失败于是伪装成「找不到保存草稿按钮」，与真因隔着一整页。2026-09-04 在消毒湿巾类目实测本步代码：{brand:'无品牌', name:'消毒湿巾'}，下一步通过、进入第二页。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "createReady"
+        ]
+      },
+      "onFail": "retry",
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(async () => {",
+            "  const K = /[^一-龥A-Za-z0-9]/g;",
+            "  const norm = s => String(s || '').replace(K, '');",
+            "  const vis = bcpDom.visible;",
+            "  const press = bcpDom.press;",
+            "  const setVal = (el, v) => {",
+            "    bcpDom.setValue(el, v);",
+            "    el.dispatchEvent(new Event('change', { bubbles: true }));",
+            "  };",
+            "  const DL = bcpDeadline;",
+            "  const sleep = ms => new Promise(r => setTimeout(r, Math.max(0, Math.min(ms, DL - Date.now()))));",
+            "  const optsOf = () =>",
+            "    [...document.querySelectorAll('[class*=select-item-option],[role=option]')].filter(vis);",
+            "  const chosen = sel =>",
+            "    norm((sel.querySelector('[class*=select-selection-item]') || {}).textContent);",
+            "",
+            "  /* 判据是【页面】不是数据：类目快照的 support_spu_product 只说\"这个类目是标品\"，",
+            "     到底渲不渲这段、要不要填，由抖店当场决定（同一标品类目在自动匹配与手动选择两条",
+            "     进入路径下都渲染，但非标品类目一定没有）。所以门开在 DOM 上，数据只用来解释。 */",
+            "  const anchor = [...document.querySelectorAll('div,span,label')].find(",
+            "    e =>",
+            "      e.children.length === 0 &&",
+            "      vis(e) &&",
+            "      /^(选择标品|当前类目为标准化商品)/.test((e.textContent || '').trim())",
+            "  );",
+            "  if (!anchor) return { ok: true, spu: false, note: '第一页没有标品区块，跳过' };",
+            "",
+            "  let box = anchor;",
+            "  for (let k = 0; k < 8; k++) {",
+            "    if (!box.parentElement) break;",
+            "    box = box.parentElement;",
+            "    if (/品牌/.test(box.innerText || '') && /产品名称/.test(box.innerText || '')) break;",
+            "  }",
+            "  const sels = [...box.querySelectorAll('.ecom-g-select')].filter(vis);",
+            "  /* 品牌是普通单选、产品名称是 auto-complete —— 按控件种类分辨，不按左右顺序，",
+            "     抖店换布局时顺序会变而组件类型不会。 */",
+            "  const brandSel = sels.find(e => !String(e.className).includes('auto-complete'));",
+            "  const nameSel = sels.find(e => String(e.className).includes('auto-complete'));",
+            "  if (!brandSel || !nameSel) return { ok: false, reason: '标品区块在，但找不到品牌/产品名称控件' };",
+            "",
+            "  const p = {{product}};",
+            "  const PROPS = ((p.category || {}).categoryProps) || [];",
+            "  /* 品牌值从 categoryProps join 出来，和第 24 步同一条路：属性表里叫「品牌」的那一项",
+            "     的 id，去 canonical.attributes 里取值。不在 book 里写死任何品牌名。 */",
+            "  const brandProp = PROPS.find(x => norm(x.name) === norm('品牌'));",
+            "  const brandAttr =",
+            "    brandProp &&",
+            "    ((p || {}).attributes || []).find(a => Number(a.doudianPropertyId) === Number(brandProp.id));",
+            "  const wantBrand = brandAttr ? String(((brandAttr.doudianValues || [])[0] || {}).name || '') : '';",
+            "",
+            "  /* 产品名称填【叶子类目名】。抖店标品库里的名字形如「德佑酒精消毒湿巾」= 品牌 + 品类，",
+            "     无品牌时品类本身就是那个名字；而 1688 标题是关键词堆砌（「消毒湿巾杀菌卫生湿纸巾",
+            "     家用便携独立包装抑菌清洁湿巾」），塞进去既不像产品名也会被判虚假宣传。",
+            "     叶子类目名是平台自己对这个东西的叫法，且已经在入参里，不用新增数据。 */",
+            "  const seg = ((p || {}).category || {}).doudianPath || [];",
+            "  const leaf = String(seg[seg.length - 1] || '').trim();",
+            "  if (!leaf) return { ok: false, reason: '入参里没有 category.doudianPath，推不出产品名称' };",
+            "",
+            "  const picked = { brand: '', name: '' };",
+            "",
+            "  if (!chosen(brandSel)) {",
+            "    press(brandSel);",
+            "    await sleep(1200);",
+            "    const bi = brandSel.querySelector('input');",
+            "    if (wantBrand && bi) {",
+            "      setVal(bi, wantBrand);",
+            "      await sleep(1500);",
+            "    }",
+            "    let opts = optsOf();",
+            "    /* 优先本商品自己的品牌；店铺品牌库里没有它就退「无品牌」——那是抖店给出的正式",
+            "       选项（「可选无品牌」），对 1688 白牌货就是正确答案。",
+            "       【不可让渡】绝不点标品候选行：实测点中一行会把该 SPU 的整套资质预填进来，",
+            "       包括别人公司的「消毒品卫生许可证编号 浙卫消证字（2020）第0014号」——",
+            "       那是借证发布，比填不上严重得多。 */",
+            "    let hit = wantBrand ? opts.find(o => norm(o.textContent) === norm(wantBrand)) : null;",
+            "    if (!hit) {",
+            "      if (bi && bi.value) {",
+            "        setVal(bi, '');",
+            "        await sleep(1200);",
+            "        opts = optsOf();",
+            "      }",
+            "      hit = opts.find(o => norm(o.textContent) === norm('无品牌'));",
+            "    }",
+            "    if (!hit)",
+            "      return {",
+            "        ok: false,",
+            "        reason: '品牌下拉里既没有本商品品牌「' + wantBrand + '」也没有「无品牌」',",
+            "        options: opts.slice(0, 8).map(o => o.textContent.trim())",
+            "      };",
+            "    picked.brand = hit.textContent.trim();",
+            "    press(hit);",
+            "    await sleep(1000);",
+            "  } else",
+            "    picked.brand = (",
+            "      brandSel.querySelector('[class*=select-selection-item]') || {}",
+            "    ).textContent.trim();",
+            "",
+            "  const ni = nameSel.querySelector('input');",
+            "  if (!chosen(nameSel) && !(ni && ni.value.trim())) {",
+            "    if (!ni) return { ok: false, reason: '产品名称控件里没有输入框' };",
+            "    setVal(ni, leaf);",
+            "    await sleep(2000);",
+            "    /* auto-complete 会把刚输入的值作为候选列出来；选中它比只失焦稳（失焦时机受",
+            "       React 状态影响，实测选中后必填提示立刻消失）。没有候选就退回失焦，由",
+            "       verify 判定到底成没成，不在这里自称成功。 */",
+            "    const o = optsOf().find(x => norm(x.textContent) === norm(leaf));",
+            "    if (o) press(o);",
+            "    else ni.blur();",
+            "    await sleep(1000);",
+            "  }",
+            "  picked.name =",
+            "    (chosen(nameSel) &&",
+            "      (nameSel.querySelector('[class*=select-selection-item]') || {}).textContent.trim()) ||",
+            "    (ni ? ni.value.trim() : '');",
+            "",
+            "  const left = (box.innerText || '').match(/该项为必填[^\\n]*/g) || [];",
+            "  if (left.length)",
+            "    return { ok: false, reason: '标品信息填完仍有必填未满足：' + left.join(' / '), picked };",
+            "  return { ok: true, spu: true, picked };",
+            "})()"
+          ]
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "(() => {",
+            "  const t = document.body.innerText || '';",
+            "  const i = t.search(/选择标品|当前类目为标准化商品/);",
+            "  if (i < 0) return true;",
+            "  return !/该项为必填/.test(t.slice(i, i + 500));",
+            "})()"
+          ]
+        }
+      }
+    },
+    {
+      "goal": "点下一步，进入商品信息表单页（以「保存草稿」按钮出现为凭）",
+      "verify": {
+        "elementName": "保存草稿"
+      },
+      "onFail": "retry",
+      "maxRetries": 2,
+      "action": {
+        "method": "browser.click",
+        "params": {
+          "name": "下一步",
+          "exact": true,
+          "role": "button"
+        }
+      },
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "createReady"
+        ]
+      }
+    },
+    {
+      "goal": "切到第二页的「图文信息」页签并等它渲染完。主图3:4 / 白底图 / 商详图片都在这个页签下——全速回放时页面停在「基础信息」，那些区块不在 DOM 里，后面按文案定位的步骤会全部扑空（手工操作慢，页签早切过去了，所以一直没暴露）",
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "(() => {",
+            "  const vis = bcpDom.visible;",
+            "  return [...document.querySelectorAll('button,span,div,a,label')]",
+            "    .filter(e => e.children.length === 0 && vis(e))",
+            "    .some(e => (e.textContent || '').trim() === '主图3:4');",
+            "})()"
+          ]
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 3,
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "createReady"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(async () => {",
+            "  const press = bcpDom.press;",
+            "  const DL = bcpDeadline;",
+            "  const sleep = ms => new Promise(r => setTimeout(r, Math.max(0, Math.min(ms, DL - Date.now()))));",
+            "  const vis = bcpDom.visible;",
+            "  const ready = () =>",
+            "    [...document.querySelectorAll('button,span,div,a,label')]",
+            "      .filter(e => e.children.length === 0 && vis(e))",
+            "      .some(e => (e.textContent || '').trim() === '主图3:4');",
+            "  let clicks = 0;",
+            "  while (Date.now() < DL) {",
+            "    if (ready())",
+            "      return { ok: true, clicks, note: clicks ? '切过页签后就绪' : '进来时已在图文信息' };",
+            "    const tab = [...document.querySelectorAll('div,span,button')]",
+            "      .filter(e => e.children.length === 0 && vis(e))",
+            "      .find(e => (e.textContent || '').trim() === '图文信息');",
+            "    if (tab) {",
+            "      press(tab);",
+            "      clicks++;",
+            "    }",
+            "    await sleep(1200);",
+            "  }",
+            "  return { ok: false, reason: '没等到图文信息区块渲染', clicks };",
+            "})()"
+          ]
+        }
+      }
+    },
+    {
+      "goal": "填充「主图3:4」：点一次「从1:1主图智能裁剪」，等它收敛。这块是可选加分项（搜索/推荐场景展示），抖店会自己带过来一部分但停在待裁剪态。这是可选加分项，产不出图不该阻断上架，所以判据只证明到达了区块。注意它是【重跑式】的——再点一次会清空重算，所以本步只在为空时才点",
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "(() => {",
+            "  const vis = bcpDom.visible;",
+            "  return [...document.querySelectorAll('button,span,div,a,label')]",
+            "    .filter(e => e.children.length === 0 && vis(e))",
+            "    .some(e => (e.textContent || '').trim() === '主图3:4');",
+            "})()"
+          ]
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 2,
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "createReady",
+          "imageTabReady"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(async () => {",
+            "  const vis = bcpDom.visible;",
+            "  const press = bcpDom.press;",
+            "  const exact = t =>",
+            "    [...document.querySelectorAll('button,span,div,a,label')]",
+            "      .filter(e => e.children.length === 0 && vis(e))",
+            "      .find(e => (e.textContent || '').trim() === t);",
+            "  const sec34 = () => {",
+            "    const leaf = exact('主图3:4');",
+            "    if (!leaf) return null;",
+            "    let s = leaf;",
+            "    for (let d = 0; d < 8; d++) {",
+            "      s = s.parentElement;",
+            "      if (!s) return null;",
+            "      const t = s.innerText || '';",
+            "      if (t.includes('主图3:4') && /有机会在搜索|从1:1主图智能裁剪/.test(t)) return s;",
+            "    }",
+            "    return null;",
+            "  };",
+            "  const n34 = () => {",
+            "    const s = sec34();",
+            "    return s ? [...s.querySelectorAll('img')].filter(vis).length : -1;",
+            "  };",
+            "  const DL = bcpDeadline;",
+            "  const sleep = ms => new Promise(r => setTimeout(r, Math.max(0, Math.min(ms, DL - Date.now()))));",
+            "  if (!sec34()) return { ok: false, reason: '没找到主图3:4 区块' };",
+            "  const before = n34();",
+            "  /* 已有图就不点：这个按钮点一下会先清空再重算，重复点等于把已经好的结果推倒重来。 */ if (",
+            "    before > 0",
+            "  )",
+            "    return {",
+            "      ok: true,",
+            "      skipped: '已有 ' + before + ' 张，不重复触发（该按钮是重跑式的）',",
+            "      count: before",
+            "    };",
+            "  const btn = exact('从1:1主图智能裁剪');",
+            "  if (!btn) return { ok: false, reason: '没找到「从1:1主图智能裁剪」入口' };",
+            "  press(btn);",
+            "  /* 异步生成，中途计数会跳（0→1→4→稳定），所以等连续两拍不变才算收敛。 */ let last = -1,",
+            "    same = 0,",
+            "    cur = before;",
+            "  while (Date.now() < DL) {",
+            "    await sleep(1500);",
+            "    cur = n34();",
+            "    if (cur === last && cur > 0) {",
+            "      same++;",
+            "      if (same >= 2) break;",
+            "    } else {",
+            "      same = 0;",
+            "    }",
+            "    last = cur;",
+            "  }",
+            "  return { ok: cur > 0, before, after: cur, settled: same >= 2 };",
+            "})()"
+          ]
+        }
+      }
+    },
+    {
+      "goal": "锁定白底图上传槽：按该区块自己的说明文案「上传后在频道…」定位，给它的 file input 打上固定 id。槽位渲染不稳定（有时带「上传白底图」文案、有时只有图标），祖先类名与全局序号都不可靠，语义锚才是稳的",
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "(() => !!document.getElementById('bcp-white-bg'))()"
+          ]
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 2,
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "createReady",
+          "imageTabReady"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(async () => {",
+            "  const DL = bcpDeadline;",
+            "  const sleep = ms => new Promise(r => setTimeout(r, Math.max(0, Math.min(ms, DL - Date.now()))));",
+            "  const vis = bcpDom.visible;",
+            "  const findInput = () => {",
+            "    const hint = [...document.querySelectorAll('span,div,label')]",
+            "      .filter(e => e.children.length === 0 && vis(e))",
+            "      .find(e => /^上传后在频道/.test((e.textContent || '').trim()));",
+            "    if (!hint) return null;",
+            "    let box = hint;",
+            "    for (let d = 0; d < 7; d++) {",
+            "      const p = box.parentElement;",
+            "      if (!p) return null;",
+            "      box = p;",
+            "      const i = box.querySelector('input[type=file]');",
+            "      if (i) return i;",
+            "    }",
+            "    return null;",
+            "  };",
+            "  const prev = document.getElementById('bcp-white-bg');",
+            "  if (prev) prev.removeAttribute('id');",
+            "  let inp = findInput();",
+            "  while (!inp && Date.now() < DL) {",
+            "    await sleep(400);",
+            "    inp = findInput();",
+            "  }",
+            "  if (!inp) return { ok: false, reason: '没等到白底图区块（该品类可能没有这一项）' };",
+            "  inp.id = 'bcp-white-bg';",
+            "  return { ok: true, stamped: true, accept: inp.accept };",
+            "})()"
+          ]
+        }
+      }
+    },
+    {
+      "goal": "白底图为可选增强项，只保留并观察平台现有素材；不自动上传、修复或删除，避免覆盖抖店自动选图",
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "(() => {",
+            "  const vis = bcpDom.visible;",
+            "  const editorOpen =",
+            "    [...document.querySelectorAll('[class*=modal],[role=dialog],[class*=drawer]')]",
+            "      .filter(vis)",
+            "      .some(d => /AI素材工具|AI智能做主图|一键抠图|裁剪旋转/.test(d.innerText || ''));",
+            "  /* 检查白底图区块是否已有图片（预填或已上传） */",
+            "  const wbSec = () => {",
+            "    const hint = [...document.querySelectorAll('span,div,label')]",
+            "      .filter(e => e.children.length === 0 && vis(e))",
+            "      .find(e => /^上传后在频道/.test((e.textContent || '').trim()));",
+            "    if (!hint) return null;",
+            "    let s = hint;",
+            "    for (let d = 0; d < 7; d++) {",
+            "      const p = s.parentElement;",
+            "      if (!p) return null;",
+            "      s = p;",
+            "      if (s.querySelector('input')) return s;",
+            "    }",
+            "    return null;",
+            "  };",
+            "  const sec = wbSec();",
+            "  const hasWhiteBgImage = sec && [...sec.querySelectorAll('img')].filter(vis).length > 0;",
+            "  const hasError = /识别未通过|非白底/.test(document.body.innerText || '');",
+            "  /* 如果白底图已有图片且没有错误，跳过这一步 */",
+            "  if (hasWhiteBgImage && !hasError) return true;",
+            "  /* 否则检查编辑器和错误状态 */",
+            "  return !editorOpen;",
+            "})()"
+          ]
+        }
+      },
+      "onFail": "escalate",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "createReady",
+          "imageTabReady"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(async () => {",
+            "  return { ok: true, skipped: '白底图为可选项，保留平台现有状态' };",
+            "  const DL = bcpDeadline;",
+            "  const sleep = ms => new Promise(r => setTimeout(r, Math.max(0, Math.min(ms, DL - Date.now()))));",
+            "  const vis = bcpDom.visible;",
+            "  const press = bcpDom.press;",
+            "  const exact = t =>",
+            "    [...document.querySelectorAll('button,span,div,a,label')]",
+            "      .filter(e => e.children.length === 0 && vis(e))",
+            "      .find(e => (e.textContent || '').trim() === t);",
+            "  const editorOpen = () =>",
+            "    [...document.querySelectorAll('[class*=modal],[role=dialog],[class*=drawer]')]",
+            "      .filter(vis)",
+            "      .some(d => /AI素材工具|AI智能做主图|一键抠图|裁剪旋转/.test(d.innerText || ''));",
+            "  const rejected = () => /识别未通过|非白底/.test(document.body.innerText || '');",
+            "  /* 先从我们自己打的 id 往上找，找不到才退回文案锚点。 实测：step 16 用文案锚点打 id 成功了（step 17 的门也过了），但到了本步文案锚点失效（AI 编辑器是全屏 modal，关掉后区块重渲染；错误态也会改变那段说明文字的结构）， wbSec 返回 null → removeImage 第一行就 return false → 兜底删图根本没机会执行， 表现成 blockingErrorLeft:true 且 residual 为空，什么线索都不留。 上一步的目标里已经写着「打到上一步锚定的 id 上，不靠按钮文案」，本步却又退回认文案。 */ const wbSec =",
+            "    () => {",
+            "      const up = el => {",
+            "        let s = el;",
+            "        for (let d = 0; d < 7; d++) {",
+            "          const p = s.parentElement;",
+            "          if (!p) return null;",
+            "          s = p;",
+            "          if (s.querySelector('input')) return s;",
+            "        }",
+            "        return null;",
+            "      };",
+            "      const marked = document.getElementById('bcp-white-bg');",
+            "      if (marked) {",
+            "        const s = up(marked);",
+            "        if (s) return s;",
+            "      }",
+            "      const hint = [...document.querySelectorAll('span,div,label')]",
+            "        .filter(e => e.children.length === 0 && vis(e))",
+            "        .find(e => /^上传后在频道/.test((e.textContent || '').trim()));",
+            "      return hint ? up(hint) : null;",
+            "    };",
+            "  /* 这一步不可让渡的后置条件：编辑器必须关掉。它是全屏 modal + 滚动锁， 泄漏出去会让后面每一步都点在遮罩上，且底下表单不进 innerText。 */ const closeEditor =",
+            "    async () => {",
+            "      for (let i = 0; i < 5 && editorOpen() && Date.now() < DL; i++) {",
+            "        const x = [...document.querySelectorAll('button,span,i,div')].filter(vis).find(e => {",
+            "          const t = (e.textContent || '').trim();",
+            "          const c =",
+            "            String(e.className || '') +",
+            "            String((e.getAttribute && e.getAttribute('aria-label')) || '');",
+            "          return /^(取消|关闭)$/.test(t) || /close/i.test(c);",
+            "        });",
+            "        if (x) press(x);",
+            "        else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));",
+            "        await sleep(900);",
+            "      }",
+            "      return !editorOpen();",
+            "    };",
+            "  /* 只负责「尽力修好」，一次也不关窗——关窗统一交给 finally， 这样无论从哪条路径退出（成功 / 找不到按钮 / 抛异常 / 超预算）行为都一致。 */ const attempt =",
+            "    async () => {",
+            "      const VERDICT = Date.now() + 7000;",
+            "      while (Date.now() < VERDICT && Date.now() < DL) {",
+            "        if (editorOpen() || rejected()) break;",
+            "        await sleep(500);",
+            "      }",
+            "      if (!editorOpen() && !rejected()) {",
+            "        const s = wbSec();",
+            "        return {",
+            "          fixed: false,",
+            "          skipped: '观察窗内没有出现非白底判定，视为一次通过',",
+            "          hasImage: !!(s && [...s.querySelectorAll('img')].filter(vis).length > 0)",
+            "        };",
+            "      }",
+            "      if (!editorOpen()) {",
+            "        const go = exact('去编辑');",
+            "        if (go) {",
+            "          press(go);",
+            "          await sleep(2500);",
+            "        }",
+            "      }",
+            "      if (!editorOpen()) return { fixed: false, reason: '判定为非白底，但没等到 AI 素材工具' };",
+            "      const kou = exact('一键抠图');",
+            "      if (!kou) return { fixed: false, reason: '编辑器里没有「一键抠图」' };",
+            "      press(kou);",
+            "      await sleep(1200);",
+            "      const blockOf = name => {",
+            "        let blk = exact(name);",
+            "        if (!blk) return null;",
+            "        for (let d = 0; d < 6; d++) {",
+            "          const p = blk.parentElement;",
+            "          if (!p) break;",
+            "          blk = p;",
+            "          const t = blk.innerText || '';",
+            "          if (t.includes(name) && t.includes('应用') && t.length < 120) return blk;",
+            "        }",
+            "        return null;",
+            "      };",
+            "      const applyIn = blk => {",
+            "        if (!blk) return false;",
+            "        const a = [...blk.querySelectorAll('button,span,div')]",
+            "          .filter(e => e.children.length === 0 && vis(e))",
+            "          .find(e => (e.textContent || '').trim() === '应用');",
+            "        if (!a) return false;",
+            "        press(a);",
+            "        return true;",
+            "      };",
+            "      if (!applyIn(blockOf('一键抠图'))) return { fixed: false, reason: '抠图块里没有「应用」' };",
+            "      await sleep(5000);",
+            "      /* 只抠图会留「边界模糊」，实测会导致发布后白底图被驳回，所以接一次变清晰。 */ const sharpened =",
+            "        applyIn(blockOf('变清晰'));",
+            "      if (sharpened) await sleep(5000);",
+            "      const up = [...document.querySelectorAll('button')]",
+            "        .filter(vis)",
+            "        .find(x => (x.textContent || '').trim() === '上传');",
+            "      if (!up) return { fixed: false, sharpened, reason: '编辑器里没有「上传」按钮' };",
+            "      press(up);",
+            "      while (editorOpen() && Date.now() < DL) await sleep(500);",
+            "      const s = wbSec();",
+            "      return {",
+            "        fixed: !rejected(),",
+            "        sharpened,",
+            "        residual: s ? ((s.innerText || '').match(/[\"\"][^\"\"]+[\"\"]问题/) || [''])[0] : ''",
+            "      };",
+            "    };",
+            "  const removeImage = async () => {",
+            "    const sec = wbSec();",
+            "    /* 定位不到区块和「删了但没删掉」是两件事，返回同一个 false 会把前者伪装成后者。 */ if (!sec)",
+            "      return '定位不到白底图区块，无法删除被驳回的图';",
+            "    for (let i = 0; i < 3 && Date.now() < DL; i++) {",
+            "      if (!rejected()) return true;",
+            "      const img = [...sec.querySelectorAll('img')].filter(vis)[0];",
+            "      if (img) {",
+            "        /* 悬浮出删除按钮。用引擎原语：它会沿祖先链补发 pointerenter/mouseenter，",
+            "           而触发监听器常挂在比命中节点更外层的包裹元素上（learn 2026-08-19）。 */",
+            "        bcpDom.hover(img);",
+            "        await sleep(500);",
+            "      }",
+            "      const del = [...sec.querySelectorAll('button,span,i,div')].filter(vis).find(e => {",
+            "        const t = (e.textContent || '').trim();",
+            "        const cn =",
+            "          String(e.className || '') +",
+            "          String((e.getAttribute && e.getAttribute('aria-label')) || '');",
+            "        return /^(删除|移除)$/.test(t) || /delete|remove|close/i.test(cn);",
+            "      });",
+            "      if (del) {",
+            "        press(del);",
+            "        await sleep(1200);",
+            "        continue;",
+            "      }",
+            "      /* 没有直接删除按钮时，尝试「去编辑」路径：点进编辑器 → 删除 → 关闭编辑器。",
+            "         抖店白底图驳回态有时只给「去编辑」链接，不给直接删除按钮。 */",
+            "      const goEdit = [...sec.querySelectorAll('a,button,span')].filter(vis).find(e => {",
+            "        const t = (e.textContent || '').trim();",
+            "        return /^去编辑$/.test(t);",
+            "      });",
+            "      if (!goEdit) break;",
+            "      press(goEdit);",
+            "      await sleep(2500);",
+            "      /* 在编辑器里找删除/移除按钮 */ const editorDel = [",
+            "        ...document.querySelectorAll('button,span,i,div')",
+            "      ]",
+            "        .filter(vis)",
+            "        .find(e => {",
+            "          const t = (e.textContent || '').trim();",
+            "          const cn =",
+            "            String(e.className || '') +",
+            "            String((e.getAttribute && e.getAttribute('aria-label')) || '');",
+            "          return /^(删除|移除)$/.test(t) || /delete|remove/i.test(cn);",
+            "        });",
+            "      if (editorDel) {",
+            "        press(editorDel);",
+            "        await sleep(1200);",
+            "      }",
+            "      /* 关闭编辑器 */ await closeEditor();",
+            "      await sleep(800);",
+            "    }",
+            "    return !rejected();",
+            "  };",
+            "  let out;",
+            "  try {",
+            "    out = await attempt();",
+            "  } catch (e) {",
+            "    out = { fixed: false, error: String(e).slice(0, 120) };",
+            "  }",
+            "  out.editorClosed = await closeEditor();",
+            "  if (rejected()) {",
+            "    const section = wbSec();",
+            "    const optional = section && /上传后在频道|选填|可选/.test(section.innerText || '');",
+            "    const rm = optional ? await removeImage() : '无法确认白底图可省略，请更换合格图片';",
+            "    out.removedBlockingImage = rm === true;",
+            "    if (typeof rm === 'string') out.removeFailReason = rm;",
+            "  }",
+            "  out.blockingErrorLeft = rejected();",
+            "  /* 失败时把现场一起带回来。这一步失败后页面会被清理，靠肉眼复现要重跑一整轮（~72s）    且未必复现；而「删图失败」有好几种成因（找不到区块 / 找不到删除控件 / 删了但错误还在），    只回一个 false 分不出是哪种。 */ if (",
+            "    out.blockingErrorLeft",
+            "  ) {",
+            "    const sec = wbSec();",
+            "    /* 悬停后再清点：删除控件可能是 JS 在 hover 时才挂上去的（上一版是在 removeImage    跑完之后才数的，那时 hover 早已消失，自然什么都看不到）。 */ if (",
+            "      sec",
+            "    ) {",
+            "      const im = [...sec.querySelectorAll('img')].filter(vis)[0];",
+            "      if (im) {",
+            "        /* 悬停出删除控件。换成引擎原语：祖先链补发由它做（而且走到根，手抄版停在 sec.parentElement，",
+            "           触发器挂得更外层就收不到），并补上手抄版漏掉的 pointerover / mousemove。 */",
+            "        bcpDom.hover(im);",
+            "        await sleep(600);",
+            "      }",
+            "    }",
+            "    const t = document.body.innerText || '';",
+            "    const m = t.match(/[^\\n]{0,40}(识别未通过|非白底)[^\\n]{0,40}/);",
+            "    out.diag = {",
+            "      secFound: !!sec,",
+            "      pageError: m ? m[0].trim() : null,",
+            "      imgsInSec: sec ? [...sec.querySelectorAll('img')].filter(vis).length : 0,",
+            "      /* 清点区块内所有元素，不预设删除控件长什么样。上一版只看 button/span/i/div 的    className，漏了 svg 和 a；而 SVG 的 className 是 SVGAnimatedString，String() 出来是    「[object SVGAnimatedString]」，任何正则都匹配不上。 */ inventory:",
+            "        sec",
+            "          ? [...sec.querySelectorAll('*')]",
+            "              .filter(vis)",
+            "              .map(e => {",
+            "                const cn = e.className;",
+            "                const cls = typeof cn === 'string' ? cn : (cn && cn.baseVal) || '';",
+            "                return {",
+            "                  g: e.tagName,",
+            "                  c: String(cls).slice(0, 44),",
+            "                  t: (e.textContent || '').trim().slice(0, 10),",
+            "                  a:",
+            "                    (e.getAttribute && (e.getAttribute('aria-label') || e.getAttribute('title'))) ||",
+            "                    ''",
+            "                };",
+            "              })",
+            "              .filter(",
+            "                x =>",
+            "                  x.g === 'SVG' ||",
+            "                  x.g === 'BUTTON' ||",
+            "                  x.g === 'A' ||",
+            "                  /del|remove|close|action|mask|hover/i.test(x.c) ||",
+            "                  /删除|移除|重新|更换/.test(x.t) ||",
+            "                  x.a",
+            "              )",
+            "              .slice(0, 20)",
+            "          : [],",
+            "      secText: sec ? (sec.innerText || '').replace(/\\s+/g, ' ').slice(0, 200) : null",
+            "    };",
+            "  }",
+            "  out.ok = out.editorClosed && !out.blockingErrorLeft;",
+            "  if (!out.ok) {",
+            "    const reason = out.blockingErrorLeft ? '白底图识别未通过，请更换合格白底图' : '白底图编辑器未关闭';",
+            "    throw new Error(reason + '；' + JSON.stringify(out));",
+            "  }",
+            "  return out;",
+            "})()"
+          ]
+        }
+      }
+    },
+    {
+      "goal": "导入商品 SKU 表并等待规格区出现。文件错误立即停止；系统识别失败且重新上传控件可用时最多重试两次。超时保留按钮、文件输入、弹窗与页面错误信息。",
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "(() => { const t = document.body.innerText || ''; return !/识别错误|系统处理异常|文件格式错误|文件解析失败|上传失败/.test(t) && /与规格值相匹配|规格选项|批量上传规格图/.test(t); })()"
+          ]
+        }
+      },
+      "onFail": "escalate",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "createReady",
+          "noEditorModal"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(async () => {",
+            "  const p = {{product}};",
+            "  const skus = (p || {}).skus || [];",
+            "  if (!skus.length) throw new Error('SKU 导入失败：canonical.skus 为空');",
+            "  const dims = (skus[0].specs || []).map(s => s.name);",
+            "  if (!dims.length) throw new Error('SKU 导入失败：skus[0].specs 缺规格维度');",
+            "  /* CSV 表头必须用【这个类目自己的】销售属性名，否则抖店会另建一个自定义维度、绑不上预置属性——而规格图正是挂在预置属性上的。名字逐类目不同：实测属性表里「颜色分类」278 个类目、「颜色」270 个、「尺码」51 个、「尺码大小」只有 4 个。所以原来那张写死的词表(颜色→颜色分类 / 尺码→尺码大小)在多数类目上是错的。改成从入参 categoryProps 解析：精确同名优先；否则取【以该维度名开头】的最短候选(颜色→颜色分类、尺码→尺码大小 都能命中，而「商品尺寸」「包装尺寸」不以「尺寸」开头、不会被误配)；都没有就原样透传，让抖店建自定义维度。 */ const PROPS =",
+            "    (({{product}}.category || {}).categoryProps) || [];",
+            "  const NAMES = PROPS.map(p => p && p.name).filter(Boolean);",
+            "  const propName = d => {",
+            "    if (NAMES.indexOf(d) >= 0) return d;",
+            "    const c = NAMES.filter(n => n !== d && n.indexOf(d) === 0).sort((a, b) => a.length - b.length);",
+            "    return c[0] || d;",
+            "  };",
+            "  const mapped = dims.map(propName);",
+            "  const head = mapped.concat(['售卖价', '库存']);",
+            "  /* 抖店规格 CSV 拒绝值开头的全角方括号营销前缀。2026-09-13 在真实「潮玩盲盒」表单复现：",
+            "     \"测试款\" 可上传，而单行 \"【宝藏系列】噜噜盲盒-想你\" 立即显示「文件上传失败」。",
+            "     只剥离最前面一段【...】；规格主体、价格、库存和其它字符保持原样。 */",
+            "  const csvSpecValue = value => String(value === undefined || value === null ? '' : value)",
+            "    .replace(/^[【\\[][^】\\]]+[】\\]]\\s*/, '')",
+            "    .trim();",
+            "  const rows = skus.map(s => {",
+            "    const m = Object.fromEntries((s.specs || []).map(x => [x.name, x.value]));",
+            "    return dims.map(d => csvSpecValue(m[d])).concat([s.price, s.stock]);",
+            "  });",
+            "  /* CSV 的值必须转义。规格值是卖家手填的任意字符串，里面有一个逗号(实测 1688 常见的",
+            "     「6只装,加厚」这种写法)就会把这一行多切出一列 —— 抖店按【列位】读，于是价格列读到",
+            "     半截规格值、库存列读到价格，识别出来的规格与价格全错，而且这条路上没有任何东西会",
+            "     报错：抖店照单全收，人看到的是一个规格离谱的商品。上游也兜不住 ——",
+            "     build_canonical 的清洗链(_TEXT_RULES)当前只有一条去空格规则，逗号原样保留。",
+            "     按 RFC4180 转义：含 , 或 \" 或换行的值整体加引号，值里的 \" 翻倍。 */",
+            "  const q = v => {",
+            "    const s = String(v === undefined || v === null ? '' : v);",
+            "    return /[\",\\n\\r]/.test(s) ? '\"' + s.replace(/\"/g, '\"\"') + '\"' : s;",
+            "  };",
+            "  const csv = '\\uFEFF' + [head, ...rows].map(r => r.map(q).join(',')).join('\\n') + '\\n';",
+            "  const vis = bcpDom.visible;",
+            "  const control = name => [...document.querySelectorAll('button,span,div')]",
+            "    .filter(e => e.children.length === 0 && vis(e))",
+            "    .find(e => (e.textContent || '').trim() === name);",
+            "  const enabled = el => {",
+            "    const b = el && (el.closest('button') || el);",
+            "    return !!b && !b.disabled && b.getAttribute('aria-disabled') !== 'true';",
+            "  };",
+            "  const input = () => document.querySelector('input[type=file][accept*=\".csv\"]');",
+            "  const state = () => {",
+            "    const text = document.body.innerText || '';",
+            "    const button = control('智能识别');",
+            "    const pageError = (text.match(/[^\\n]{0,50}(?:文件格式错误|文件解析失败|文件上传失败|上传失败|格式不支持|不支持.{0,10}格式|识别错误|系统处理异常)[^\\n]{0,100}/) || [])[0] || '';",
+            "    return {",
+            "      complete: /与规格值相匹配|规格选项|批量上传规格图/.test(text),",
+            "      button: !button ? 'missing' : enabled(button) ? 'enabled' : 'disabled',",
+            "      pageError,",
+            "      fatalError: /文件格式错误|文件解析失败|格式不支持|不支持.{0,10}格式/.test(pageError),",
+            "      inputPresent: !!input(),",
+            "      fileCount: input()?.files?.length ?? 0,",
+            "      visibility: document.visibilityState,",
+            "      focused: document.hasFocus(),",
+            "      dialogs: [...document.querySelectorAll('[role=dialog],[class*=modal],[class*=drawer]')]",
+            "        .filter(vis).map(e => (e.innerText || '').slice(0, 160)).slice(0, 3),",
+            "    };",
+            "  };",
+            "  const fail = (reason, snapshot) => {",
+            "    throw new Error('SKU 导入失败：' + reason + '；' + JSON.stringify(snapshot));",
+            "  };",
+            "  const click = bcpDom.press;",
+            "  const upload = () => {",
+            "    const el = input();",
+            "    if (!el) fail('没有找到 CSV 文件输入控件', state());",
+            "    /* 原生 setter 绕开 React 的 files 守卫 + input/change 都发，都在引擎原语里（check:dom V-set 组）。 */",
+            "    bcpDom.setFiles(el, [new File([csv], 'sku-import.csv', { type: 'text/csv' })]);",
+            "  };",
+            "  let uploaded = false, clicked = false, retries = 0;",
+            "  while (Date.now() < bcpDeadline) {",
+            "    const current = state();",
+            "    if (current.pageError) {",
+            "      /* 只有文件本身的问题才该立即停止 —— 重试一百次也还是同一个文件。而「文件上传失败，请重试」是上传请求没走通：页面自己写着「请重试」，历史上 23 次跑到这一步 8 成 15 败、失败全部 717-825ms(= 一个轮询周期就崩)、同一份 CSV 时成时败，正是传输抖动的形状。此前这一类被归进「文件错误」直接判死，是把可恢复的抖动当成了死信。 */",
+            "      if (current.fatalError || retries >= 2)",
+            "        fail(current.pageError, current);",
+            "      await bcpWait.sleep(Math.min(8000, Math.max(0, bcpDeadline - Date.now())));",
+            "      if (Date.now() >= bcpDeadline) break;",
+            "      const latest = state();",
+            "      if (!latest.pageError) continue;",
+            "      if (latest.fatalError) fail(latest.pageError, latest);",
+            "      const available = control('重新上传');",
+            "      /* 有「重新上传」就走它(它会重挂载控件，旧 input 不再属于当前表单)；没有它时原文件输入还在，直接重投一次即可 —— 上传请求没走通的那一类恰恰不会渲染出重新上传控件。 */",
+            "      if (enabled(available)) {",
+            "        click(available);",
+            "        while (Date.now() < bcpDeadline && !input())",
+            "          await bcpWait.sleep(Math.min(400, Math.max(0, bcpDeadline - Date.now())));",
+            "        if (Date.now() >= bcpDeadline) break;",
+            "      } else if (!latest.inputPresent) {",
+            "        fail(latest.pageError, latest);",
+            "      }",
+            "      retries++;",
+            "      upload();",
+            "      uploaded = true;",
+            "      clicked = false;",
+            "      continue;",
+            "    }",
+            "    if (current.complete) return { ok: true, rows: rows.length, retries };",
+            "    if (!uploaded) {",
+            "      // 已有文件或可用识别按钮意味着导入已开始，恢复执行只观察已有任务。",
+            "      if (!current.fileCount && current.button !== 'enabled') upload();",
+            "      uploaded = true;",
+            "      continue;",
+            "    }",
+            "    if (!clicked && current.button === 'enabled') {",
+            "      click(control('智能识别'));",
+            "      clicked = true;",
+            "    }",
+            "    await bcpWait.sleep(Math.min(700, Math.max(0, bcpDeadline - Date.now())));",
+            "  }",
+            "  fail('等待识别结果超时', { ...state(), retries, clicked });",
+            "})()"
+          ]
+        }
+      }
+    },
+    {
+      "goal": "触发智能识别（幂等：按钮点过即消失）。识别要跑约 10 秒，这个等待交给下一步的 specSectionReady 门，不在本步轮询",
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "(() => {",
+            "  const vis = bcpDom.visible;",
+            "  const leaves = [...document.querySelectorAll('button,span,div')].filter(",
+            "    e => e.children.length === 0 && vis(e)",
+            "  );",
+            "  const btnGone = !leaves.some(e => (e.textContent || '').trim() === '智能识别');",
+            "  const specShown = /批量上传规格图|与规格值相匹配/.test(document.body.innerText || '');",
+            "  return btnGone || specShown;",
+            "})()"
+          ]
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 3,
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "createReady",
+          "noEditorModal"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(async () => {",
+            "  const DL = bcpDeadline;",
+            "  const sleep = ms => new Promise(r => setTimeout(r, Math.max(0, Math.min(ms, DL - Date.now()))));",
+            "  const vis = bcpDom.visible;",
+            "  const press = bcpDom.press;",
+            "  const btn = () =>",
+            "    [...document.querySelectorAll('button,span,div')]",
+            "      .filter(e => e.children.length === 0 && vis(e))",
+            "      .find(e => (e.textContent || '').trim() === '智能识别');",
+            "  const started = () => /批量上传规格图|与规格值相匹配/.test(document.body.innerText || '');",
+            "  let clicks = 0;",
+            "  /* 幂等：按钮点过即消失，所以只在它还在时点；识别要跑约 10 秒，这一步自己等到 「按钮消失或规格区块出现」为止，不把不确定性甩给下一步的门。 */ while (",
+            "    Date.now() < DL",
+            "  ) {",
+            "    if (!btn() || started())",
+            "      return { ok: true, clicks, note: clicks ? '已触发并等到识别开始' : '进来时已触发过' };",
+            "    const el = btn();",
+            "    if (el) {",
+            "      el.scrollIntoView({ block: 'center' });",
+            "      await sleep(300);",
+            "      press(el);",
+            "      clicks++;",
+            "    }",
+            "    await sleep(1500);",
+            "  }",
+            "  return {",
+            "    ok: false,",
+            "    reason: '点了但按钮没消失、规格区块也没出现',",
+            "    clicks,",
+            "    btnStillThere: !!btn()",
+            "  };",
+            "})()"
+          ]
+        }
+      }
+    },
+    {
+      "goal": "上传规格图：取 canonical 第一组带 imageUrl 的规格值，由后端下载真实文件后一次塞进抖店「批量上传规格图」控件。规格图是买家选规格时看到的那排缩略图，缺了转化会掉。不能在抖店页面内 fetch 外部 CDN：跨域会被浏览器拦截；batchUpload 保证同一次 input/change 投递整组文件，避免控件重渲染丢掉前几张。",
+      "after": { "all": ["specPicDrawerOpen"] },
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "(() => {",
+            "  const p = {{product}};",
+            "  const hasSpecImages = ((p || {}).specs || []).some(s => (s.values || []).some(v => v.imageUrl));",
+            "  return !hasSpecImages || /与规格值相匹配/.test(document.body.innerText || '');",
+            "})()"
+          ]
+        }
+      },
+      "optional": true,
+      "onFail": "retry",
+      "maxRetries": 2,
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "specSectionReady",
+          "noEditorModal"
+        ]
+      },
+      "action": {
+        "method": "browser.upload",
+        "params": {
+          "name": "批量上传规格图",
+          "attachmentsFrom": "{{product.specs.0.values}}",
+          "batchUpload": true
+        }
+      }
+    },
+    {
+      "goal": "把每张规格图匹配到对应规格值再确认。抽屉里未匹配的行会「默认生成新规格」——那等于凭空造出重复规格值，所以必须全部匹配上才点确定；本步幂等，行数多时靠 onFail:retry 续跑。配不上规格值的行要删掉：留着抽屉会「默认生成新规格」（凭空造值），硬凑则图文错配。来源侧图少于规格值是常态（实测 9 张图 / 12 个颜色值）",
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "(() => {",
+            "  const vis = bcpDom.visible;",
+            "  const rows = [...document.querySelectorAll('[class*=drawer] tr[class*=table-row]')].filter(vis);",
+            "  return rows.length === 0 || rows.every(r => !!r.querySelector('[class*=select-selection-item]'));",
+            "})()"
+          ]
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 8,
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "specPicDrawerOpen"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(async () => {",
+            "  const DL = bcpDeadline;",
+            "  const vis = bcpDom.visible;",
+            "  const K = /[^\\u4e00-\\u9fa5A-Za-z0-9]/g;",
+            "  const norm = s => String(s || '').replace(K, '');",
+            "  const FW = s =>",
+            "    s.replace(/[\\uFF01-\\uFF5E]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xfee0));",
+            "  const canon = s =>",
+            "    FW(String(s || ''))",
+            "      .toLowerCase()",
+            "      .replace(/[^\\u4e00-\\u9fa5a-z0-9]/g, '');",
+            "  const bigrams = s => {",
+            "    const o = new Set();",
+            "    if (s.length < 2) {",
+            "      if (s) o.add(s);",
+            "      return o;",
+            "    }",
+            "    for (let i = 0; i < s.length - 1; i++) o.add(s.slice(i, i + 2));",
+            "    return o;",
+            "  };",
+            "  const dice = (a, b) => {",
+            "    const A = bigrams(a),",
+            "      B = bigrams(b);",
+            "    if (!A.size || !B.size) return 0;",
+            "    let h = 0;",
+            "    for (const g of A) if (B.has(g)) h++;",
+            "    return (2 * h) / (A.size + B.size);",
+            "  };",
+            "  const assign = (wants, cands) => {",
+            "    const W = wants.map(canon),",
+            "      C = cands.map(o => canon(o.textContent || ''));",
+            "    const pairs = [];",
+            "    for (let i = 0; i < W.length; i++)",
+            "      for (let j = 0; j < C.length; j++)",
+            "        pairs.push({ i, j, s: C[j] && C[j] === W[i] ? 1 : dice(W[i], C[j]) });",
+            "    pairs.sort((a, b) => b.s - a.s);",
+            "    const uI = new Set(),",
+            "      uJ = new Set(),",
+            "      out = {};",
+            "    for (let k = 0; k < pairs.length; k++) {",
+            "      const q = pairs[k];",
+            "      if (q.s <= 0) break;",
+            "      if (uI.has(q.i) || uJ.has(q.j)) continue;",
+            "      const tie = pairs",
+            "        .slice(k + 1)",
+            "        .find(r => r.s === q.s && !uI.has(r.i) && !uJ.has(r.j) && (r.i === q.i || r.j === q.j));",
+            "      if (tie)",
+            "        return {",
+            "          ok: false,",
+            "          why: '平局无法分辨（' + q.s.toFixed(2) + ' 同时出现在多组），整体退化不配规格图',",
+            "          tie: [",
+            "            { want: wants[q.i], opt: C[q.j] },",
+            "            { want: wants[tie.i], opt: C[tie.j] }",
+            "          ]",
+            "        };",
+            "      uI.add(q.i);",
+            "      uJ.add(q.j);",
+            "      out[q.i] = { opt: cands[q.j], score: +q.s.toFixed(2), txt: C[q.j] };",
+            "    }",
+            "    return { ok: true, map: out };",
+            "  };",
+            "  const sleep = ms => new Promise(r => setTimeout(r, Math.max(0, Math.min(ms, DL - Date.now()))));",
+            "  const press = bcpDom.press;",
+            "  const exact = t =>",
+            "    [...document.querySelectorAll('button,span,div,a')]",
+            "      .filter(e => e.children.length === 0 && vis(e))",
+            "      .find(e => (e.textContent || '').trim() === t);",
+            "  const pickSpec = p =>",
+            "    ((p || {}).specs || []).find(s => (s.values || []).some(v => v.imageUrl)) || null;",
+            "  const p = {{product}};",
+            "  const spec = pickSpec(p);",
+            "  if (!spec) return { ok: true, skipped: '没有规格图需要匹配' };",
+            "  /* 必须与 SKU CSV 的值规范化完全一致；否则 CSV 去掉营销前缀后，规格图匹配仍拿",
+            "     原始 \"【系列】值\" 对比抖店的 \"值\"，会误判成不同规格。 */",
+            "  const csvSpecValue = value => String(value === undefined || value === null ? '' : value)",
+            "    .replace(/^[【\\[][^】\\]]+[】\\]]\\s*/, '')",
+            "    .trim();",
+            "  const order = spec.values.filter(v => v.imageUrl).map(v => csvSpecValue(v.value));",
+            "  /* 判据必须认【抖店当前用的那个裁剪 UI】，不是某一版的提示文案。2026-09-07 实测：",
+            "     点「确定」之后抖店弹的是 AI 素材工具（图片调整 / 生成图比例 1:1），页面上",
+            "     「比例不符 / 请裁剪 / 尺寸不符」一个都没有 —— 老文案判据当场为假，循环直接",
+            "     break、本步报成功，编辑器却留在原地。它是全屏 drawer + 滚动锁，于是十步之外",
+            "     的 noEditorModal 门把整条 run 拦死（run f3c9434c 就停在这）。谁开的谁关。 */",
+            "  const editorOpen = () =>",
+            "    [...document.querySelectorAll('[class*=modal],[role=dialog],[class*=drawer]')]",
+            "      .filter(vis)",
+            "      .some(d => /AI素材工具|AI智能做主图|一键抠图|裁剪旋转/.test(d.innerText || ''));",
+            "  const needsCrop = () =>",
+            "    editorOpen() ||",
+            "    /比例不符|请裁剪|尺寸不符|不符合.{0,4}比例/.test(document.body.innerText || '');",
+            "  /* 关窗沿用第 19 步那套（已被它自己的 verify 验证有效）：按钮文案/类名认不到就退",
+            "     Escape，最多 5 轮，返回「真的关掉了吗」而不是「点过了吗」。 */",
+            "  /* 关闭控件只在【编辑器自己】里面找。全文档找会关错抽屉：规格图抽屉自带",
+            "     ecom-g-drawer-close，2026-09-07 实测它先被关掉，编辑器反而留着 —— 而抽屉一没，",
+            "     第 23 步会返回「抽屉已关闭，无需匹配」，21 张规格图静默地一张都没配上。 */",
+            "  const editorEl = () =>",
+            "    [...document.querySelectorAll('[class*=modal],[role=dialog],[class*=drawer]')]",
+            "      .filter(vis)",
+            "      .find(d => /AI素材工具|AI智能做主图|一键抠图|裁剪旋转/.test(d.innerText || ''));",
+            "  const closeEditor = async () => {",
+            "    for (let k = 0; k < 5 && editorOpen(); k++) {",
+            "      const ed = editorEl();",
+            "      const x = ed && [...ed.querySelectorAll('button,span,i,div')].filter(vis).find(e => {",
+            "        const t = (e.textContent || '').trim();",
+            "        const c = String(e.className || '') + String((e.getAttribute && e.getAttribute('aria-label')) || '');",
+            "        return /^(取消|关闭)$/.test(t) || /close/i.test(c);",
+            "      });",
+            "      if (x) {",
+            "        press(x);",
+            "      } else document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));",
+            "      await sleep(900);",
+            "    }",
+            "    return !editorOpen();",
+            "  };",
+            "  /* 开工前先收一次编辑器。第 22 步收尾时它确实是关着的（那一步自报 editorClosed:true），",
+            "     但抖店会在两步之间【异步再弹一次】——2026-09-07 run 2c284233：第 22 步成功，",
+            "     第 23 步的 noEditorModal 门却发现它开着。上游没有哪一步能保证它「保持关闭」。",
+            "     所以这一步自己开工前收一次；对应地，它的 gate 不再写 noEditorModal ——",
+            "     一道本步自己能满足的前置条件，写进门里只会把自己挡在外面。 */",
+            "  if (editorOpen()) await closeEditor();",
+            "  const findDrawer = () =>",
+            "    [...document.querySelectorAll('[class*=drawer]')]",
+            "      .filter(vis)",
+            "      .find(d => /与规格值相匹配/.test(d.innerText || ''));",
+            "  let drawer = findDrawer();",
+            "  /* 「还没渲染完」和「已经关了」是两种状态，靠文案是否还在区分，只对前者轮询。 */ while (",
+            "    !drawer &&",
+            "    /与规格值相匹配/.test(document.body.innerText || '') &&",
+            "    Date.now() < DL",
+            "  ) {",
+            "    await sleep(400);",
+            "    drawer = findDrawer();",
+            "  }",
+            "  if (!drawer) return { ok: true, skipped: '抽屉已关闭，无需匹配' };",
+            "  const rowsOf = () =>",
+            "    [...drawer.querySelectorAll('tr[class*=table-row]')].filter(",
+            "      r => r.querySelector('img') && r.querySelector('[class*=select-selector]')",
+            "    );",
+            "  const matched = [],",
+            "    failed = [];",
+            "  const rows = rowsOf();",
+            "  /* 只认【这一行自己】的下拉面板。抖店(rc-select)把面板 portal 到 body，关闭时只加",
+            "     slide-up-leave 类并挪到离屏(实测 y≈-9700)，DOM 节点连同选项一起留着。原来这里",
+            "     两处都用 document.querySelectorAll 全文档取选项，于是同一个错误坏了两件事：",
+            "     等待条件被废面板的选项瞬间满足(根本没等自己这行打开)，返回值又把几个面板的选项",
+            "     混在一起(实测 4 个面板 168 个选项)，点击落到废面板上。21 行 0 匹配就是这么来的。",
+            "     行内 <input aria-owns=rc_select_N_list> 是到面板的精确关联；没有 aria 时退到",
+            "     「不带 leave 类的那个面板」，绝不退回全文档取。 */",
+            "  const openOpts = async row => {",
+            "    row.scrollIntoView({ block: 'center' });",
+            "    await sleep(60);",
+            "    press(row.querySelector('[class*=select-selector]'));",
+            "    /* aria-owns 必须【每次调用时再读】，不能在 press 之后读一次就存起来：rc-select",
+            "       是下拉打开的那一刻才把 aria-owns 挂上去的，press 刚返回时还没有。存一次的写法",
+            "       实测让 listId 恒为 null（2026-09-07 run d22ce1c8：21 行 matched:[] failed:[]，",
+            "       连一次尝试都没发生，比不改还差）。 */",
+            "    const panel = () => {",
+            "      const input = row.querySelector('input[aria-owns],input[aria-controls]');",
+            "      const listId = input && (input.getAttribute('aria-owns') || input.getAttribute('aria-controls'));",
+            "      /* 注意是【含有】这个 id 的面板，不是那个 id 元素本身：rc-select 把",
+            "         id=rc_select_N_list 挂在面板内的一个空容器上，选项是它的兄弟节点",
+            "         (实测该元素 0 个选项、外层面板 42 个)。 */",
+            "      const anchor = listId ? document.getElementById(listId) : null;",
+            "      const byAria = anchor && (anchor.closest('[class*=select-dropdown]') || anchor);",
+            "      if (byAria && !/slide-up-leave/.test(byAria.className || '')) return byAria;",
+            "      /* 退路：没有 aria 关联时认「唯一一个不带 leave 类的可见面板」。关闭中的面板会带",
+            "         slide-up-leave 并被挪到离屏(实测 y≈-9700)，全文档取选项会把它们混进来，",
+            "         点击于是落在废面板上 —— 那正是 21 行 0 匹配的原始病因。 */",
+            "      return [...document.querySelectorAll('[class*=select-dropdown]')].find(",
+            "        d => vis(d) && !/slide-up-leave/.test(d.className)",
+            "      );",
+            "    };",
+            "    const mine = () => {",
+            "      const el = panel();",
+            "      return el ? [...el.querySelectorAll('[class*=select-item-option]')].filter(vis) : [];",
+            "    };",
+            "    /* 先查再睡：原来每行都先无条件 sleep(100) 才第一次检查，21 行就是白付 2.1 秒。",
+            "       间隔也从 100 减到 50 —— 面板通常 200-400ms 就渲染好，粗粒度轮询等于按上限付钱。",
+            "       本步的真实成本是 21 行 × 两遍，48 秒预算贴着线跑（run b50a7db3 第一遍就用光了，",
+            "       第二遍全部落空 → 21 行 0 匹配），省下来的每一拍都直接换成完成率。 */",
+            "    const t = Date.now() + 900;",
+            "    let opts = mine();",
+            "    while (!opts.length && Date.now() < t && Date.now() < DL) {",
+            "      await sleep(50);",
+            "      opts = mine();",
+            "    }",
+            "    return opts;",
+            "  };",
+            "  const pending = [];",
+            "  const seenTexts = new Map();",
+            "  for (let i = 0; i < rows.length; i++) {",
+            "    if (Date.now() > DL) break;",
+            "    const row = rows[i];",
+            "    if (row.querySelector('[class*=select-selection-item]')) continue;",
+            "    const want = order[i];",
+            "    if (want === undefined) {",
+            "      failed.push({ i, why: '该行没有对应的规格值' });",
+            "      continue;",
+            "    }",
+            "    const opts = await openOpts(row);",
+            "    for (const o of opts) {",
+            "      const t = (o.textContent || '').trim();",
+            "      if (t && !seenTexts.has(t)) seenTexts.set(t, t);",
+            "    }",
+            "    pending.push({ i, row, want, optCount: opts.length });",
+            "    press(document.body);",
+            "    await sleep(120);",
+            "  }",
+            "  const allTexts = [...seenTexts.keys()];",
+            "  const plan = assign(",
+            "    pending.map(p => p.want),",
+            "    allTexts.map(t => ({ textContent: t }))",
+            "  );",
+            "  if (!plan.ok) {",
+            "    for (const p of pending)",
+            "      failed.push({ i: p.i, value: p.want, matchWhy: plan.why, tie: plan.tie });",
+            "    press(document.body);",
+            "    await sleep(150);",
+            "  } else {",
+            "    for (let k = 0; k < pending.length; k++) {",
+            "      if (Date.now() > DL) break;",
+            "      const p = pending[k];",
+            "      const got = plan.map[k];",
+            "      if (!got) {",
+            "        failed.push({",
+            "          i: p.i,",
+            "          value: p.want,",
+            "          matchWhy: '贪婪指派没有给它分到候选',",
+            "          optsCount: p.optCount,",
+            "          候选池: allTexts.slice(0, 8)",
+            "        });",
+            "        continue;",
+            "      }",
+            "      const opts = await openOpts(p.row);",
+            "      const hit = opts.find(",
+            "        o =>",
+            "          (o.textContent || '').trim() === got.txtRaw ||",
+            "          (o.textContent || '').trim() === got.opt.textContent",
+            "      );",
+            "      if (!hit) {",
+            "        failed.push({",
+            "          i: p.i,",
+            "          value: p.want,",
+            "          matchWhy: '指派到「' + got.opt.textContent + '」但重开下拉时它不在了',",
+            "          optsCount: opts.length",
+            "        });",
+            "        press(document.body);",
+            "        await sleep(120);",
+            "        continue;",
+            "      }",
+            "      press(hit);",
+            "      await sleep(220);",
+            "      press(document.body);",
+            "      await sleep(180);",
+            "      matched.push({ i: p.i, value: p.want, score: got.score, 选中: got.opt.textContent });",
+            "    }",
+            "  }",
+            "  let leftovers = rowsOf().filter(r => !r.querySelector('[class*=select-selection-item]'));",
+            "  const dropped = [];",
+            "  for (const row of leftovers) {",
+            "    if (Date.now() > DL) break;",
+            "    row.scrollIntoView({ block: 'center' });",
+            "    await sleep(150);",
+            "    const del = [...row.querySelectorAll('button,span,div,a')]",
+            "      .filter(e => e.children.length === 0 && vis(e))",
+            "      .find(e => /^(删除|移除)$/.test((e.textContent || '').trim()));",
+            "    if (!del) break;",
+            "    press(del);",
+            "    await sleep(900);",
+            "    dropped.push(true);",
+            "  }",
+            "  const unmatched = rowsOf().filter(r => !r.querySelector('[class*=select-selection-item]')).length;",
+            "  if (unmatched > 0)",
+            "    return {",
+            "      ok: false,",
+            "      reason: '有配不上规格值的行且删不掉，先不点确定（留着会默认生成新规格值）',",
+            "      unmatched,",
+            "      matched,",
+            "      failed,",
+            "      droppedRows: dropped.length",
+            "    };",
+            "  /* 抖店要求规格图 1:1。来源图里常混着非方图（实测泳衣 5 张里「粉红色」是 1340x1785）， 确定时会弹裁剪面板，不处理就卡住、确定不生效。这里动态判断：有面板就按 1:1 应用， 没有就直接确定。面板形态沿用主图裁剪那套（裁剪旋转 / 1:1 / 应用）。 */ const handleCrop =",
+            "    async () => {",
+            "      let handled = 0;",
+            "      /* 每张规格图最多需要裁一次，所以上限跟着图数走，不是拍脑袋的 3。 真正的兜底是 DL（本步时间预算）——MAX 只防「面板永远不消失」时的死循环。 之前写死 3，20 张规格图的商品会在第 4 张就停手。 */ const MAX =",
+            "        Math.max(3, order.length);",
+            "      while (handled < MAX && Date.now() < DL) {",
+            "        if (!needsCrop()) break;",
+            "        const r = exact('1:1');",
+            "        if (!r) return { handled, stuck: '提示要裁剪，但没有 1:1 选项' };",
+            "        press(r);",
+            "        await sleep(200);",
+            "        const ap = exact('应用') || exact('确定');",
+            "        if (!ap) return { handled, stuck: '提示要裁剪，但没有应用按钮' };",
+            "        press(ap);",
+            "        await sleep(800);",
+            "        handled++;",
+            "        /* 谁开的谁关：应用之后立刻收起编辑器，否则 needsCrop 恒真、循环空转到 MAX，",
+            "           而且它会一路遮到后面每一步。 */",
+            "        if (editorOpen()) await closeEditor();",
+            "      }",
+            "      return { handled, capped: handled >= MAX };",
+            "    };",
+            "  let crop = await handleCrop();",
+            "  const okBtn = () =>",
+            "    [...drawer.querySelectorAll('button')]",
+            "      .filter(vis)",
+            "      .find(x => (x.textContent || '').trim() === '确定');",
+            "  let btn = okBtn();",
+            "  if (!btn) return { ok: false, reason: '全部匹配完但没找到确定按钮', matched, crop };",
+            "  press(btn);",
+            "  await sleep(900);",
+            "  /* 确定后仍可能弹裁剪面板（抖店把比例校验放在提交时），再处理一轮并重按。 */ const crop2 =",
+            "    await handleCrop();",
+            "  if (crop2.handled > 0) {",
+            "    const again = okBtn();",
+            "    if (again) {",
+            "      press(again);",
+            "      await sleep(800);",
+            "    }",
+            "  }",
+            "  const left = rowsOf().filter(r => !r.querySelector('[class*=select-selection-item]')).length;",
+            "  /* 兜底：上面每一轮都收过窗，但抖店也可能在最后一次「确定」之后才弹。它是全屏",
+            "     drawer + 滚动锁，泄漏出去会让后面每一步都点在遮罩上 —— 与其让十步之外的门",
+            "     报「详情图上传失败」，不如在这里如实收掉并把结果写进产出。",
+            "     放在 cropStillNeeded 之前：那条判据现在也认编辑器，先收窗才问得出真话。 */",
+            "  const editorClosed = editorOpen() ? await closeEditor() : true;",
+            "  /* 裁剪没做完却报成功 = 静默截断：unmatchedLeft 只数「没配上规格值的行」，    裁剪未完成不在其中，于是商品带着不合规的规格图进入下一步，直到保存才炸。    这里再问一次页面「还要不要裁」，要就如实判失败。 */ const cropStillNeeded =",
+            "    editorOpen() ||",
+            "    /比例不符|请裁剪|尺寸不符|不符合.{0,4}比例/.test(document.body.innerText || '');",
+            "  return {",
+            "    ok: editorClosed && !cropStillNeeded && left === 0,",
+            "    spec: spec.name,",
+            "    matched,",
+            "    failed,",
+            "    cropBefore: crop,",
+            "    cropAfter: crop2,",
+            "    unmatchedLeft: left,",
+            "    cropStillNeeded,",
+            "    editorClosed,",
+            "    reason: !editorClosed",
+            "      ? 'AI 素材工具关不掉，后面每一步都会点在遮罩上'",
+            "      : cropStillNeeded",
+            "      ? '页面仍要求裁剪规格图，本步已用尽预算'",
+            "      : left > 0",
+            "        ? '仍有未匹配的规格图行'",
+            "        : undefined",
+            "  };",
+            "})()"
+          ]
+        }
+      }
+    },
+    {
+      "goal": "按 doudianPropertyId × categoryProps 填类目属性：join 出抖店标签名与控件类型，按类型分别填。换品类属性表跟着变，本步不用改。multi_select 的数量上限从占位符「最多选N项」读出来，不写死——不同属性上限不同；measure 实测是普通文本框，取数值部分（来源值形如「220（V）」）。本步会被重试整步重跑，所以必须幂等：已有值的字段直接跳过——multi_select 里再点一次已选项会【取消选中】，不跳过等于重试把前一趟的成果反选掉。抖店有两套下拉实现：普通 select 是 [class*=select-item-option]，多选是【树】控件 [class*=select-tree-title]（带 checkbox）——只认前者时多选永远匹配不到值。下拉必须限定在该属性自己的 auto-dropdown-id-<名> 作用域里，否则会匹配到上一个字段残留的下拉；多选取值要去重且跳过已选——同一个值点两次等于取消选中",
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "(() => {",
+            "  const vis = bcpDom.visible;",
+            "  const K = /[^\\u4e00-\\u9fa5A-Za-z0-9]/g,",
+            "    n = s => String(s || '').replace(K, '');",
+            "  const p = {{product}};",
+            "  const PROPS = ((p.category || {}).categoryProps) || [];",
+            "  const attrs = ((p || {}).attributes || []).filter(",
+            "    a => a.doudianPropertyId != null && (a.doudianValues || []).length",
+            "  );",
+            "  const want = attrs",
+            "    .map(a => PROPS.find(x => Number(x.id) === Number(a.doudianPropertyId)))",
+            "    .filter(x => x && x.ui !== 'multi_value_measure');",
+            "  if (!want.length) return true;",
+            "  let present = 0,",
+            "    filled = 0;",
+            "  for (const prop of want) {",
+            "    /* 遍历所有同名叶子：抖店「填写助手」面板也会列出属性名，只取第一个会锁到没有控件的那个 */ const leaves =",
+            "      [...document.querySelectorAll('span,label,div')].filter(",
+            "        e => e.children.length === 0 && vis(e) && n(e.textContent) === n(prop.name)",
+            "      );",
+            "    /* 同上：优先采纳【已填】的那个候选，没有已填的才退回第一个解析成功的。   只取第一个解析成功的，会把「填写助手」侧恰好挨着输入框的文案当成本属性项，   把已经填好的真表单项误报成未填。 */ let first =",
+            "        null,",
+            "      best = null;",
+            "    for (const leaf of leaves) {",
+            "      let box = leaf;",
+            "      for (let d = 0; d < 8; d++) {",
+            "        const q = box.parentElement;",
+            "        if (!q) break;",
+            "        box = q;",
+            "        const inp = box.querySelector('input,textarea');",
+            "        if (inp) {",
+            "          if ((inp.value || '').trim() || box.querySelector('[class*=select-selection-item]'))",
+            "            best = { box: box, inp: inp };",
+            "          if (!first) first = { box: box, inp: inp };",
+            "          break;",
+            "        }",
+            "      }",
+            "      if (best) break;",
+            "    }",
+            "    if (!best && !first) continue;",
+            "    present++;",
+            "    if (best) filled++;",
+            "  }",
+            "  /* present===0 = 本页没有这些属性项。属性落在第 1 页还是第 2 页随类目变（电吹风的品牌在第 1 页，汤勺的品牌在第 2 页），所以填写器是【机会性】的：本页有就填。要求 present>0 会把「这一页本来就没有」误判成失败。真正的兜底在保存那步——抖店自己会报缺失的必填项。这里只断言【本页出现的都填上了】：字段在却没填，仍然红。 */ return (",
+            "    filled === present",
+            "  );",
+            "})()"
+          ]
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 2,
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "createReady",
+          "noEditorModal"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(async () => {",
+            "  const K = /[^\\u4e00-\\u9fa5A-Za-z0-9]/g;",
+            "  const norm = s => String(s || '').replace(K, '');",
+            "  const vis = bcpDom.visible;",
+            "  const press = bcpDom.press;",
+            "  const OPT_TREE = '[class*=select-tree-title]';",
+            "  const OPT_PLAIN = '[class*=select-item-option],[role=option]';",
+            "  const optsOf = name => {",
+            "    const scope =",
+            "      [...document.querySelectorAll('[class*=auto-dropdown-id-]')].find(",
+            "        d => vis(d) && (!name || norm(d.className).includes(norm(name)))",
+            "      ) || document;",
+            "    const t = [...scope.querySelectorAll(OPT_TREE)].filter(vis);",
+            "    return t.length ? t : [...scope.querySelectorAll(OPT_PLAIN)].filter(vis);",
+            "  };",
+            "  const alreadyPicked = box =>",
+            "    new Set(",
+            "      [...box.querySelectorAll('[class*=select-selection-item]')].map(x => norm(x.textContent))",
+            "    );",
+            "  const setVal = (el, v) => {",
+            "    bcpDom.setValue(el, v);",
+            "    el.dispatchEvent(new Event('input', { bubbles: true }));",
+            "    el.dispatchEvent(new Event('change', { bubbles: true }));",
+            "  };",
+            "  /* 同一个属性名在页面上不止一处：抖店右侧「填写助手」面板也会把属性名当建议列出来（实测 Polo 衫的「面料材质」在文档里有 2 个精确叶子，第一个属于建议面板）。只取第一个匹配就会锁到那个没有控件的文案上，往上爬 8 层爬到「商品信息质量」也找不到 input，于是报「表单里没有该属性项」——而真正的表单项在页面别处，一次都没被碰过。所以要遍历【所有】同名叶子，取第一个真能解析出控件的；某个候选爬不到就换下一个，不是直接放弃。 */ const fieldOf =",
+            "    label => {",
+            "      const want = norm(label);",
+            "      const leaves = [...document.querySelectorAll('span,label,div')].filter(",
+            "        e => e.children.length === 0 && vis(e) && norm(e.textContent) === want",
+            "      );",
+            "      for (const leaf of leaves) {",
+            "        let n = leaf;",
+            "        for (let k = 0; k < 8; k++) {",
+            "          n = n.parentElement;",
+            "          if (!n) break;",
+            "          if (n.querySelectorAll('input').length === 1)",
+            "            return { box: n, input: n.querySelector('input') };",
+            "        }",
+            "      }",
+            "      return null;",
+            "    };",
+            "  const DL = bcpDeadline;",
+            "  const sleep = ms => new Promise(r => setTimeout(r, Math.max(0, Math.min(ms, DL - Date.now()))));",
+            "  const netIdle = async (quietMs, deadline) => {",
+            "    let n = performance.getEntriesByType('resource').length;",
+            "    let last = Date.now();",
+            "    while (Date.now() < deadline) {",
+            "      await sleep(200);",
+            "      const m = performance.getEntriesByType('resource').length;",
+            "      if (m !== n) {",
+            "        n = m;",
+            "        last = Date.now();",
+            "      } else if (Date.now() - last >= quietMs) return true;",
+            "    }",
+            "    return false;",
+            "  };",
+            "  const p = {{product}};",
+            "  const PROPS = ((p.category || {}).categoryProps) || [];",
+            "  const attrs = ((p || {}).attributes || []).filter(",
+            "    a => a.doudianPropertyId != null && (a.doudianValues || []).length",
+            "  );",
+            "  const filled = [],",
+            "    skipped = [];",
+            "  for (const a of attrs) {",
+            "    if (Date.now() > DL) {",
+            "      skipped.push({ id: a.doudianPropertyId, why: '超出本步时间预算' });",
+            "      continue;",
+            "    }",
+            "    const prop = PROPS.find(x => Number(x.id) === Number(a.doudianPropertyId));",
+            "    if (!prop) {",
+            "      skipped.push({ id: a.doudianPropertyId, why: 'categoryProps 里没有该 id' });",
+            "      continue;",
+            "    }",
+            "    const f = fieldOf(prop.name);",
+            "    if (!f) {",
+            "      skipped.push({ label: prop.name, why: '当前类目表单里没有该属性项' });",
+            "      continue;",
+            "    }",
+            "    const already = (() => {",
+            "      const i = f.box.querySelector('input,textarea');",
+            "      return !!(",
+            "        f.box.querySelector('[class*=select-selection-item]') ||",
+            "        (i && (i.value || '').trim())",
+            "      );",
+            "    })();",
+            "    if (already) {",
+            "      skipped.push({",
+            "        label: prop.name,",
+            "        ui: prop.ui,",
+            "        why: '已有值，跳过（重复点多选项会取消选中）'",
+            "      });",
+            "      continue;",
+            "    }",
+            "    const val = a.doudianValues[0].name;",
+            "    if (prop.ui === 'text') {",
+            "      setVal(f.input, val);",
+            "      filled.push({ label: prop.name, value: val, ui: 'text' });",
+            "      continue;",
+            "    }",
+            "    if (prop.ui === 'select' || prop.ui === 'search') {",
+            "      press(f.box.querySelector('[class*=select-selector]') || f.box);",
+            "      await (async () => {",
+            "        const t = Math.min(DL, Date.now() + 8000);",
+            "        while (Date.now() < t) {",
+            "          if (optsOf(prop.name).length) return;",
+            "          await sleep(150);",
+            "        }",
+            "      })();",
+            "      if (!optsOf(prop.name).length) await netIdle(2000, Math.min(DL, Date.now() + 8000));",
+            "      const scope =",
+            "        [...document.querySelectorAll('[class*=auto-dropdown-id-]')].find(",
+            "          d => vis(d) && norm(d.className).includes(norm(prop.name))",
+            "        ) || document;",
+            "      let opts = optsOf(prop.name);",
+            "      let hit =",
+            "        opts.find(o => norm(o.textContent) === norm(val)) ||",
+            "        opts.find(o => norm(o.textContent).includes(norm(val)));",
+            "      if (!hit && !opts.length) {",
+            "        const box = f.box.querySelector('input:not([type=hidden])');",
+            "        if (box) {",
+            "          setVal(box, val);",
+            "          await netIdle(2000, Math.min(DL, Date.now() + 12000));",
+            "          opts = optsOf(prop.name);",
+            "          hit =",
+            "            opts.find(o => norm(o.textContent) === norm(val)) ||",
+            "            opts.find(o => norm(o.textContent).includes(norm(val)));",
+            "        }",
+            "      }",
+            "      if (!hit) {",
+            "        const dropTxt = [...document.querySelectorAll('[class*=select-dropdown]')]",
+            "          .filter(vis)",
+            "          .map(d => (d.innerText || '').replace(/\\s+/g, ' '))",
+            "          .join(' ');",
+            "        const gated = /暂无可选品牌|不支持发布无品牌|申请品牌资质|申请资质/.test(dropTxt);",
+            "        const fieldDom = (() => {",
+            "          try {",
+            "            const inputs = [...f.box.querySelectorAll('input,textarea,button')].map(e => ({",
+            "              tag: e.tagName,",
+            "              type: e.type || '',",
+            "              cls: String(e.className || '').slice(0, 50),",
+            "              ph: (e.placeholder || '').slice(0, 30),",
+            "              val: (e.value || '').slice(0, 20)",
+            "            }));",
+            "            const leaves = [...f.box.querySelectorAll('span,div,label,a')]",
+            "              .filter(e => e.children.length === 0 && vis(e))",
+            "              .map(e => (e.textContent || '').trim())",
+            "              .filter(Boolean)",
+            "              .slice(0, 12);",
+            "            return {",
+            "              boxCls: String(f.box.className || '').slice(0, 60),",
+            "              inputs: inputs.slice(0, 5),",
+            "              leaves",
+            "            };",
+            "          } catch (e) {",
+            "            return { err: String(e).slice(0, 60) };",
+            "          }",
+            "        })();",
+            "        skipped.push({",
+            "          label: prop.name,",
+            "          value: val,",
+            "          why: gated",
+            "            ? '店铺资质不足：抖店明示该类目不支持无品牌/需要品牌资质，重试无用'",
+            "            : opts.length",
+            "              ? '下拉里没有该值'",
+            "              : '下拉打开且输入后仍无候选',",
+            "          gatedByQualification: gated,",
+            "          dropdownText: gated ? dropTxt.slice(0, 120) : undefined,",
+            "          declaredUi: prop.ui,",
+            "          saw: opts.slice(0, 6).map(o => norm(o.textContent)),",
+            "          fieldDom",
+            "        });",
+            "        press(document.body);",
+            "        await sleep(150);",
+            "        continue;",
+            "      }",
+            "      press(hit);",
+            "      await sleep(250);",
+            "      filled.push({ label: prop.name, value: val, ui: prop.ui });",
+            "      continue;",
+            "    }",
+            "    if (prop.ui === 'multi_select') {",
+            "      /* 平台对多选有数量上限，写在占位符里（实测「请选择，最多选5项」）。 读出来而不是写死 5：不同属性上限不同，写死会在别的类目上悄悄超限。 */ const capTxt =",
+            "        (f.box.innerText || '').match(/最多选\\s*(\\d+)\\s*项/);",
+            "      const cap = capTxt ? Number(capTxt[1]) : Infinity;",
+            "      const seen0 = alreadyPicked(f.box);",
+            "      const wants = [...new Set((a.doudianValues || []).map(v => v.name).filter(Boolean))].filter(",
+            "        w => !seen0.has(norm(w))",
+            "      );",
+            "      press(f.box.querySelector('[class*=select-selector]') || f.box);",
+            "      await sleep(450);",
+            "      const picked = [];",
+            "      /* 先在下拉自带的搜索框里过滤，再取选项。抖店这类下拉是【虚拟列表】：只渲染可视窗口   那几条，直接扫 DOM 只能看见开头十几个。实测女装 T恤 类目「流行元素」57 个选项、   「服饰工艺」27 个——要选的「拼接」「丝光」都在属性表里(id 33150 / 36102)，但从没进过 DOM，   于是报「下拉里没有任何匹配值」。必填属性大多没踩到，只是因为它们列表短或目标值靠前。   搜不出来才退回扫渲染项，两条路都走完再判没有。 */ const optionsFor =",
+            "        async w => {",
+            "          if (f.input) {",
+            "            setVal(f.input, w);",
+            "            await sleep(420);",
+            "            const bySearch = optsOf(prop.name);",
+            "            if (bySearch.length) return bySearch;",
+            "          }",
+            "          return optsOf(prop.name);",
+            "        };",
+            "      for (const w of wants) {",
+            "        if (picked.length >= cap) break;",
+            "        if (Date.now() > DL) break;",
+            "        const opts = await optionsFor(w);",
+            "        const hit =",
+            "          opts.find(o => norm(o.textContent) === norm(w)) ||",
+            "          opts.find(o => norm(o.textContent).includes(norm(w)));",
+            "        if (!hit) continue;",
+            "        press(hit);",
+            "        await sleep(220);",
+            "        picked.push(w);",
+            "        /* 选完清掉搜索词，否则下一个值会在上一次的过滤结果里找。 */ if (",
+            "          f.input &&",
+            "          (f.input.value || '').trim()",
+            "        ) {",
+            "          setVal(f.input, '');",
+            "          await sleep(200);",
+            "        }",
+            "      }",
+            "      press(document.body);",
+            "      await sleep(180);",
+            "      if (picked.length)",
+            "        filled.push({",
+            "          label: prop.name,",
+            "          ui: 'multi_select',",
+            "          values: picked,",
+            "          cap: cap === Infinity ? null : cap,",
+            "          dropped: wants.length > picked.length ? wants.slice(picked.length) : undefined",
+            "        });",
+            "      else",
+            "        skipped.push({",
+            "          label: prop.name,",
+            "          ui: 'multi_select',",
+            "          why: '下拉里没有任何匹配值',",
+            "          saw: wants.slice(0, 3)",
+            "        });",
+            "      continue;",
+            "    }",
+            "    if (prop.ui === 'measure') {",
+            "      /* measure 实测就是一个普通文本框（电压范围「请输入」），单位在框外是静态文字。 来源值形如「220（V）」，把单位括号去掉只留数值；没有数字就原样填。 */ const num =",
+            "        (val.match(/[\\d.]+/) || [])[0];",
+            "      setVal(f.input, num || val);",
+            "      filled.push({ label: prop.name, ui: 'measure', value: num || val });",
+            "      continue;",
+            "    }",
+            "    skipped.push({ label: prop.name, value: val, ui: prop.ui, why: '复合控件，由下一步单独处理' });",
+            "  }",
+            "  return { filled, skipped, total: attrs.length };",
+            "})()"
+          ]
+        }
+      }
+    },
+    {
+      "goal": "填 multi_value_measure 类复合属性（选值 + 含量百分比，总和须 100%）。这类控件填法与普通下拉不同，故独立一步",
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "(() => {",
+            "  const vis = bcpDom.visible;",
+            "  const K = /[^\\u4e00-\\u9fa5A-Za-z0-9]/g,",
+            "    n = s => String(s || '').replace(K, '');",
+            "  const p = {{product}};",
+            "  const PROPS = ((p.category || {}).categoryProps) || [];",
+            "  const attrs = ((p || {}).attributes || []).filter(",
+            "    a => a.doudianPropertyId != null && (a.doudianValues || []).length",
+            "  );",
+            "  const want = attrs",
+            "    .map(a => PROPS.find(x => Number(x.id) === Number(a.doudianPropertyId)))",
+            "    .filter(x => x && x.ui === 'multi_value_measure');",
+            "  if (!want.length) return true;",
+            "  /* 遍历所有同名叶子：抖店「填写助手」面板也会列出属性名，只取第一个会锁到没有控件的那个 */ const leaves =",
+            "    [...document.querySelectorAll('span,label,div')].filter(",
+            "      e => e.children.length === 0 && vis(e) && n(e.textContent) === n(want[0].name)",
+            "    );",
+            "  /* 命中控件不等于命中【正确的】控件：只要还有别的同名叶子，就不能拿第一个解析成功的   结果直接 return。解析成功但没填值时 break 换下一个叶子，全部试完才判 false。 */ for (const leaf of leaves) {",
+            "    let box = leaf;",
+            "    for (let d = 0; d < 8; d++) {",
+            "      const q = box.parentElement;",
+            "      if (!q) break;",
+            "      box = q;",
+            "      if (box.querySelector('input,textarea')) {",
+            "        if (",
+            "          !!box.querySelector('[class*=select-selection-item]') ||",
+            "          [...box.querySelectorAll('input')].some(i => (i.value || '').trim())",
+            "        )",
+            "          return true;",
+            "        break;",
+            "      }",
+            "    }",
+            "  }",
+            "  return false;",
+            "})()"
+          ]
+        }
+      },
+      "onFail": "retry",
+      "maxRetries": 2,
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "createReady",
+          "noEditorModal"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(async () => {",
+            "  const K = /[^\\u4e00-\\u9fa5A-Za-z0-9]/g;",
+            "  const norm = s => String(s || '').replace(K, '');",
+            "  const vis = bcpDom.visible;",
+            "  const press = bcpDom.press;",
+            "  const setVal = (el, v) => {",
+            "    bcpDom.setValue(el, v);",
+            "    el.dispatchEvent(new Event('input', { bubbles: true }));",
+            "    el.dispatchEvent(new Event('change', { bubbles: true }));",
+            "  };",
+            "  /* 同一个属性名在页面上不止一处：抖店右侧「填写助手」面板也会把属性名当建议列出来（实测 Polo 衫的「面料材质」在文档里有 2 个精确叶子，第一个属于建议面板）。只取第一个匹配就会锁到那个没有控件的文案上，往上爬 8 层爬到「商品信息质量」也找不到 input，于是报「表单里没有该属性项」——而真正的表单项在页面别处，一次都没被碰过。所以要遍历【所有】同名叶子，取第一个真能解析出控件的；某个候选爬不到就换下一个，不是直接放弃。 */ const fieldOf =",
+            "    label => {",
+            "      const want = norm(label);",
+            "      const leaves = [...document.querySelectorAll('span,label,div')].filter(",
+            "        e => e.children.length === 0 && vis(e) && norm(e.textContent) === want",
+            "      );",
+            "      for (const leaf of leaves) {",
+            "        let n = leaf;",
+            "        for (let k = 0; k < 8; k++) {",
+            "          n = n.parentElement;",
+            "          if (!n) break;",
+            "          if (n.querySelectorAll('input').length === 1)",
+            "            return { box: n, input: n.querySelector('input') };",
+            "        }",
+            "      }",
+            "      return null;",
+            "    };",
+            "  const DL = bcpDeadline;",
+            "  const sleep = ms => new Promise(r => setTimeout(r, Math.max(0, Math.min(ms, DL - Date.now()))));",
+            "  const p = {{product}};",
+            "  const PROPS = ((p.category || {}).categoryProps) || [];",
+            "  const targets = ((p || {}).attributes || []).filter(a => {",
+            "    const prop = PROPS.find(x => Number(x.id) === Number(a.doudianPropertyId));",
+            "    return prop && prop.ui === 'multi_value_measure' && (a.doudianValues || []).length;",
+            "  });",
+            "  if (!targets.length) return { ok: true, skipped: '本类目没有复合属性' };",
+            "  const done = [];",
+            "  for (const a of targets) {",
+            "    if (Date.now() > DL) {",
+            "      done.push({ label: '(未处理)', ok: false, why: '超出本步时间预算' });",
+            "      break;",
+            "    }",
+            "    const prop = PROPS.find(x => Number(x.id) === Number(a.doudianPropertyId));",
+            "    const val = a.doudianValues[0].name;",
+            "    const f = fieldOf(prop.name);",
+            "    if (!f) {",
+            "      done.push({ label: prop.name, ok: false, why: '表单里没有该属性项' });",
+            "      continue;",
+            "    }",
+            "    press(f.box.querySelector('.aurora-select-content,[class*=selector]') || f.box);",
+            "    await sleep(600);",
+            "    const search = [...document.querySelectorAll('input')].find(",
+            "      i => vis(i) && /搜索/.test(i.placeholder || '')",
+            "    );",
+            "    if (!search) {",
+            "      done.push({ label: prop.name, ok: false, why: '复合面板未打开' });",
+            "      continue;",
+            "    }",
+            "    setVal(search, val);",
+            "    await sleep(700);",
+            "    const opts = [...document.querySelectorAll('[class*=select-item-option],[class*=option]')]",
+            "      .filter(vis)",
+            "      .filter(o => norm(o.textContent).includes(norm(val)));",
+            "    if (!opts.length) {",
+            "      done.push({ label: prop.name, ok: false, why: '搜索无结果', value: val });",
+            "      continue;",
+            "    }",
+            "    const hit = opts.find(o => norm(o.textContent) === norm(val)) || opts[0];",
+            "    const picked = norm(hit.textContent);",
+            "    press(hit);",
+            "    await sleep(500);",
+            "    const pct = [...document.querySelectorAll('input.aurora-input-number-input')].filter(vis)[0];",
+            "    if (!pct) {",
+            "      done.push({ label: prop.name, ok: false, why: '选中后没出现含量输入框', picked });",
+            "      continue;",
+            "    }",
+            "    setVal(pct, '100');",
+            "    await sleep(300);",
+            "    press(document.body);",
+            "    await sleep(400);",
+            "    done.push({ label: prop.name, ok: true, picked, pct: '100' });",
+            "  }",
+            "  return { done };",
+            "})()"
+          ]
+        }
+      }
+    },
+    {
+      "goal": "建详情图暂存区：造一个我们自己的隐藏 file input（#bcp-detail-stage）+ 一个只累加不覆盖的 change 监听。抖店的商详图库【每吃进一张就把那个 file input 节点整个换掉】，而 browser.upload 的 attachments 是一张一次派发、每次派发前重新解析选择器 —— 于是第 1 张落地、第 2 张就 nothing matches，实测每轮只进 1 张（2026-09-04，商详图片计数 3→4→5，每次 +1 并报错）。我们自己的 input 不参与抖店渲染，节点不会被换，整批才收得齐 —— 实测传 4 张，真 input 上只剩 最后一张，累加监听拿到全部 4 张。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "createReady",
+          "noEditorModal"
+        ]
+      },
+      "onFail": "retry",
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(() => {",
+            "  /* 造一个【我们自己的】隐藏 file input 当暂存区，并挂一个只累加不覆盖的 change 监听。",
+            "     为什么必须绕这一道：browser.upload 的 attachments 是【一张一次】派发的（实测",
+            "     传 4 张后真 input 上只剩最后一张，而累加监听拿到了全部 4 张），并且每次派发前",
+            "     都会重新解析目标选择器。抖店的商详图库每吃进一张就把那个 file input 节点整个",
+            "     换掉 —— 于是第 1 张落地、第 2 张的选择器就落空，报 nothing matches，实测每轮",
+            "     只进 1 张。我们自己的 input 不参与抖店的渲染，节点不会被换，整批才收得齐。 */",
+            "  const old = document.getElementById('bcp-detail-stage');",
+            "  if (old) old.remove();",
+            "  const s = document.createElement('input');",
+            "  s.type = 'file';",
+            "  s.multiple = true;",
+            "  s.id = 'bcp-detail-stage';",
+            "  s.style.cssText = 'position:fixed;left:-9999px;width:1px;height:1px';",
+            "  window.__bcpStage = [];",
+            "  s.addEventListener('change', () => {",
+            "    for (const f of s.files) window.__bcpStage.push(f);",
+            "  });",
+            "  document.body.appendChild(s);",
+            "  return { ok: true, staged: 0 };",
+            "})()"
+          ]
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "!!document.getElementById('bcp-detail-stage')"
+          ]
+        }
+      }
+    },
+    {
+      "goal": "把 canonical 的预处理后 CDN URL 对应的文件收进详情图暂存区。sourceUrl 仅用于来源审计，绝不直接上传。附件从 canonical.images.detail 派生，不依赖本地目录；这一步还没往抖店那边送。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "detailStageReady"
+        ]
+      },
+      "onFail": "retry",
+      "action": {
+        "method": "browser.upload",
+        "params": {
+          "css": "#bcp-detail-stage",
+          "attachmentsFrom": "{{product.images.detail}}"
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "(() => {",
+            "  const p = {{product}};",
+            "  const want = (((p || {}).images || {}).detail || []).length;",
+            "  return (window.__bcpStage || []).length >= want;",
+            "})()"
+          ]
+        }
+      }
+    },
+    {
+      "goal": "把暂存区里的文件【一次 DataTransfer、一次 change】搬进真的商详图片 input，然后拆掉暂存区。整批投递正是抖店吃得下的形态：它换节点发生在处理完这一批之后，所以批内不会掉 —— 实测 5/50 → 9/50，4 张全进。注入后抖店要几秒才更新「商详图片（N/50）」，本步等到计数涨上来再返回。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "createReady",
+          "noEditorModal"
+        ]
+      },
+      "onFail": "retry",
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(async () => {",
+            "  const DL = bcpDeadline;",
+            "  const sleep = ms => new Promise(r => setTimeout(r, Math.max(0, Math.min(ms, DL - Date.now()))));",
+            "  const vis = bcpDom.visible;",
+            "  const header = () =>",
+            "    [...document.querySelectorAll('span,div,label')]",
+            "      .filter(e => e.children.length === 0 && vis(e))",
+            "      .find(e => /^商详图片/.test((e.textContent || '').trim()));",
+            "  const countNow = () => {",
+            "    const h = header();",
+            "    const m = h && (h.textContent || '').match(/[（(](\\d+)\\s*\\/\\s*\\d+[）)]/);",
+            "    return m ? Number(m[1]) : null;",
+            "  };",
+            "  const files = window.__bcpStage || [];",
+            "  if (!files.length) return { ok: false, reason: '暂存区是空的，上一步没收到文件' };",
+            "  const h = header();",
+            "  if (!h) return { ok: false, reason: '找不到「商详图片」区块' };",
+            "  let n = h,",
+            "    inp = null;",
+            "  for (let k = 0; k < 8; k++) {",
+            "    n = n.parentElement;",
+            "    if (!n) break;",
+            "    const i = n.querySelector('input[type=file]');",
+            "    if (i) {",
+            "      inp = i;",
+            "      break;",
+            "    }",
+            "  }",
+            "  if (!inp) return { ok: false, reason: '区块内没有 file input' };",
+            "  const before = countNow();",
+            "  /* 一次 DataTransfer 装全部，一次 change —— 这正是抖店重渲染吃不掉的那种批量投递：",
+            "     它换节点发生在【处理完这一批之后】，所以批内不会掉。实测 5/50 → 9/50，4 张全进。 */",
+            "  bcpDom.setFiles(inp, files);",
+            "  const want = (before || 0) + files.length;",
+            "  while (Date.now() < DL) {",
+            "    await sleep(500);",
+            "    if ((countNow() || 0) >= want) break;",
+            "  }",
+            "  const stage = document.getElementById('bcp-detail-stage');",
+            "  if (stage) stage.remove();",
+            "  window.__bcpStage = [];",
+            "  const after = countNow();",
+            "  return { ok: true, before, sent: files.length, after };",
+            "})()"
+          ]
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "(() => {",
+            "  const p = {{product}};",
+            "  const want = (((p || {}).images || {}).detail || []).length;",
+            "  if (!want) return true;",
+            "  const m = (document.body.innerText || '').match(/商详图片\\s*[（(](\\d+)\\s*\\/\\s*\\d+[）)]/);",
+            "  return !!m && Number(m[1]) >= want;",
+            "})()"
+          ]
+        }
+      }
+    },
+    {
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "createReady",
+          "noEditorModal"
+        ]
+      },
+      "goal": "把本次发布期间抖店自己调过的接口 dump 成可落盘结构（step 2 的监听记的）。放在保存之前：类目、属性、资质相关的调用此刻都已发生。按端点+query 去重后留最近 24 条，连请求体一起留 —— 下一步 local.writeFile 直接吃本步返回值，所以结构要能直接当文件内容用。【2026-09-21 修】此处原写「browser.eval 的序列化上限是 20 万字符，这个规模远在其下」—— 实测相反：关注端点不截断后，单次发布的 dump 稳定打满 200000 并被引擎从中间切断，写出的 reports/doudian-qualification-capture.json 是 Unterminated string，一份都解析不了。现在返回前自己收敛到上限内，丢了几条写进「丢弃最旧样本」。这一步只读不改，永远 ok —— 它是发现接口用的诊断，不该成为发布的阻断点。",
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(() => {",
+            "  const rec = window.__bcpNet || [];",
+            "  const KEEP = /qualif|categor|attr|prop|schema|brand|refetch|diagnose/i;",
+            "  const hot = rec.filter(r => KEEP.test(r.u + r.q));",
+            "  const byUrl = {};",
+            "  for (const r of rec) {",
+            "    (byUrl[r.u] = byUrl[r.u] || []).push(r);",
+            "  }",
+            "  const seen = new Set();",
+            "  const keep = [];",
+            "  for (let i = hot.length - 1; i >= 0 && keep.length < 24; i--) {",
+            "    const k = hot[i].u + hot[i].q.slice(0, 80);",
+            "    if (seen.has(k)) continue;",
+            "    seen.add(k);",
+            "    keep.unshift(hot[i]);",
+            "  }",
+            "  const out = {",
+            "    capturedAt: new Date().toISOString(),",
+            "    href: location.href,",
+            "    总调用: rec.length,",
+            "    不同端点: Object.keys(byUrl).length,",
+            "    关注端点: [...new Set(hot.map(r => r.u))],",
+            "    全部端点: Object.keys(byUrl),",
+            "    样本: keep",
+            "  };",
+            "  /* 大小必须在【这里】收敛。browser.eval 的序列化上限是 20 万字符，超了引擎不会报错，",
+            "     而是把 JSON 字符串从中间【切断】再回传（value 变成半截字符串 + truncated:true），",
+            "     下一步 local.writeFile 照写不误 —— 本步和下一步的 verify 都是 (() => true)()，",
+            "     于是全程绿灯地往 reports/ 里写坏文件。实测 2026-09-14 的两份 dump 长度都正好是",
+            "     200000，被切掉的恰好是 diagnose_product / getSchema 这些「填了什么 → 平台要什么」",
+            "     配对的后半段：这份被 step 30 自称「唯一可得来源」的报文，至今没有一份能 JSON.parse。",
+            "     宁可少留几条并把丢了多少写在脸上，也不交一份解析不了的。 */",
+            "  const LIMIT = 180000; /* 给 writeFile 的包装与多字节转义留余量 */",
+            "  const size = () => JSON.stringify(out).length;",
+            "  let dropped = 0;",
+            "  while (size() > LIMIT && out.样本.length > 1) {",
+            "    out.样本.shift(); /* 从最旧丢：越新的调用离「刚填了什么」越近 */",
+            "    dropped++;",
+            "  }",
+            "  if (size() > LIMIT && out.样本.length) {",
+            "    /* 剩最后一条还超限：留住它的头部而不是让整份文件报废，并标明这条不完整 */",
+            "    const one = out.样本[0];",
+            "    one.rq = String(one.rq || '').slice(0, 60000);",
+            "    one.b = String(one.b || '').slice(0, 60000);",
+            "    one.本条已截断 = true;",
+            "  }",
+            "  if (dropped) out.丢弃最旧样本 = dropped;",
+            "  out.序列化字符数 = size();",
+            "  return out;",
+            "})()"
+          ]
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "(() => true)()"
+          ]
+        }
+      },
+      "onFail": "retry"
+    },
+    {
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "createReady",
+          "noEditorModal"
+        ]
+      },
+      "goal": "把上一步的 dump 落到 reports/doudian-qualification-capture.json。这是「类目→资质」映射的【唯一】可得来源：抖店后台没有全局的类目资质配置表可抓（/product/qualificationConfig 是 404；/product_qual/config/list 只有 139 条资质类型字典；/product_qual/config/category_list 不带参返回整棵类目树、带 qual_type 对全部 139 个类型都返回空），资质要求只在发布表单里按当前类目动态下发。所以每发一个商品就顺手把它那一类目的资质报文记下来，由脚本幂等合并进 schema —— 覆盖面随发布量增长，不需要一次性抓全。本步永远 ok：写文件失败不该拦住已经填好的商品。【path 传裸文件名】—— local.writeFile 的契约是写进 reports/<path>，传 reports/xxx 会套成 reports/reports/xxx（2026-09-04 实测，本 book 是全仓唯一带前缀的一处，其余 book 都传裸名），于是这份被本步自称「唯一可得来源」的报文从来没落在任何人会去读的路径上。",
+      "action": {
+        "method": "local.writeFile",
+        "params": {
+          "path": "doudian-qualification-capture.json",
+          "overwrite": "overwrite"
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "(() => true)()"
+          ]
+        }
+      },
+      "onFail": "retry"
+    },
+    {
+      "goal": "提交前运行抖店的填写检查。有错误时将实际落点改为草稿并保留错误原文；无错误时按期望落点发布或存草稿。建议与推荐不改变落点。",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "createReady",
+          "noEditorModal"
+        ]
+      },
+      "onFail": "retry",
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(async () => {",
+            "  const DL = bcpDeadline;",
+            "  const sleep = ms => new Promise(r => setTimeout(r, Math.max(0, Math.min(ms, DL - Date.now()))));",
+            "  const vis = bcpDom.visible;",
+            "  const press = bcpDom.press;",
+            "  const btn = [...document.querySelectorAll('button')]",
+            "    .filter(vis)",
+            "    .find(b => (b.innerText || '').trim() === '填写检查');",
+            "  if (!btn) return { ok: false, reason: '找不到「填写检查」按钮' };",
+            "  press(btn);",
+            "  await sleep(3000);",
+            "  /* 抖店把每条结论渲染成 .sp-tag-content（错误 / 建议 / 推荐）。只拦【错误】：",
+            "     建议和推荐是加分项，拦了等于替平台把标准提高。往上爬到能同时看见字段名和",
+            "     原文那一层（实测第 6 层：「商品标题 | 智能生成 | 错误 | 最长不能超过30个汉字」），",
+            "     把抖店的原话原样带出去 —— 我们不翻译、不归类，谁看报告谁就能直接搜到这句话。 */",
+            "  const errs = [...document.querySelectorAll('.sp-tag-content')]",
+            "    .filter(t => vis(t) && (t.textContent || '').trim() === '错误')",
+            "    .map(t => {",
+            "      let n = t;",
+            "      for (let k = 0; k < 7; k++) {",
+            "        const p = n.parentElement;",
+            "        if (!p) break;",
+            "        n = p;",
+            "        if ((n.innerText || '').trim().split('\\n').length >= 3) break;",
+            "      }",
+            "      return (n.innerText || '').trim().replace(/\\s*\\n\\s*/g, ' | ');",
+            "    });",
+            "  const requestedMode = '{{mode}}';",
+            "  const publication = {{publication}};",
+            "  if (requestedMode === 'auto' && (publication?.canDraft !== true || typeof publication.canPublish !== 'boolean' || !Array.isArray(publication.missingRequired))) throw new Error('invalid publication eligibility');",
+            "  const intendedMode = requestedMode === 'auto' ? (publication.canPublish ? 'publish' : 'draft') : requestedMode;",
+            "  const mode = errs.length ? 'draft' : intendedMode;",
+            "  const missingRequired = [...new Set([...(publication?.missingRequired || []), ...errs])];",
+            "  const result = { ok: true, requestedMode, mode, checked: true, checkErrors: errs, missingRequired };",
+            "  /* 回执导航会重建 window；sessionStorage 隔离于本次运行的独立 tab 并保留校验依据。 */",
+            "  sessionStorage.setItem('bcp:doudian:submission', JSON.stringify(result));",
+            "  return result;",
+            "})()"
+          ]
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "(() => {",
+            "  const vis = bcpDom.visible;",
+            "  const result = JSON.parse(sessionStorage.getItem('bcp:doudian:submission') || 'null');",
+            "  if (!result?.checked || result.requestedMode !== '{{mode}}') return false;",
+            "  if (result.mode === 'draft') return true;",
+            "  return ![...document.querySelectorAll('.sp-tag-content')].some(",
+            "    t => vis(t) && (t.textContent || '').trim() === '错误'",
+            "  );",
+            "})()"
+          ]
+        }
+      }
+    },
+    {
+      "goal": "按填写检查后的实际落点提交：检查通过且期望 publish 时点「发布商品」，有填写错误或期望 draft 时点「保存草稿」。成功后导航到对应回执页。提交失败必须 escalate，不能重复点击造成重复提交。",
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "(() => {",
+            "  const vis = bcpDom.visible;",
+            "  const dlg = [...document.querySelectorAll('[class*=modal],[role=dialog]')]",
+            "    .filter(vis)",
+            "    .some(d => /成功/.test(d.innerText || ''));",
+            "  const toast = /发布成功|提交成功|保存成功/.test(document.body.innerText || '');",
+            "  const left = !/\\/ffa\\/g\\/create/.test(location.href);",
+            "  return dlg || toast || left;",
+            "})()"
+          ]
+        }
+      },
+      "onFail": "escalate",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "createReady",
+          "noEditorModal"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(async () => {",
+            "  const checked = JSON.parse(sessionStorage.getItem('bcp:doudian:submission') || 'null');",
+            "  if (!checked?.checked || checked.requestedMode !== '{{mode}}' || !['draft', 'publish'].includes(checked.mode))",
+            "    return { ok: false, reason: '缺少本次填写检查结果，不能提交' };",
+            "  const mode = checked.mode;",
+            "  const want = mode === 'publish' ? '发布商品' : '保存草稿';",
+            "  const vis = bcpDom.visible;",
+            "  const press = bcpDom.press;",
+            "  const el = [...document.querySelectorAll('button,span,div')]",
+            "    .filter(e => e.children.length === 0 && vis(e))",
+            "    .find(e => (e.textContent || '').trim() === want);",
+            "  if (!el) return { ok: false, reason: '没找到落点按钮', want, mode };",
+            "  el.scrollIntoView({ block: 'center' });",
+            "  press(el);",
+            "  const DL2 = bcpDeadline;",
+            "  const success = () => {",
+            "    const dlg = [...document.querySelectorAll('[class*=modal],[role=dialog]')]",
+            "      .filter(vis)",
+            "      .some(d => /成功/.test(d.innerText || ''));",
+            "    const toast = /发布成功|提交成功|保存成功/.test(document.body.innerText || '');",
+            "    const left = !/\\/ffa\\/g\\/create/.test(location.href);",
+            "    return dlg || toast || left;",
+            "  };",
+            "  while (Date.now() < DL2) {",
+            "    await bcpWait.sleep(800);",
+            "    if (success()) break;",
+            "  }",
+            "  if (success()) {",
+            "    const path = mode === 'publish' ? '/ffa/g/list' : '/ffa/g/draft';",
+            "    /* 成功凭据已拿到，顺手发起去回执页的导航。为什么并进这一步而不是独立成步：    赋值 location.href 只是【发起】导航，新文档提交前旧文档里读到的仍是旧 URL，    所以独立步的 verify 第一次必然为假；而框架重试会连动作一起重跑，    等于每次都重新导航、把时钟归零，永远追不上自己（实测连挂 4 次，页面其实早就到了）。    并进来之后：本步的 verify 仍是【保存成功凭据】(可证伪)，导航的落地交给    下一步 receiptReady 门(urlIncludes draft|list + settled，30s 超时会明确报错)。 */ if (",
+            "      location.pathname.indexOf(path) !== 0",
+            "    ) {",
+            "      /* 抖店在表单被改动后会注册 beforeunload，直接去草稿页会弹原生「Leave site?」。",
+            "         这是浏览器外壳对话框，DOM/MCP click 无法稳定命中；此处已经拿到保存/发布成功凭据，",
+            "         只阻止本次导航上的拦截，不改变提交结果，让原本的回执导航继续执行。 */",
+            "      window.onbeforeunload = null;",
+            "      window.addEventListener('beforeunload', e => e.stopImmediatePropagation(), { capture: true });",
+            "      location.href = location.origin + path;",
+            "    }",
+            "    return { ok: true, mode, clicked: want, receiptPath: path, checkErrors: checked.checkErrors };",
+            "  }",
+            "  const check = [...document.querySelectorAll('button,span,div')]",
+            "    .filter(e => e.children.length === 0 && vis(e))",
+            "    .find(e => (e.textContent || '').trim() === '填写检查');",
+            "  if (check) {",
+            "    press(check);",
+            "    await bcpWait.sleep(3000);",
+            "  }",
+            "  const SEL =",
+            "    '[role=alert],[class*=has-error],[class*=errorTip],[class*=error-tip],[class*=errorMsg],[class*=error-msg],[class*=formError],[class*=form-error]';",
+            "  const hits = [...document.querySelectorAll(SEL)];",
+            "  const seen = hits",
+            "    .filter(vis)",
+            "    .map(e => ({",
+            "      t: (e.innerText || '').replace(/\\s+/g, ' ').trim(),",
+            "      tag: e.tagName,",
+            "      cls: String(e.className || '').slice(0, 60)",
+            "    }))",
+            "    .filter(x => x.t);",
+            "  const errs = [...new Set(seen.filter(x => x.t.length < 200).map(x => x.t))];",
+            "  const dropped = seen.filter(x => x.t.length >= 200).length;",
+            "  const invisible = hits.length - hits.filter(vis).length;",
+            "  const markup = [...new Set(seen.map(x => `${x.tag}.${x.cls}`))].slice(0, 6);",
+            "  return {",
+            "    ok: false,",
+            "    mode,",
+            "    clicked: want,",
+            "    reason: '点了但没等到成功凭据——多半被必填校验拦下',",
+            "    缺失项: errs.slice(0, 12),",
+            "    diag: {",
+            "      matched: hits.length,",
+            "      可见: seen.length,",
+            "      超长被丢: dropped,",
+            "      不可见被跳过: invisible,",
+            "      markup,",
+            "      note: 'markup 是命中错误的 DOM 标签.类名 —— 下次据此判断选择器够不够；超长被丢/不可见被跳过 非 0 说明有错误没被报出来'",
+            "    }",
+            "  };",
+            "})()"
+          ]
+        }
+      }
+    },
+    {
+      "goal": "独立刷新回执页，让刚保存的商品进入列表。刷新必须是单独的 browser.reload 动作，不能在后续 browser.eval 中触发导航，否则 eval 会在旧 frame 被销毁后继续执行并报 Frame with ID 0 was removed",
+      "verify": {
+        "actionSucceeded": true,
+        "urlIncludes": "/ffa/g/"
+      },
+      "after": {
+        "all": [
+          "receiptReady"
+        ]
+      },
+      "onFail": "retry",
+      "maxRetries": 1,
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "receiptReady"
+        ]
+      },
+      "action": {
+        "method": "browser.reload",
+        "params": {}
+      }
+    },
+    {
+      "goal": "等本次创建的商品出现在回执页列表里。这一步【尽力等，不阻断】——browser.waitFor 超时只返回 matched:false，不抛错：抖店偶尔要几秒才把新建行灌进列表，而「没等到」不等于「没发布成功」，该不该算成功留给后面读了全文再判。用 waitFor 而不是在 eval 里轮询，是因为它走注入通道，不需要页面允许 MAIN world 的 new Function。",
+      "verify": {
+        "actionSucceeded": true,
+        "urlIncludes": "/ffa/g/"
+      },
+      "onFail": "escalate",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "receiptReady",
+          "noEditorModal"
+        ]
+      },
+      "action": {
+        "method": "browser.waitFor",
+        "params": {
+          "text": "{{product.title.text}}",
+          "ms": 10000
+        }
+      }
+    },
+    {
+      "goal": "读回执页全文 —— 本 book 产出物的原料，解析交给下一步。【2026-09-21 改】此前这一步是 browser.eval 直接读回执行 React fiber 上的 record，2026-09-13 那次 publish 跑到这里时 eval 没能返回任何结果（真因至今未知：扩展当时给的「可能是 CSP」只是兜底文案，不是诊断），于是【已经点了「发布商品」、已经跳到 /ffa/g/list】这个事实被整步失败抹掉——run 记 failed、productId 丢失、上层 flow 看到的是「从来没发布过」。readContent 走注入通道，不需要页面允许 MAIN world 的 new Function，失败面比 eval 小一截；代价是拿不到 record.product_url，productUrl 只能如实留空（outputSchema 本来就允许 null + productUrlNote）。本步只读，不触发导航。",
+      "verify": {
+        "actionSucceeded": true,
+        "urlIncludes": "/ffa/g/"
+      },
+      "onFail": "retry",
+      "maxRetries": 1,
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "receiptReady",
+          "noEditorModal"
+        ]
+      },
+      "action": {
+        "method": "browser.readContent",
+        "params": {
+          "maxChars": 30000
+        }
+      }
+    },
+    {
+      "goal": "将本次回执读数归集为商品发布产出",
+      "verify": {
+        "actionSucceeded": true
+      },
+      "onFail": "escalate",
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "receiptReady"
+        ]
+      },
+      "action": {
+        "method": "local.eval",
+        "params": {
+          "code": [
+            "const entry = results[results.length - 1];",
+            "if (!entry || entry.method !== 'browser.readContent' || !entry.goal.startsWith('读回执页全文')) throw new Error('missing receipt page text');",
+            "const rawPage = entry.value;",
+            "const page = rawPage && typeof rawPage === 'object' && 'value' in rawPage ? rawPage.value : rawPage;",
+            "if (!page || typeof page !== 'object' || typeof page.text !== 'string') throw new Error('invalid receipt page text');",
+            "/* 提交那一步是 mode 与 checkErrors 的权威来源：它只有在拿到保存/发布成功凭据后才返回，",
+            "   所以它的 mode 说明【我们确实点下去了、点的是哪一个】。回执页解析不出来时，正是这份",
+            "   凭据让产出停在「待核验」而不是「失败」—— 2026-09-13 丢掉的就是它。 */",
+            "const unwrap = r => { const v = r ? r.value : null; return v && typeof v === 'object' && 'value' in v ? v.value : v; };",
+            "const submitted = unwrap([...results].reverse().find(r => r.goal && r.goal.startsWith('按填写检查后的实际落点提交')));",
+            "const checked = unwrap([...results].reverse().find(r => r.goal && r.goal.startsWith('提交前运行抖店的填写检查')));",
+            "const mode = submitted && typeof submitted.mode === 'string' ? submitted.mode : null;",
+            "if (!mode) throw new Error('missing submit receipt: cannot tell draft from publish');",
+            "const checkErrors = submitted && Array.isArray(submitted.checkErrors) ? submitted.checkErrors.filter(x => typeof x === 'string') : [];",
+            "const p = {{product}};",
+            "const title = ((p || {}).title || {}).text || '';",
+            "/* 页面文本没有「行」这个结构：innerText 把一行表格拆成多段换行，所以不能再像原来那样",
+            "   querySelector 一整个 tr。改成按标题定位之后，范围得自己划 —— 划宽了会读到【下一条",
+            "   商品】的状态和时间，而列表按创建时间倒序，下一条往往正是上一次运行发的同款，长得",
+            "   极像，读串了没人看得出来。所以边界取「本条 ID 到下一条 ID 之间」：每条商品都带一个",
+            "   ID，它是这份纯文本里唯一可靠的行分隔符。前 20 字符匹配标题沿用原判据 —— 列表里的",
+            "   标题可能被省略号截断，拿全长去比会匹配不上。 */",
+            "const norm = s => String(s || '').replace(/\\s+/g, '');",
+            "const want = norm(title).slice(0, 20);",
+            "const flat = norm(page.text);",
+            "const at = want ? flat.indexOf(want) : -1;",
+            "const scope = at >= 0 ? flat.slice(at, at + 600) : '';",
+            "const idRe = /ID[:：]?(\\d{10,})/;",
+            "const idAt = scope.search(idRe);",
+            "const afterId = idAt >= 0 ? scope.slice(idAt) : '';",
+            "const nextIdAt = afterId.slice(1).search(idRe);",
+            "const cell = nextIdAt >= 0 ? afterId.slice(0, nextIdAt + 1) : afterId;",
+            "const productId = (cell.match(idRe) || [])[1] || null;",
+            "const status = (cell.match(/(待提交|审核中|审核驳回|审核通过|已下架|售卖中|草稿)/) || [])[1] || null;",
+            "const stamp = cell.match(/(\\d{4}\\/\\d{2}\\/\\d{2})(\\d{2}:\\d{2}:\\d{2})/);",
+            "const createdAt = stamp ? stamp[1] + ' ' + stamp[2] : null;",
+            "/* 「没找到标题」和「找到了但没 ID」是两件事,分开说 —— 前者多半是列表还没灌进这一行",
+            "   或标题被改写,后者说明行在但读数不对。含糊成一句话会把人支去查错的地方。 */",
+            "const reason = productId",
+            "  ? (mode === 'draft' && checkErrors.length ? '填写检查未通过，已保存草稿：' + checkErrors.join('；') : undefined)",
+            "  : (at < 0 ? '回执页全文里没有匹配标题的内容（已点击' + (mode === 'publish' ? '发布商品' : '保存草稿') + '并跳到回执页）' : '回执页找到了标题但没读到商品 ID');",
+            "const missingRequired = [...new Set([...(checked && Array.isArray(checked.missingRequired) ? checked.missingRequired : []), ...checkErrors].filter(item => typeof item === 'string' && item.trim()).map(item => item.trim()))];",
+            "const receipt = { ok: !!productId, mode, reason, missingRequired, productId, status, createdAt, title, receiptUrl: typeof page.url === 'string' ? page.url : undefined, productUrl: null, productUrlSource: null, productUrlNote: 'readContent 只给页面文本，行内的 record 与锚点都取不到 —— 猜 URL 格式不如如实留空' };",
+            "const draft = receipt.mode === 'draft' && ['待提交', '草稿'].includes(receipt.status);",
+            "const published = receipt.mode === 'publish' && ['审核中', '审核驳回', '审核通过', '已下架', '售卖中'].includes(receipt.status);",
+            "const verified = receipt.ok === true && typeof receipt.productId === 'string' && !!receipt.productId.trim() && (draft || published);",
+            "const safeUrl = value => typeof value === 'string' && /^https?:\\/\\//.test(value.trim()) ? value.trim() : undefined;",
+            "const outcome = { status: verified ? (draft ? 'draft_saved' : 'published') : 'needs_verification', label: verified ? (draft ? '草稿已保存' : '已提交发布') : '待核验', level: verified ? 'success' : 'warning', reason: verified ? (receipt.reason || '回执确认' + (draft ? '草稿已保存' : '发布已提交') + '（' + receipt.status + '）') : (receipt.reason || '操作可能已发生，缺少一致有效的回执，请核验商品状态'), missingRequired };",
+            "if (verified) {",
+            "  outcome.resourceId = receipt.productId;",
+            "  const receiptUrl = safeUrl(receipt.receiptUrl);",
+            "  if (receiptUrl) outcome.receiptUrl = receiptUrl;",
+            "}",
+            "return { ...receipt, productId: typeof receipt.productId === 'string' ? receipt.productId : null, status: typeof receipt.status === 'string' ? receipt.status : null, outcome };"
+          ]
+        }
+      }
+    },
+    {
+      "goal": "关闭本次发布用的 tab（窗口随最后一个 tab 一同关闭），不留孤儿窗口。本 book 第一步就是 browser.newWindow —— 窗口是这一轮自己开的，收回也该由自己做，和 1688-random-offer-snatch / doudian-category-tree 同一约定。框架的 closeTrackedTabs 只在失败/escalate 时兜底，成功路径不管，所以漏掉这一步的后果是【每成功一次留一个「草稿箱」窗口】（连着回归九个商品后堆了九个，靠肉眼才发现）。放在读完回执之后：出参已经拿到，关窗不影响产出。（gate 用 receiptReady：本步的前置条件就是「已经在回执页」，即上一步读完出参的那个页面——book v2 要求每个非引导步都声明门，与 1688-random-offer-snatch 的末步 closeTab 同一写法。）",
+      "page": "doudian",
+      "verify": {
+        "actionSucceeded": true
+      },
+      "action": {
+        "method": "browser.closeTab",
+        "params": {}
+      },
+      "gate": {
+        "all": [
+          "receiptReady"
+        ]
+      }
+    }
+  ],
+  "outputSchema": {
+    "type": "object",
+    "required": [
+      "ok",
+      "productId",
+      "status",
+      "outcome"
+    ],
+    "properties": {
+      "outcome": {
+        "type": "object",
+        "x-bcp-business-outcome": true,
+        "required": [
+          "status",
+          "reason",
+          "missingRequired"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "minLength": 1
+          },
+          "label": {
+            "type": "string"
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "success",
+              "warning",
+              "error",
+              "info"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "missingRequired": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "resourceId": {
+            "type": "string"
+          },
+          "resourceUrl": {
+            "type": "string",
+            "pattern": "^https?://"
+          },
+          "receiptUrl": {
+            "type": "string",
+            "pattern": "^https?://"
+          }
+        }
+      },
+      "ok": {
+        "type": "boolean",
+        "description": "是否成功拿到商品 ID"
+      },
+      "productId": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "抖店商品 ID（草稿箱行内的 ID:xxxxx）"
+      },
+      "status": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "执行状态，取自回执页行内文案。实测：草稿=「待提交」，发布=「售卖中」（该店铺直接过审）；抖店也可能给出「审核中」「审核驳回」等，此处不穷举"
+      },
+      "createdAt": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "抖店侧记录的创建时间，用于与本次运行对账"
+      },
+      "title": {
+        "type": "string",
+        "description": "用于匹配的商品标题，回显以便核对匹配对不对"
+      },
+      "reason": {
+        "type": "string",
+        "description": "ok=false 时的失败原因"
+      },
+      "mode": {
+        "type": "string",
+        "description": "本次落点：draft / publish"
+      },
+      "receiptUrl": {
+        "type": "string",
+        "description": "回执页地址（草稿箱或商品管理）"
+      },
+      "productUrl": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "商品自己的链接。优先取回执行的 React record.product_url（抖店自己的行数据，权威来源）；取不到才退回行内锚点。两者都没有时为 null 并在 productUrlNote 说明——猜 URL 格式不如如实留空。"
+      },
+      "productUrlNote": {
+        "type": "string",
+        "description": "productUrl 为 null 时的原因"
+      },
+      "productUrlSource": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "productUrl 的来源：record=取自行数据；anchor=取自行内锚点；null=没取到"
+      }
+    }
+  }
+}

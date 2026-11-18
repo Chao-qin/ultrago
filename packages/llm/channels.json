@@ -1,0 +1,77 @@
+{
+  "_readme": [
+    "这就是网关的模型表 —— 每一条对应一个你能调用的模型。",
+    "",
+    "id      — 【你调用时写在 model 里的名字】。不写就等于 model，多数时候不用起。",
+    "          两条 id 相同 = 同一个模型的多个来源，请求自动轮流落地（多把 key 就这么配）。",
+    "          想把两个同名上游分开调，就给它们不同的 id。",
+    "model   — 上游自己的模型名，发给上游用。",
+    "adapter — openai | ollama | lmstudio | opencode，或 src/adapters/custom/ 里你自己写的。",
+    "baseUrl — 上游地址，不含 /v1；CLI 类适配器（opencode）没有这一项。",
+    "apiKey  — 写 env.NAME，真值放 .env，这里永远只存引用。",
+    "options — 适配器私有参数。写错的键会让网关拒绝启动并提示该改成什么。",
+    "          numCtx（ollama：上下文窗口，不给会掉回 2048 并静默截断）、",
+    "          think（ollama）、maxTokensField（openai：o 系列填 max_completion_tokens）、",
+    "          agent/variant/preambleDir/systemPreamble（opencode）。",
+    "maxConcurrency — 这条上游最多同时接几个请求。不填 = 该渠道不限（顶层 limits 仍然管着）。",
+    "          它是【上游的属性】：本机 Ollama 共享一块显存，云厂商有各自的 RPM。",
+    "          超限的请求【排队等待】而不是立刻失败，等多久由请求自己的",
+    "          X-BCP-Request-Timeout-Ms 预算决定。",
+    "pricing — { inputPer1M, outputPer1M, currency? }，照厂商价格页上「每 100 万 token」的数字填。",
+    "          不填 = 这条渠道的调用不核算花费（界面显示「—」，【不是 0】）。",
+    "          0 是合法的：「声明为免费」和「没声明」是两件不同的事。",
+    "          多个币种在统计里【分开给】，永远不合成一个数 —— 汇率不是这个网关该知道的东西。",
+    "capabilities — [\"vision\",\"json\",\"tools\"…] 能力标签。【人工声明、仅供挑选】：",
+    "          网关既不据它路由，也不据它拒绝请求。填错会误导人，但不会让任何调用失败。",
+    "",
+    "顶层还有两块（不在 channels 数组里）：",
+    "aliases — { \"task.vision\": [\"首选模型\", \"备胎模型\"] } 用途别名，让调用方写用途而不是",
+    "          写死模型。值是一条【有序的备胎链】：首选的所有渠道都失败（且失败是可重试",
+    "          的那类）时才落到下一个。写单个字符串是「只有首选」的简写。",
+    "          一层，不递归。【链上任何一个指向不存在的模型都会让网关拒绝启动】—— 这正是",
+    "          当年 `local` 别名失效、整条流水线每一发都 404 却不报错在定义处的正解。",
+    "          别名与真实模型名重名同样拒绝：那样它永远不会生效，却一声不吭。",
+    "limits  — { maxConcurrency } 全局并发上限，所有渠道加起来。它是【本机的属性】。",
+    "",
+    "同一个 id 配多条 = 多把 key 自动分摊【并且自动 failover】：429/5xx/网络错会换下一条重试，",
+    "400/401/404 不会（换谁都是同一个答案）。流式一旦开始写出就不再重试。",
+    "",
+    "入站 API key 不在这个文件里 —— 它在同目录的 keys.json（不进仓，只存哈希）。",
+    "这个文件是【进仓】的，所以 apiKey 那栏永远只该写 env.NAME 引用。",
+    "",
+    "本机 Ollama 不用写在这里 —— 网关按 .env 的 BCP_LLM_MODEL 自动推导一条。",
+    "opencode 同理不用填 baseUrl —— 它打 .env 的 BCP_LLM_OPENCODE_PORT 指定的",
+    "受管服务端（由 scripts/opencode.sh 起停，跟你自己开的 opencode 互不干扰）。"
+  ],
+  "channels": [
+    {
+      "adapter": "opencode",
+      "model": "opencode/mimo-v2.6-flash-free"
+    },
+    {
+      "adapter": "openai",
+      "baseUrl": "https://aihub.top",
+      "apiKey": "env.AIHUB_API_KEY",
+      "model": "gpt-5.6-luna",
+      "options": {
+        "maxTokensField": "max_completion_tokens"
+      }
+    },
+    {
+      "adapter": "openai",
+      "baseUrl": "https://aihub.top",
+      "apiKey": "env.AIHUB_API_KEY",
+      "model": "gpt-5.6-terra",
+      "options": {
+        "maxTokensField": "max_completion_tokens"
+      }
+    },
+    {
+      "id": "群友福利",
+      "adapter": "openai",
+      "model": "gemini-3.8-flash",
+      "baseUrl": "https://vulcanapi.com",
+      "apiKey": "env.VULCAN_API_KEY"
+    }
+  ]
+}

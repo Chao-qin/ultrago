@@ -1,0 +1,691 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bcp.local/schemas/canonical-product.schema.json",
+  "title": "Canonical product",
+  "description": "平台无关的商品中间层。字段语义面向人和填表单流程；取值约束硬性对齐抖店 /product/addV2（https://op.jinritemai.com/docs/api-docs/14/249，2026-08-05 版）。每个字段的 x-doudian 标注它投影到 addV2 的哪个入参 —— 那是唯一的映射真相来源，改这里必须同步改 doudian-addv2.schema.json。价格在本层一律用【元】；转【分】只发生在投影层。",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "source",
+    "title",
+    "category",
+    "brand",
+    "images",
+    "skus",
+    "listing",
+    "qualityReport"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": 2,
+      "description": "本 canonical schema 的版本。结构不兼容变更时必须递增。v2 相对 v1：attributes[] 增加 doudianValues[]，承载 product_format_new 需要的 value_id。"
+    },
+    "source": {
+      "type": "object",
+      "description": "采集溯源信息。不投影到抖店，仅用于审计、查重和回溯。",
+      "required": [
+        "platform",
+        "sourceId",
+        "sourceUrl",
+        "captureMethod"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "platform": {
+          "enum": [
+            "1688",
+            "taobao",
+            "tmall"
+          ],
+          "description": "来源平台。新增平台时在此扩展枚举。"
+        },
+        "sourceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "来源平台的商品 ID（1688 的 offerId）。查重的唯一键。",
+          "x-doudian": "outer_product_id（推荐用它做外部商家编码，抖店侧可据此判重）"
+        },
+        "sourceUrl": {
+          "type": "string",
+          "format": "uri"
+        },
+        "captureMethod": {
+          "type": "string",
+          "minLength": 1,
+          "description": "采集通道，如 browser-dom。用于判断数据可信度。"
+        },
+        "capturedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "采集时刻。用于判断素材是否过期。"
+        }
+      }
+    },
+    "title": {
+      "type": "object",
+      "description": "商品标题。抖店对长度有硬下限，1688 标题常常超长，两头都要卡。",
+      "required": [
+        "text"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 60,
+          "pattern": "^[^\\uD800-\\uDFFF]+$",
+          "description": "抖店硬约束：至少 8 个字符（4 个汉字），最多 60 个字符（30 个汉字），不能含 emoji。pattern 通过禁止 UTF-16 代理对来排除绝大多数 emoji。注意抖店按【字符】计数，一个汉字算 2 个字符 —— 校验器必须按抖店口径算，不能用 len()。",
+          "x-doudian": "name（必填）"
+        },
+        "sourceText": {
+          "type": "string",
+          "description": "来源平台原标题，未经改写。保留用于回溯和对比，不投影。"
+        },
+        "shortName": {
+          "type": "string",
+          "maxLength": 20,
+          "description": "导购短标题，用于物流打单和搜索。留空则抖店自动生成。",
+          "x-doudian": "short_product_name（选填）"
+        }
+      }
+    },
+    "category": {
+      "type": "object",
+      "description": "类目。来源类目名和抖店叶子类目 ID 是两套体系，必须分开存。",
+      "required": [
+        "sourceName",
+        "doudianLeafId"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "sourceName": {
+          "type": "string",
+          "description": "来源平台类目名。1688 详情页常常抓不到（实测为空字符串），允许为空。"
+        },
+        "doudianLeafId": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "抖店叶子类目 ID。【本期未实现映射】：值为 null 时必须在 qualityReport.pending 里登记，填表单阶段走人工选类目。非 null 时必须是叶子类目，中间层类目会被抖店拒绝。",
+          "x-doudian": "category_leaf_id（必填）"
+        },
+        "doudianPath": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "抖店类目全路径，人可读，便于人工核对选得对不对。不投影。"
+        }
+      }
+    },
+    "brand": {
+      "type": "object",
+      "description": "品牌。抖店的无品牌不是留空，而是一个特定 ID。",
+      "required": [
+        "doudianBrandId"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "sourceName": {
+          "type": "string",
+          "description": "来源属性里的品牌名（1688 常见值就是「无」）。"
+        },
+        "doudianBrandId": {
+          "type": "integer",
+          "default": 596120136,
+          "description": "抖店品牌 ID，通过 /brand/list 按类目获取。官方规定无品牌必须传 596120136 —— 不是留空、不是 0。",
+          "x-doudian": "standard_brand_id（选填，但无品牌时必须显式传 596120136）"
+        },
+        "useBrandNameInTitle": {
+          "type": "boolean",
+          "default": false,
+          "description": "是否在标题里使用品牌名。勾选时抖店要求接入 /product/getRecommendName。",
+          "x-doudian": "use_brand_name"
+        }
+      }
+    },
+    "attributes": {
+      "type": "array",
+      "description": "商品属性候选。抖店的类目属性是 property_id 键控的，值也是 value_id 键控的 —— 两者都要按类目查 /product/getCatePropertyV2（或商家后台 getSchema）才能确定。本层把【来源语义】和【抖店映射结果】分开存：sourceName/rawValue/values 是来源侧，doudianPropertyId/doudianValues 是映射侧。v1 只有 property_id 而没有 value_id，导致解析出的组合在 canonical 里无处可放，投影到 product_format_new 时缺一半信息。",
+      "items": {
+        "type": "object",
+        "required": [
+          "sourceName",
+          "rawValue",
+          "values"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "sourceName": {
+            "type": "string",
+            "minLength": 1,
+            "description": "来源属性名，如「材质」"
+          },
+          "rawValue": {
+            "type": "string",
+            "minLength": 1,
+            "description": "来源属性原值，未拆分"
+          },
+          "values": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            },
+            "description": "拆分后的候选值。一个来源值可能对应多个抖店属性值。"
+          },
+          "doudianPropertyId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "default": null,
+            "description": "抖店属性项 ID（product_format_new 的 key）。null 时填表单阶段人工填。"
+          },
+          "doudianValues": {
+            "type": "array",
+            "default": [],
+            "description": "映射到抖店后的属性值列表，直接对应 product_format_new 里该 property_id 的数组。与 values 并列而不是替换它：values 是来源侧候选值（字符串），doudianValues 是映射结果。用数组是因为 product_format_new 每个 property_id 本来就收多个值（多选属性）。空数组表示【尚未映射】，不表示【该属性无值】—— 与 doudianPropertyId 为 null 同样要在 qualityReport.pending 里登记。",
+            "items": {
+              "type": "object",
+              "required": [
+                "valueId",
+                "name"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "valueId": {
+                  "type": "integer",
+                  "description": "抖店属性值 ID，投影为 product_format_new 里的 value 字段（整数，不是字符串）。来源是类目属性数据 options 的二元组第一项 —— 那里是字符串，投影层必须转 int。"
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "抖店属性值名，投影为 name 字段。必须是抖店侧的值名，不是来源平台的原值 —— 实测例：来源材质「帆布」不在目标类目 77 个选项内，映射结果是「毛绒」。"
+                },
+                "diyType": {
+                  "type": "integer",
+                  "enum": [
+                    0,
+                    1
+                  ],
+                  "default": 0,
+                  "description": "投影为 diy_type。0 = 取自类目选项枚举，1 = 自定义值。保留这个字段而不是恒填 0，是因为「来源值不在类目选项里」是实测发生过的情况；把它压成常量会让自定义值和枚举值在数据里长得一样。"
+                },
+                "sourceValue": {
+                  "type": "string",
+                  "description": "这条映射对应的来源值，用于回溯「帆布 → 毛绒」这种非恒等映射。不投影。"
+                }
+              }
+            }
+          }
+        }
+      },
+      "x-doudian": "product_format_new（选填，格式 {\"property_id\":[{\"value\":int,\"name\":str,\"diy_type\":0}]}；key 取 doudianPropertyId，数组取 doudianValues[]）"
+    },
+    "images": {
+      "type": "object",
+      "description": "素材。抖店对张数、尺寸、体积都有硬门槛，且 main+detail+specPics 有【合计】上限，单字段 maxItems 卡不住 —— 合计校验必须由校验器执行，见 x-doudian-total-limit。",
+      "required": [
+        "main",
+        "detail"
+      ],
+      "additionalProperties": false,
+      "x-doudian-total-limit": "pic + description + spec_pic 三者图片数量总和不得超过 50 张",
+      "x-doudian-total-max": 50,
+      "properties": {
+        "main": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "items": {
+            "$ref": "#/$defs/image"
+          },
+          "description": "商品轮播图，第一张即主图。抖店硬约束：最多 5 张，每张至少 600x600，单张不超过 5M。",
+          "x-doudian": "pic（必填，投影时用 | 拼成字符串）"
+        },
+        "detail": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 45,
+          "items": {
+            "$ref": "#/$defs/image"
+          },
+          "description": "商品详情图。抖店的商品描述目前只支持图片。maxItems 45 是留给 main(5) 之后的保守余量，真实约束是三者合计 50。",
+          "x-doudian": "description（必填，投影时用 | 拼成字符串）"
+        },
+        "whiteBackground": {
+          "$ref": "#/$defs/image",
+          "description": "白底图，比例必须 1:1，且仅素材中心 URL 有效 —— 外链会被拒。抖店提供 /product/imgWhiteGroundCheck 做校验（需授权）。",
+          "x-doudian": "white_back_ground_pic_url"
+        },
+        "longPic": {
+          "$ref": "#/$defs/image",
+          "description": "3:4 长图，同样仅素材中心 URL 有效。",
+          "x-doudian": "long_pic_url"
+        },
+        "mainThreeToFour": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "$ref": "#/$defs/image"
+          },
+          "description": "3:4 商品主图，最多 5 张，单张不超过 5M。",
+          "x-doudian": "main_image_three_to_four"
+        },
+        "removed": {
+          "type": "array",
+          "description": "被剔除的素材及原因。不投影，但必须保留以便回溯（水印/侵权判定是有误判风险的）。",
+          "items": {
+            "type": "object",
+            "required": [
+              "url",
+              "reason"
+            ],
+            "properties": {
+              "url": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "detectedBy": {
+                "type": "string",
+                "description": "判定来源，如 doubao-ask / preprocess"
+              }
+            }
+          }
+        }
+      }
+    },
+    "specs": {
+      "type": "array",
+      "description": "规格维度定义（颜色/尺码等）。抖店的 specs 是 ^ 和 | 分隔的字符串，本层用结构化数组，投影时再拼。",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "values"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "规格项名，如「颜色」"
+          },
+          "values": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "value"
+              ],
+              "properties": {
+                "value": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "imageUrl": {
+                  "type": "string",
+                  "description": "该规格值对应的规格图。只有主规格（第一维）支持配图。"
+                }
+              }
+            }
+          }
+        }
+      },
+      "x-doudian": "specs / spec_info（投影为 颜色|红色,黑色^尺码|S,M；spec_pic 从主规格的 imageUrl 逗号拼接）"
+    },
+    "skus": {
+      "type": "array",
+      "minItems": 1,
+      "description": "SKU 列表。数量必须等于各规格维度取值数的笛卡尔积 —— 抖店会校验 sku 数和规格组合数一致。",
+      "items": {
+        "type": "object",
+        "required": [
+          "specs",
+          "price",
+          "stock"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "specs": {
+            "type": "array",
+            "minItems": 1,
+            "description": "该 SKU 在每个规格维度上的取值，顺序与 specs 数组一致。",
+            "items": {
+              "type": "object",
+              "required": [
+                "name",
+                "value"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "value": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          "price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "multipleOf": 0.01,
+            "description": "售价，单位【元】，两位小数。投影到 addV2 时乘 100 转【分】—— 这是本设计里最容易出 100 倍事故的地方，投影层必须有断言。",
+            "x-doudian": "spec_prices[].price（单位分，投影时 × 100 并取整）"
+          },
+          "sourcePrice": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "来源采购价，单位【元】。不投影，用于回溯定价和核算利润。"
+          },
+          "stock": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "库存。0 表示该 SKU 不可售但保留（抖店允许），若要剔除应从数组移除而不是置 0。",
+            "x-doudian": "spec_prices[].stock_num"
+          },
+          "merchantCode": {
+            "type": "string",
+            "description": "商家编码。",
+            "x-doudian": "spec_prices[].code"
+          },
+          "outerSkuId": {
+            "type": "string",
+            "description": "外部 SKU ID，用于和上游系统对账。",
+            "x-doudian": "spec_prices[].outer_sku_id"
+          },
+          "weightGram": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "该 SKU 重量（克）。抖店的 delivery_infos 里按 info_type=weight 传。",
+            "x-doudian": "spec_prices[].delivery_infos[{info_type:weight, info_value, info_unit:g}]"
+          }
+        }
+      }
+    },
+    "pricing": {
+      "type": "object",
+      "description": "定价策略的审计记录。不投影 —— 抖店只收最终价，但我们需要知道这个价是怎么来的。",
+      "required": [
+        "strategy",
+        "currency"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "strategy": {
+          "type": "string",
+          "minLength": 1,
+          "description": "策略标识，如 source_price_plus_fixed_amount"
+        },
+        "markup": {
+          "type": "number",
+          "description": "固定加价额（元）"
+        },
+        "currency": {
+          "const": "CNY"
+        },
+        "marginChecked": {
+          "type": "boolean",
+          "default": false,
+          "description": "是否已校验加价能覆盖平台佣金 + 运费。false 表示【未校验是否会亏本】，不是表示不亏。"
+        }
+      }
+    },
+    "shipping": {
+      "type": "object",
+      "description": "物流与发货。这些字段来自 shop-profile，raw.json 推导不出。",
+      "additionalProperties": false,
+      "properties": {
+        "freightTemplateId": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "运费模板 ID，通过 /freightTemplate/list 获取。0 表示包邮。",
+          "x-doudian": "freight_id（必填）"
+        },
+        "weightGram": {
+          "type": "number",
+          "description": "商品重量（克）",
+          "x-doudian": "weight + weight_unit=1(g)"
+        },
+        "presellType": {
+          "type": "integer",
+          "enum": [
+            0,
+            1,
+            2
+          ],
+          "default": 0,
+          "description": "发货模式：0 现货发货，1 预售发货，2 阶梯发货。",
+          "x-doudian": "presell_type"
+        },
+        "deliveryDelayDay": {
+          "type": "integer",
+          "description": "承诺发货时间（天）。现货和阶梯模式必填。支持 9999(当日发) / 1(次日发) / 2(48小时发)，具体范围查 /product/getProductUpdateRule。不传默认 2 天。",
+          "x-doudian": "delivery_delay_day"
+        }
+      }
+    },
+    "afterSale": {
+      "type": "object",
+      "description": "售后服务。来自 shop-profile。",
+      "additionalProperties": false,
+      "properties": {
+        "sevenDayReturnPolicy": {
+          "type": "string",
+          "description": "7天无理由选项，格式「N天-政策代号」，N 只支持 7 和 15。",
+          "x-doudian": "after_sale_service.supply_day_return_selector"
+        },
+        "damagedOrderReturn": {
+          "type": "integer",
+          "enum": [
+            0,
+            1
+          ],
+          "description": "坏损包退：0 不支持，1 支持。",
+          "x-doudian": "after_sale_service.damaged_order_return"
+        }
+      }
+    },
+    "listing": {
+      "type": "object",
+      "description": "发布行为配置。全部来自 shop-profile，与商品内容无关。",
+      "required": [
+        "productType",
+        "reduceType",
+        "commit",
+        "serviceMobile"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "productType": {
+          "type": "integer",
+          "enum": [
+            0,
+            3,
+            6,
+            7
+          ],
+          "default": 0,
+          "description": "0 普通，3 虚拟，6 玉石闪购，7 云闪购。",
+          "x-doudian": "product_type（必填）"
+        },
+        "reduceType": {
+          "type": "integer",
+          "enum": [
+            1,
+            2
+          ],
+          "default": 1,
+          "description": "减库存类型：1 拍下减库存，2 付款减库存。",
+          "x-doudian": "reduce_type（必填）"
+        },
+        "commit": {
+          "type": "boolean",
+          "default": false,
+          "description": "false 仅保存草稿，true 保存并提审。默认 false —— 自动化链路不应默认直接提审。",
+          "x-doudian": "commit（必填）"
+        },
+        "serviceMobile": {
+          "type": "string",
+          "minLength": 1,
+          "description": "客服电话。",
+          "x-doudian": "mobile（必填）"
+        },
+        "startSaleType": {
+          "type": "integer",
+          "enum": [
+            0,
+            1
+          ],
+          "default": 1,
+          "description": "审核通过后：0 立即上架售卖，1 放入仓库。默认 1，避免自动化链路把未经人工确认的商品直接推到线上。",
+          "x-doudian": "start_sale_type"
+        },
+        "pickupMethod": {
+          "type": "string",
+          "enum": [
+            "0",
+            "1",
+            "2",
+            "3"
+          ],
+          "default": "0",
+          "description": "提取方式：0 普通商品用物流，1 虚拟无需物流，2 虚拟用电子凭证，3 虚拟充值直连。",
+          "x-doudian": "pickup_method"
+        }
+      }
+    },
+    "qualifications": {
+      "type": "array",
+      "description": "类目资质。【本期未实现】需按类目查 /product/qualificationConfig 才知道要哪些，类目未定时无法确定，空数组不代表不需要。",
+      "items": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "value": {
+            "type": "string"
+          },
+          "imageUrls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "x-doudian": "quality_list"
+    },
+    "qualityReport": {
+      "type": "object",
+      "description": "检测结果。errors 阻断，risks 和 warnings 不阻断但必须回显。pending 是【本期已知未实现】的空缺，与 risk 语义不同 —— 它表示「这里必须有值但我们还没能力算出来」。",
+      "required": [
+        "errors",
+        "risks",
+        "warnings",
+        "pending"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "errors": {
+          "$ref": "#/$defs/findingList",
+          "description": "阻断项：来源无法定位、页面被拦截、所有主图不可用等。"
+        },
+        "risks": {
+          "$ref": "#/$defs/findingList",
+          "description": "风险项：品牌/IP、极限词、授权、资质、水印、联系方式。不得当作 error 中止流程。"
+        },
+        "warnings": {
+          "$ref": "#/$defs/findingList",
+          "description": "非阻断提示：采集不完整、可选字段缺失。"
+        },
+        "pending": {
+          "$ref": "#/$defs/findingList",
+          "description": "已知空缺项，如 category.doudianLeafId 为 null、attributes 的 doudianPropertyId 未映射、qualifications 未查。填表单阶段必须逐项人工兜底。"
+        }
+      }
+    },
+    "agentNotes": {
+      "type": "string",
+      "description": "处理备注。不投影。"
+    }
+  },
+  "$defs": {
+    "image": {
+      "type": "object",
+      "required": [
+        "url"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "width": {
+          "type": "integer",
+          "description": "像素宽。主图抖店要求 ≥600。未探测时省略 —— 省略表示未知，不表示合格。"
+        },
+        "height": {
+          "type": "integer",
+          "description": "像素高。主图抖店要求 ≥600。"
+        },
+        "bytes": {
+          "type": "integer",
+          "description": "字节数。抖店单张上限 5M（5242880）。未探测时省略。"
+        },
+        "checked": {
+          "type": "boolean",
+          "default": false,
+          "description": "是否已过水印/侵权检测。false 表示【未检测】，不表示干净。"
+        }
+      }
+    },
+    "findingList": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(_[a-z0-9]+)*$",
+            "description": "机器可读的稳定标识，snake_case。用它做统计和回归断言，不要用 message。"
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "description": "人可读说明"
+          },
+          "field": {
+            "type": "string",
+            "description": "关联字段的 JSON Pointer，如 /title/text"
+          },
+          "evidence": {
+            "type": "string",
+            "description": "判定依据，如命中的关键词、检测到的水印位置"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,147 @@
+{
+  "schemaVersion": 2,
+  "name": "doudian-shopprofile",
+  "goal": "采集当前抖店店铺资料与发布配置，输出可写入 SchemaRecord 的 shop profile 快照",
+  "paramSchemaRef": "book-input-doudian-shopprofile@1",
+  "params": [],
+  "outputSchemaRef": "doudian-shop-profile@1",
+  "outputSchema": {
+    "type": "object",
+    "required": [
+      "shopId",
+      "shopName",
+      "status",
+      "sourceUrl",
+      "capturedAt"
+    ]
+  },
+  "pages": {
+    "shop": {
+      "description": "抖店店铺资料与售后联系电话设置页",
+      "url": "https://fxg.jinritemai.com/ffa/grs-new/qualification/entity-info",
+      "signals": {
+        "profileReady": {
+          "condition": {
+            "all": [
+              {
+                "urlIncludes": "/ffa/grs-new/qualification/entity-info"
+              }
+            ]
+          },
+          "timeoutMs": 30000,
+          "description": "店铺资料页已打开"
+        },
+        "contactReady": {
+          "condition": {
+            "all": [
+              {
+                "urlIncludes": "/ffa/maftersale/aftersale/contact"
+              }
+            ]
+          },
+          "timeoutMs": 30000,
+          "description": "售后联系电话页已打开"
+        }
+      }
+    }
+  },
+  "steps": [
+    {
+      "goal": "打开当前店铺管理页并等待店铺资料出现",
+      "page": "shop",
+      "action": {
+        "method": "browser.newWindow",
+        "params": {
+          "url": "https://fxg.jinritemai.com/ffa/grs-new/qualification/entity-info",
+          "focused": false,
+          "minimized": false,
+          "restoreFocus": true
+        }
+      },
+      "verify": {
+        "urlIncludes": "fxg.jinritemai.com/ffa/grs-new/qualification"
+      },
+      "onFail": "retry",
+      "maxRetries": 1
+    },
+    {
+      "goal": "采集店铺身份资料，过滤敏感证件字段",
+      "page": "shop",
+      "gate": {
+        "all": [
+          "profileReady"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": "(() => { const text = document.body.innerText || ''; const pick = (label) => { const m = text.match(new RegExp(label + '\\s*\\n([^\\n]+)')); return m ? m[1].trim() : null; }; const shopId = pick('店铺ID'); const shopName = (text.match(/店铺管理\\s*\\n(?:查看完整信息\\s*\\n)?([^\\n]+)\\s*\\n(?:正常营业|店铺类型)/) || [])[1] || null; if (!shopId || !shopName) return { ok: false, why: 'shop-profile-not-found', pageText: text.slice(0, 500) }; return { shopId, shopName, status: text.includes('正常营业') ? '正常营业' : pick('店铺状态'), shopType: pick('店铺类型'), openedAt: pick('开店日期'), sourceUrl: location.href, capturedAt: new Date().toISOString() }; })()"
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "true"
+        }
+      },
+      "onFail": "escalate"
+    },
+    {
+      "goal": "进入客服电话设置页并采集售后电话",
+      "page": "shop",
+      "gate": {
+        "all": [
+          "profileReady"
+        ]
+      },
+      "action": {
+        "method": "browser.navigate",
+        "params": {
+          "url": "https://fxg.jinritemai.com/ffa/maftersale/aftersale/contact"
+        }
+      },
+      "verify": {
+        "urlIncludes": "fxg.jinritemai.com/ffa/maftersale/aftersale/contact"
+      },
+      "onFail": "retry",
+      "maxRetries": 1
+    },
+    {
+      "goal": "返回合并后的店铺 profile 结果",
+      "page": "shop",
+      "gate": {
+        "all": [
+          "contactReady"
+        ]
+      },
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": "(() => { const text = document.body.innerText || ''; const m = text.match(/手机号\\s*\\n(\\d{3}\\s*\\d{4}\\s*\\d{4})/); return { serviceMobile: m ? m[1].replace(/\\s+/g, '') : null, sourceUrl: location.href, capturedAt: new Date().toISOString() }; })()"
+        }
+      },
+      "verify": {
+        "evalCheck": {
+          "code": "true"
+        }
+      },
+      "onFail": "escalate"
+    },
+    {
+      "goal": "关闭本次采集创建的工作 tab，窗口随最后一个 tab 一并关闭",
+      "page": "shop",
+      "gate": {
+        "all": [
+          "contactReady"
+        ]
+      },
+      "action": {
+        "method": "browser.closeTab",
+        "params": {}
+      },
+      "verify": {
+        "actionSucceeded": true
+      },
+      "onFail": "escalate"
+    }
+  ]
+}

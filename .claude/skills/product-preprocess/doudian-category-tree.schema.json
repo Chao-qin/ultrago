@@ -1,0 +1,229 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bcp.local/schemas/doudian-category-tree.schema.json",
+  "title": "Doudian category tree",
+  "description": "抖店商品类目树。从商品发布页的类目接口 categoryOptionsN 逐级下钻抓取，保留树形（tree）与扁平（flat）两份视图。leaf 的 category.doudianLeafId 指向此树 is_leaf=true 的节点。节点【原样】保留抖店返回的全部字段（id/name/parent_cid/level/enable/is_leaf/industry_status/extra）+ 本地补的 path/children —— 2026-09-03 之前压成 5 元组，enable/industry_status/extra 被丢弃。由 resource/playbooks/doudian-category-schema.json 与属性、资质【同一次爬取】产出，三份共享一个 capturedAt，cid 天然对得上。",
+  "type": "object",
+  "required": [
+    "source",
+    "endpoint",
+    "capturedAt",
+    "stats",
+    "tree",
+    "flat"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "source": {
+      "type": "string",
+      "description": "采集来源描述"
+    },
+    "endpoint": {
+      "type": "string",
+      "description": "采集用的 API 端点"
+    },
+    "capturedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "采集时刻 (ISO 8601)"
+    },
+    "stats": {
+      "$ref": "#/$defs/stats"
+    },
+    "tree": {
+      "type": "array",
+      "description": "树形视图，一级类目数组，每个节点递归嵌套 children",
+      "items": {
+        "$ref": "#/$defs/treeNode"
+      }
+    },
+    "flat": {
+      "type": "array",
+      "description": "扁平视图，全部类目节点（含非叶子），带 path 字段用于文本搜索",
+      "items": {
+        "$ref": "#/$defs/flatNode"
+      }
+    }
+  },
+  "$defs": {
+    "stats": {
+      "type": "object",
+      "required": [
+        "total",
+        "leaves",
+        "roots",
+        "byLevel"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "total": {
+          "type": "integer",
+          "description": "节点总数"
+        },
+        "leaves": {
+          "type": "integer",
+          "description": "叶子节点数"
+        },
+        "roots": {
+          "type": "integer",
+          "description": "一级类目数"
+        },
+        "byLevel": {
+          "type": "object",
+          "description": "按层级统计数量，key 格式 L1/L2/...",
+          "additionalProperties": {
+            "type": "integer"
+          }
+        },
+        "chunks": {
+          "type": "integer",
+          "description": "采集分批数"
+        },
+        "nodeFields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "本次采集实际保留的节点字段名，按 flat[0] 的键序。写进产物里，这样「有没有漏字段」是可核对的事实，而不是要去读采集代码才知道。"
+        }
+      }
+    },
+    "treeNode": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "level",
+        "parent_cid",
+        "is_leaf",
+        "children"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "integer",
+          "description": "抖店类目 ID (cid)"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "类目名称"
+        },
+        "level": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "层级深度，1 = 一级类目"
+        },
+        "parent_cid": {
+          "type": "integer",
+          "description": "父类目 ID，一级类目为 0"
+        },
+        "is_leaf": {
+          "type": "boolean",
+          "description": "是否叶子节点（可直接发布商品）"
+        },
+        "children": {
+          "type": "array",
+          "description": "子类目列表，叶子节点为空数组",
+          "items": {
+            "$ref": "#/$defs/treeNode"
+          }
+        },
+        "enable": {
+          "type": "integer",
+          "description": "抖店下发的启用标志。1 = 正常。原样保留 —— 2026-09-03 之前的采集把节点压成 5 元组，这个字段连同 industry_status / extra 一起被丢掉了。"
+        },
+        "industry_status": {
+          "type": "integer",
+          "description": "行业状态码，抖店下发，语义未公开。原样保留，不做解释。"
+        },
+        "extra": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "抖店下发的附加信息。⚠️ is_lack_qualification 看名字像「该类目缺资质」，但 2026-09-03 全量实测 4790 个节点里为真的是 0 个 —— 它给不了任何阻断信号。判类目资质要用 doudian-category-qualification.json 里的 qualification.items[*].required。",
+          "properties": {
+            "is_lack_qualification": {
+              "type": "boolean"
+            },
+            "lack_qualification_text": {
+              "type": "string"
+            },
+            "is_zero_entry": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "flatNode": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "level",
+        "parent_cid",
+        "is_leaf",
+        "path"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "integer",
+          "description": "抖店类目 ID (cid)"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "类目名称"
+        },
+        "level": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "层级深度"
+        },
+        "parent_cid": {
+          "type": "integer",
+          "description": "父类目 ID，一级类目为 0"
+        },
+        "is_leaf": {
+          "type": "boolean",
+          "description": "是否叶子节点"
+        },
+        "path": {
+          "type": "string",
+          "description": "从一级到当前节点的 / 分隔路径，如 玩具/创意手工玩具/创意DIY"
+        },
+        "enable": {
+          "type": "integer",
+          "description": "抖店下发的启用标志。1 = 正常。原样保留 —— 2026-09-03 之前的采集把节点压成 5 元组，这个字段连同 industry_status / extra 一起被丢掉了。"
+        },
+        "industry_status": {
+          "type": "integer",
+          "description": "行业状态码，抖店下发，语义未公开。原样保留，不做解释。"
+        },
+        "extra": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "抖店下发的附加信息。⚠️ is_lack_qualification 看名字像「该类目缺资质」，但 2026-09-03 全量实测 4790 个节点里为真的是 0 个 —— 它给不了任何阻断信号。判类目资质要用 doudian-category-qualification.json 里的 qualification.items[*].required。",
+          "properties": {
+            "is_lack_qualification": {
+              "type": "boolean"
+            },
+            "lack_qualification_text": {
+              "type": "string"
+            },
+            "is_zero_entry": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

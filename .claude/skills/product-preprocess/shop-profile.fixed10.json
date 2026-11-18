@@ -1,0 +1,7 @@
+{
+  "pricing": {
+    "strategy": "fixed_amount",
+    "markup": 10.0,
+    "minMarginYuan": 5.0
+  }
+}

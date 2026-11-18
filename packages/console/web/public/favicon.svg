@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="RPA Console">
+  <path fill="#101828" fill-rule="evenodd" d="M122 76h268c35.35 0 64 28.65 64 64v232c0 35.35-28.65 64-64 64H122c-35.35 0-64-28.65-64-64V140c0-35.35 28.65-64 64-64Zm10 94v194h209V170H132Zm208 18h114v136H340z"/>
+  <path d="M65 416h108c35.35 0 63-27.65 63-63v-79c0-29.82 24.18-53 54-53h70" fill="none" stroke="#3538CD" stroke-width="54" stroke-linecap="round" stroke-linejoin="round"/>
+  <path fill="#3538CD" d="M348 160c0-10.78 11.83-17.34 21.08-11.7l112.6 68.7c8.76 5.34 8.76 18.06 0 23.4l-112.6 68.7c-9.25 5.64-21.08-.92-21.08-11.7v-25.4h-53v-76h53v-35.4Z"/>
+</svg>

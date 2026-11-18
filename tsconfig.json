@@ -1,0 +1,27 @@
+{
+  // Root tsconfig — VS Code entry point for the monorepo IDE type checking.
+  // Each sub-project has its own tsconfig.json for actual builds.
+  // This file tells VS Code's TypeScript language server how to resolve
+  // `.js` extension imports (`moduleResolution: "Bundler"`) that the
+  // ESM-style projects use. Without this, VS Code's bundled TS may not
+  // understand the `./foo.js` → `./foo.ts` resolution and show spurious
+  // "Cannot find module" errors.
+  //
+  // NOTE: VS Code must use the WORKSPACE TypeScript version, not its bundled
+  // one. Press Cmd+Shift+P → "TypeScript: Select TypeScript Version" → pick
+  // the workspace version (5.9.3).
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true
+  },
+  "exclude": ["node_modules", "dist", ".output", "**/dist", "**/node_modules"]
+}

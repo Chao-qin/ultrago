@@ -1,0 +1,292 @@
+{
+  "name": "doudian-freight-templates",
+  "goal": "采集抖店当前店铺的全部运费模板关键字段(templateId / 名称 / 发货地区 / 运费类型 / 绑定商品数 / 最后修改时间 / 是否系统模板):从抖店商家后台进入「物流工具 → 运费模板」页,扫描所有 li.index_item 卡片,解析每张的字段,校验非空后写入 reports/。",
+  "paramSchemaRef": "book-input-doudian-freight-templates@1",
+  "outputSchemaRef": "book-output-nonempty-string@1",
+  "schemaVersion": 2,
+  "params": [
+    {
+      "name": "reportFile",
+      "required": true,
+      "default": "doudian-freight-templates.json",
+      "description": "输出文件名,相对 reports/ 目录。留空则用默认名。",
+      "schema": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  ],
+  "pages": {
+    "doudian": {
+      "description": "抖店商家后台 · 物流工具 → 运费模板（模板管理 tab 默认激活）",
+      "url": "https://fxg.jinritemai.com/ffa/morder/logistics/freight-list",
+      "signals": {
+        "pageLoaded": {
+          "condition": {
+            "all": [
+              {
+                "urlIncludes": "/ffa/morder/logistics/freight-list"
+              }
+            ]
+          },
+          "timeoutMs": 30000,
+          "description": "URL 已到运费模板页。只判 URL，不判就绪 —— 下一步的活就是等卡片渲染，在它前面再叠一道就绪门等于把同一件事等两遍。"
+        },
+        "templatesReady": {
+          "condition": {
+            "all": [
+              {
+                "urlIncludes": "/ffa/morder/logistics/freight-list"
+              },
+              {
+                "script": {
+                  "code": [
+                    "document.querySelectorAll('li[class*=\"index_item\"]').length > 0"
+                  ]
+                }
+              }
+            ]
+          },
+          "timeoutMs": 30000,
+          "description": "运费模板卡片已渲染。判据是【卡片真的出现了】而不是 settled —— 抖店后台这类页面常有长期挂着的请求，网络静默可能永远不成立；而卡片存在正是后面提取步骤唯一需要的前提。"
+        }
+      }
+    }
+  },
+  "deliveries": [
+    {
+      "kind": "file",
+      "artifact": "{{reportFile}}"
+    }
+  ],
+  "outputSchema": {
+    "type": "string",
+    "minLength": 1
+  },
+  "steps": [
+    {
+      "goal": "在后台窗口打开抖店「物流工具 → 运费模板」页(模板管理 tab 默认激活),焦点还给用户原窗口",
+      "verify": {
+        "urlIncludes": "/ffa/morder/logistics/freight-list",
+        "settled": true,
+        "noErrors": true
+      },
+      "onFail": "escalate",
+      "action": {
+        "method": "browser.newWindow",
+        "params": {
+          "url": "https://fxg.jinritemai.com/ffa/morder/logistics/freight-list",
+          "focused": false,
+          "minimized": false,
+          "restoreFocus": true
+        }
+      },
+      "page": "doudian"
+    },
+    {
+      "goal": "等运费模板 tablist 渲染(SPAN '运费模板' + 至少 1 张 li.index_item 卡片)",
+      "verify": {
+        "elementName": "运费模板",
+        "settled": true
+      },
+      "onFail": "retry",
+      "maxRetries": 3,
+      "action": {
+        "method": "browser.waitFor",
+        "params": {
+          "selector": "li[class*=\"index_item\"]",
+          "state": "visible",
+          "ms": 8000
+        }
+      },
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "pageLoaded"
+        ]
+      }
+    },
+    {
+      "goal": "从 DOM 提取所有 li.index_item 卡片:模板名 / templateId / 运费类型 / 发货地区 / 绑定商品数 / 最后修改时间 / 是否系统模板 / 是否只读。系统模板无 templateId(显示「不可修改」),其它卡片必须有 templateId。",
+      "verify": {
+        "noErrors": true,
+        "settled": true
+      },
+      "onFail": "rescan",
+      "maxRetries": 1,
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "return (() => {",
+            "  const parseCard = li => {",
+            "    // 收集卡片内所有叶子 text node",
+            "    const texts = [];",
+            "    const walker = document.createTreeWalker(li, NodeFilter.SHOW_TEXT, null);",
+            "    let n;",
+            "    while ((n = walker.nextNode())) {",
+            "      const t = (n.nodeValue || '').trim();",
+            "      if (t) texts.push(t);",
+            "    }",
+            "    // 把 'key：' 后面紧跟的 value 合并成一段(消除分裂的 textNode)",
+            "    const flat = [];",
+            "    for (let i = 0; i < texts.length; i++) {",
+            "      const t = texts[i];",
+            "      if (/[：:]$/.test(t) && texts[i + 1] && texts[i + 1] !== '|') {",
+            "        flat.push(t + texts[i + 1]);",
+            "        i++;",
+            "      } else if (t !== '|') {",
+            "        flat.push(t);",
+            "      }",
+            "    }",
+            "    const all = flat.join('|');",
+            "    const skipKeys =",
+            "      /^(模板ID|运费类型|发货地区|绑定商品数|最后修改时间|系统模板|展开|收起|复制|修改|删除|使用情况|直邮运费规则|中转运费规则|限售规则|收货地区|计费规则|默认)/;",
+            "    const nameCandidate = flat.find(",
+            "      t => t.length > 1 && !skipKeys.test(t) && !/^[\\d,，、 \\/:-]+$/.test(t)",
+            "    );",
+            "    const grab = key => {",
+            "      const re = new RegExp(key + '[：:]\\\\s*([^|]*?)(?=\\\\||$)');",
+            "      const m = all.match(re);",
+            "      return m ? m[1].trim() : null;",
+            "    };",
+            "    return {",
+            "      name: nameCandidate || null,",
+            "      templateId: grab('模板ID'),",
+            "      freightType: grab('运费类型'),",
+            "      shipFrom: grab('发货地区'),",
+            "      boundProductCount: grab('绑定商品数'),",
+            "      lastModified: grab('最后修改时间'),",
+            "      isSystemTemplate: /系统模板/.test(all),",
+            "      isReadOnly: /不可修改/.test(all)",
+            "    };",
+            "  };",
+            "  const lis = [...document.querySelectorAll('li[class*=\"index_item\"]')];",
+            "  if (lis.length === 0) throw new Error('no freight template cards found — page did not render');",
+            "  const cards = lis.map(parseCard);",
+            "  const userCards = cards.filter(c => !c.isSystemTemplate);",
+            "  const incomplete = userCards.filter(c => !c.templateId);",
+            "  if (incomplete.length) {",
+            "    throw new Error('user freight templates missing templateId: ' + JSON.stringify(incomplete));",
+            "  }",
+            "  return {",
+            "    capturedAt: new Date().toISOString(),",
+            "    source: '抖店商家后台 · 订单发货 · 物流工具 · 运费模板',",
+            "    totalCards: cards.length,",
+            "    userTemplates: userCards.length,",
+            "    systemTemplates: cards.length - userCards.length,",
+            "    cards",
+            "  };",
+            "})();"
+          ]
+        }
+      },
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "templatesReady"
+        ]
+      }
+    },
+    {
+      "goal": "把卡片数组包装成 JSON,校验每张有 name 且用户模板必有 templateId;若有失败直接抛错,不让半张卡片落到报告里",
+      "verify": {
+        "actionSucceeded": true
+      },
+      "onFail": "escalate",
+      "action": {
+        "method": "local.eval",
+        "params": {
+          "code": [
+            "const unwrap = r => {",
+            "  const v = r && r.value;",
+            "  if (v && typeof v === 'object' && v.truncated === true) {",
+            "    throw new Error(",
+            "      'eval result was TRUNCATED by browser eval size cap — the cards payload is too big; split the page first'",
+            "    );",
+            "  }",
+            "  return v && typeof v === 'object' && 'value' in v ? v.value : v;",
+            "};",
+            "const data = unwrap(results[results.length - 1]);",
+            "if (!data || !Array.isArray(data.cards) || data.cards.length === 0) {",
+            "  throw new Error(",
+            "    'extracted freight templates payload is empty or malformed: ' + JSON.stringify(data)",
+            "  );",
+            "}",
+            "for (const card of data.cards) {",
+            "  if (!card.name) throw new Error('every freight card must have a name: ' + JSON.stringify(card));",
+            "  if (!card.isSystemTemplate && !card.templateId) {",
+            "    throw new Error('user freight template missing templateId: ' + JSON.stringify(card));",
+            "  }",
+            "}",
+            "return JSON.stringify(",
+            "  {",
+            "    source: data.source,",
+            "    capturedAt: data.capturedAt,",
+            "    stats: {",
+            "      totalCards: data.totalCards,",
+            "      userTemplates: data.userTemplates,",
+            "      systemTemplates: data.systemTemplates",
+            "    },",
+            "    templates: data.cards.map(c => ({",
+            "      templateId: c.templateId ? String(c.templateId) : null,",
+            "      name: c.name,",
+            "      shipFrom: c.shipFrom,",
+            "      freightType: c.freightType,",
+            "      boundProductCount: c.boundProductCount ? Number(c.boundProductCount) : null,",
+            "      lastModified: c.lastModified,",
+            "      isSystemTemplate: !!c.isSystemTemplate,",
+            "      isReadOnly: !!c.isReadOnly",
+            "    }))",
+            "  },",
+            "  null,",
+            "  2",
+            ");"
+          ]
+        }
+      },
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "templatesReady"
+        ]
+      }
+    },
+    {
+      "goal": "把结果 JSON 写入 reports/{{reportFile}}",
+      "verify": {
+        "actionSucceeded": true
+      },
+      "onFail": "escalate",
+      "action": {
+        "method": "local.writeFile",
+        "params": {
+          "path": "{{reportFile}}"
+        }
+      },
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "templatesReady"
+        ]
+      }
+    },
+    {
+      "goal": "关闭本次采集用的工作 tab",
+      "verify": {
+        "actionSucceeded": true
+      },
+      "onFail": "escalate",
+      "action": {
+        "method": "browser.closeTab",
+        "params": {}
+      },
+      "page": "doudian",
+      "gate": {
+        "all": [
+          "templatesReady"
+        ]
+      }
+    }
+  ]
+}

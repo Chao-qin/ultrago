@@ -1,0 +1,1023 @@
+{
+  "name": "1688-offer-snatch",
+  "goal": "1688 指定链接商品采集：采集 SKU、主图和详情图，返回原始商品数据；可选导出文件。",
+  "paramSchemaRef": "book-input-1688-offer-snatch@2",
+  "outputSchemaRef": "raw-1688-offer@2",
+  "params": [
+    {
+      "name": "offerUrl",
+      "required": true,
+      "description": "1688 商品详情页 URL（detail.1688.com/offer/...）",
+      "schema": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    {
+      "name": "outFile",
+      "required": false,
+      "description": "可选 JSON 导出路径（相对 reports/）；留空只返回商品数据。",
+      "schema": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  ],
+  "steps": [
+    {
+      "goal": "在自己独立的新窗口打开指定的 1688 商品详情页 {{offerUrl}}(不抢用户焦点、不碰用户当前标签页;之前版本直接 navigate 当前活跃 tab,用户切个标签页就会被这个 book 顶飞——2026-08-21 在姊妹 book 1688-random-offer-snatch 上实测复现过)。开完后续步骤会自动绑定这个 tab",
+      "verify": {
+        "urlIncludes": "detail.1688.com/offer"
+      },
+      "onFail": "escalate",
+      "action": {
+        "method": "browser.newWindow",
+        "params": {
+          "url": "{{offerUrl}}",
+          "focused": false,
+          "minimized": false,
+          "restoreFocus": true
+        }
+      },
+      "page": "source1688"
+    },
+    {
+      "goal": "条件门1:标题模块到位(页面已渲染),并初始化采集暂存",
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "(() => {",
+            "  const st = (window.__bcp1688 = window.__bcp1688 || {});",
+            "  st.skuMap = st.skuMap || {};",
+            "  st.skuImages = st.skuImages || {};",
+            "  st.gallery = st.gallery || {};",
+            "  st.detail = st.detail || {};",
+            "  st.done = st.done || {};",
+            "  return !!document.querySelector('[data-module=\"od_title\"] h1');",
+            "})()"
+          ],
+          "equals": "true"
+        },
+        "noErrors": true
+      },
+      "onFail": "retry",
+      "maxRetries": 10,
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(() => {",
+            "  const txt = n =>",
+            "    String((n && n.textContent) || '')",
+            "      .replace(/\\s+/g, ' ')",
+            "      .trim();",
+            "  const bg = n => {",
+            "    const m = String((n && n.getAttribute('style')) || '').match(/url\\(\\\"?([^\\\")]+)\\\"?\\)/i);",
+            "    return m ? m[1] : '';",
+            "  };",
+            "  const st = (window.__bcp1688 = window.__bcp1688 || {});",
+            "  st.skuMap = st.skuMap || {};",
+            "  st.skuImages = st.skuImages || {};",
+            "  st.gallery = st.gallery || {};",
+            "  st.detail = st.detail || {};",
+            "  st.done = st.done || {};",
+            "  if (",
+            "    !document.querySelector('[data-module=\"od_title\"] h1') &&",
+            "    document.querySelector('.title-text')",
+            "  ) {",
+            "    const t = document.createElement('div'),",
+            "      h = document.createElement('h1');",
+            "    t.dataset.module = 'od_title';",
+            "    h.textContent = txt(document.querySelector('.title-text'));",
+            "    t.append(h);",
+            "    document.body.append(t);",
+            "    const src = document.querySelector('.pc-sku-wrapper');",
+            "    if (src) {",
+            "      const dim = txt(src.querySelector('.sku-prop-module-name')) || '规格';",
+            "      st.dims = [dim];",
+            "      for (const item of src.querySelectorAll('.sku-item-wrapper')) {",
+            "        const name = txt(item.querySelector('.sku-item-name'));",
+            "        const p = txt(item.querySelector('.discountPrice-price')).match(/(\\d+(?:\\.\\d+)?)/);",
+            "        const s = txt(item.querySelector('.sku-item-sale-num')).match(/(\\d+)/);",
+            "        const image = bg(item.querySelector('.sku-item-image'));",
+            "        const spec = [{ PropertyName: dim, ValueName: name }];",
+            "        st.skuMap[name] = {",
+            "          Price: p ? Number(p[1]) : null,",
+            "          Quantity: s ? Number(s[1]) : null,",
+            "          SkuSpec: spec",
+            "        };",
+            "        if (/^https?:\\/\\//.test(image))",
+            "          st.skuImages[dim + '|' + name] = { propertyName: dim, valueName: name, imageUrl: image };",
+            "      }",
+            "    }",
+            "    for (const im of document.querySelectorAll('.detail-gallery-img')) {",
+            "      const u = String(im.currentSrc || im.src || '').trim();",
+            "      if (/^https?:\\/\\//.test(u)) st.gallery[u] = 1;",
+            "    }",
+            "  }",
+            "  return !!document.querySelector('[data-module=\"od_title\"] h1');",
+            "})()"
+          ]
+        }
+      },
+      "page": "source1688",
+      "gate": {
+        "all": [
+          "pageHydrated"
+        ]
+      }
+    },
+    {
+      "goal": "条件门2:当前选中组合的单轮采集(维度名/规格图/末级 SKU 卡);全组合遍历交给下一步",
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "(() => {",
+            "  const vis = bcpDom.visible;",
+            "  const txt = n =>",
+            "    String((n && n.textContent) || '')",
+            "      .replace(/\\s+/g, ' ')",
+            "      .trim();",
+            "  const st = window.__bcp1688;",
+            "  const sku = document.querySelector('[data-module=\"od_sku_selection\"]');",
+            "  if (!sku) return true;",
+            "  const gs = [...sku.querySelectorAll('.feature-item')].filter(vis);",
+            "  if (!gs.length) return true;",
+            "  const dims = gs.map(g => txt(g.querySelector('h3')));",
+            "  st.dims = dims;",
+            "  const last = gs[gs.length - 1],",
+            "    leads = gs.slice(0, -1),",
+            "    lastName = dims[dims.length - 1];",
+            "  const combo = leads",
+            "    .map((g, i) => {",
+            "      const b = [...g.querySelectorAll('.sku-filter-button')].find(x =>",
+            "        x.classList.contains('active')",
+            "      );",
+            "      if (!b) return null;",
+            "      const im = b.querySelector('img');",
+            "      return {",
+            "        idx: i,",
+            "        name: dims[i],",
+            "        value: txt(b.querySelector('.label-name')),",
+            "        img: String((im && (im.currentSrc || im.src)) || '')",
+            "      };",
+            "    })",
+            "    .filter(Boolean);",
+            "  for (const c of combo)",
+            "    if (/^https?:\\/\\//.test(c.img))",
+            "      st.skuImages[c.name + '|' + c.value] = {",
+            "        propertyName: c.name,",
+            "        valueName: c.value,",
+            "        imageUrl: c.img",
+            "      };",
+            "  for (const card of last.querySelectorAll('.expand-view-item')) {",
+            "    if (!vis(card)) continue;",
+            "    const lab = card.querySelector('.item-label[title]');",
+            "    const name = String((lab && lab.getAttribute('title')) || '').trim();",
+            "    if (!name) continue;",
+            "    const pm = txt(card.querySelector('.item-price-stock')).match(/[¥￥]\\s*(\\d+(?:\\.\\d+)?)/);",
+            "    const sm = txt(",
+            "      [...card.querySelectorAll('od-text,.od-text')].find(n => /库存\\s*\\d+\\s*[一-龥]/.test(txt(n)))",
+            "    ).match(/库存\\s*(\\d+)\\s*[一-龥]/);",
+            "    const spec = combo",
+            "      .map(c => ({ PropertyName: c.name, ValueName: c.value }))",
+            "      .concat([{ PropertyName: lastName, ValueName: name }]);",
+            "    st.skuMap[spec.map(s => s.ValueName).join(' / ')] = {",
+            "      Price: pm ? Number(pm[1]) : null,",
+            "      Quantity: sm ? Number(sm[1]) : null,",
+            "      SkuSpec: spec",
+            "    };",
+            "    const ci = card.querySelector('img');",
+            "    const cr = String(",
+            "      (ci && (ci.currentSrc || ci.src || ci.getAttribute('data-src'))) || ''",
+            "    ).trim();",
+            "    if (/^https?:\\/\\//.test(cr))",
+            "      st.skuImages[lastName + '|' + name] = {",
+            "        propertyName: lastName,",
+            "        valueName: name,",
+            "        imageUrl: cr",
+            "      };",
+            "  }",
+            "  return Array.isArray(st.dims) && st.dims.length > 0;",
+            "})()"
+          ],
+          "equals": "true"
+        },
+        "noErrors": true
+      },
+      "onFail": "retry",
+      "maxRetries": 6,
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(() => {",
+            "  const vis = bcpDom.visible;",
+            "  const txt = n =>",
+            "    String((n && n.textContent) || '')",
+            "      .replace(/\\s+/g, ' ')",
+            "      .trim();",
+            "  const st = window.__bcp1688;",
+            "  const sku = document.querySelector('[data-module=\"od_sku_selection\"]');",
+            "  if (!sku) return true;",
+            "  const gs = [...sku.querySelectorAll('.feature-item')].filter(vis);",
+            "  if (!gs.length) return true;",
+            "  const dims = gs.map(g => txt(g.querySelector('h3')));",
+            "  st.dims = dims;",
+            "  const last = gs[gs.length - 1],",
+            "    leads = gs.slice(0, -1),",
+            "    lastName = dims[dims.length - 1];",
+            "  const combo = leads",
+            "    .map((g, i) => {",
+            "      const b = [...g.querySelectorAll('.sku-filter-button')].find(x =>",
+            "        x.classList.contains('active')",
+            "      );",
+            "      if (!b) return null;",
+            "      const im = b.querySelector('img');",
+            "      return {",
+            "        idx: i,",
+            "        name: dims[i],",
+            "        value: txt(b.querySelector('.label-name')),",
+            "        img: String((im && (im.currentSrc || im.src)) || '')",
+            "      };",
+            "    })",
+            "    .filter(Boolean);",
+            "  for (const c of combo)",
+            "    if (/^https?:\\/\\//.test(c.img))",
+            "      st.skuImages[c.name + '|' + c.value] = {",
+            "        propertyName: c.name,",
+            "        valueName: c.value,",
+            "        imageUrl: c.img",
+            "      };",
+            "  for (const card of last.querySelectorAll('.expand-view-item')) {",
+            "    if (!vis(card)) continue;",
+            "    const lab = card.querySelector('.item-label[title]');",
+            "    const name = String((lab && lab.getAttribute('title')) || '').trim();",
+            "    if (!name) continue;",
+            "    const pm = txt(card.querySelector('.item-price-stock')).match(/[¥￥]\\s*(\\d+(?:\\.\\d+)?)/);",
+            "    const sm = txt(",
+            "      [...card.querySelectorAll('od-text,.od-text')].find(n => /库存\\s*\\d+\\s*[一-龥]/.test(txt(n)))",
+            "    ).match(/库存\\s*(\\d+)\\s*[一-龥]/);",
+            "    const spec = combo",
+            "      .map(c => ({ PropertyName: c.name, ValueName: c.value }))",
+            "      .concat([{ PropertyName: lastName, ValueName: name }]);",
+            "    st.skuMap[spec.map(s => s.ValueName).join(' / ')] = {",
+            "      Price: pm ? Number(pm[1]) : null,",
+            "      Quantity: sm ? Number(sm[1]) : null,",
+            "      SkuSpec: spec",
+            "    };",
+            "    const ci = card.querySelector('img');",
+            "    const cr = String(",
+            "      (ci && (ci.currentSrc || ci.src || ci.getAttribute('data-src'))) || ''",
+            "    ).trim();",
+            "    if (/^https?:\\/\\//.test(cr))",
+            "      st.skuImages[lastName + '|' + name] = {",
+            "        propertyName: lastName,",
+            "        valueName: name,",
+            "        imageUrl: cr",
+            "      };",
+            "  }",
+            "  return Array.isArray(st.dims) && st.dims.length > 0;",
+            "})()"
+          ]
+        }
+      },
+      "page": "source1688",
+      "gate": {
+        "all": [
+          "pageHydrated"
+        ]
+      }
+    },
+    {
+      "goal": "SKU 全组合遍历采集:一次调用走完所有前置规格组合(轮询等渲染、展开售罄卡、落 skuMap/skuImages),预算用完则下次重试从 st.done 断点续跑",
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "(() => {",
+            "  const vis = bcpDom.visible;",
+            "  const txt = n =>",
+            "    String((n && n.textContent) || '')",
+            "      .replace(/\\s+/g, ' ')",
+            "      .trim();",
+            "  const st = window.__bcp1688;",
+            "  if (!st) return false;",
+            "  const sku = document.querySelector('[data-module=\"od_sku_selection\"]');",
+            "  if (!sku) return true;",
+            "  const groups = [...sku.querySelectorAll('.feature-item')].filter(vis);",
+            "  if (groups.length < 2) return true;",
+            "  const values = groups.slice(0, -1).map(g =>",
+            "    [...g.querySelectorAll('.sku-filter-button')]",
+            "      .filter(vis)",
+            "      .map(b => txt(b.querySelector('.label-name')))",
+            "      .filter(Boolean)",
+            "  );",
+            "  if (!values.length || values.some(v => !v.length)) return true;",
+            "  const expected = values.reduce((all, vs) => all.flatMap(a => vs.map(v => a.concat(v))), [[]]);",
+            "  const done = st.done || {};",
+            "  return expected.every(c => done[c.join(' / ')]);",
+            "})()"
+          ],
+          "equals": "true"
+        },
+        "noErrors": true
+      },
+      "onFail": "retry",
+      "maxRetries": 8,
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(async () => {",
+            "  const vis = bcpDom.visible;",
+            "  const txt = n =>",
+            "    String((n && n.textContent) || '')",
+            "      .replace(/\\s+/g, ' ')",
+            "      .trim();",
+            "  const sleep = ms => bcpWait.sleep(ms);",
+            "  const st = (window.__bcp1688 = window.__bcp1688 || {});",
+            "  st.skuMap = st.skuMap || {};",
+            "  st.skuImages = st.skuImages || {};",
+            "  st.done = st.done || {};",
+            "  st.emptyCombos = st.emptyCombos || {};",
+            "  const sku = document.querySelector('[data-module=\"od_sku_selection\"]');",
+            "  if (!sku) return true;",
+            "  const G = () => [...sku.querySelectorAll('.feature-item')].filter(vis);",
+            "  let groups = G();",
+            "  if (groups.length < 2) return true;",
+            "  let leads = groups.slice(0, -1);",
+            "  const last0 = groups.at(-1);",
+            "  const dims = leads.map(g => txt(g.querySelector('h3'))),",
+            "    lastName = txt(last0.querySelector('h3'));",
+            "  const values = leads.map(g =>",
+            "    [...g.querySelectorAll('.sku-filter-button')]",
+            "      .filter(vis)",
+            "      .map(b => txt(b.querySelector('.label-name')))",
+            "      .filter(Boolean)",
+            "  );",
+            "  if (!values.length || values.some(v => !v.length)) return true;",
+            "  const expected = values.reduce((all, vs) => all.flatMap(a => vs.map(v => a.concat(v))), [[]]);",
+            "  const cards = () => [...G().at(-1).querySelectorAll('.expand-view-item')].filter(vis);",
+            "  const hardStop = Date.now() + 9000;",
+            "  let visited = 0;",
+            "  for (const combo of expected) {",
+            "    const key = combo.join(' / ');",
+            "    if (st.done[key]) continue;",
+            "    if (Date.now() > hardStop) break;",
+            "    leads = G().slice(0, -1);",
+            "    for (let i = 0; i < combo.length; i++) {",
+            "      const b = [...leads[i].querySelectorAll('.sku-filter-button')]",
+            "        .filter(vis)",
+            "        .find(x => txt(x.querySelector('.label-name')) === combo[i]);",
+            "      if (b && !b.classList.contains('active')) {",
+            "        b.click();",
+            "        await sleep(30);",
+            "      }",
+            "    }",
+            "    /* 等末级 SKU 卡渲染。上限 1200ms(原 24×50ms),但 bcpWait 还会自动压在",
+            "       bcpDeadline 之下 —— 本步预算见底时立刻返回,不再空转到自己的上限。 */",
+            "    let list = (await bcpWait.until(() => { const l = cards(); return l.length ? l : null; }, 1200, 50)) || [];",
+            "    for (let k = 0; k < 6; k++) {",
+            "      const more = G().at(-1).querySelector('.show-soldout-info a');",
+            "      if (!more || !vis(more)) break;",
+            "      more.click();",
+            "      await sleep(80);",
+            "    }",
+            "    list = cards();",
+            "    if (!list.length) st.emptyCombos[key] = 1;",
+            "    for (const g of G().slice(0, -1)) {",
+            "      const b = [...g.querySelectorAll('.sku-filter-button')].find(x =>",
+            "        x.classList.contains('active')",
+            "      );",
+            "      if (!b) continue;",
+            "      const im = b.querySelector('img'),",
+            "        iu = String((im && (im.currentSrc || im.src)) || '').trim();",
+            "      const dn = txt(g.querySelector('h3')),",
+            "        vn = txt(b.querySelector('.label-name'));",
+            "      if (/^https?:\\/\\//.test(iu))",
+            "        st.skuImages[dn + '|' + vn] = { propertyName: dn, valueName: vn, imageUrl: iu };",
+            "    }",
+            "    for (const card of list) {",
+            "      const lab = card.querySelector('.item-label[title]');",
+            "      const value = String((lab && lab.getAttribute('title')) || '').trim();",
+            "      if (!value) continue;",
+            "      const pm = txt(card.querySelector('.item-price-stock')).match(/[¥￥]\\s*(\\d+(?:\\.\\d+)?)/);",
+            "      const sm = txt(",
+            "        [...card.querySelectorAll('od-text,.od-text')].find(n =>",
+            "          /库存\\s*\\d+\\s*[一-龥]/.test(txt(n))",
+            "        )",
+            "      ).match(/库存\\s*(\\d+)\\s*[一-龥]/);",
+            "      const spec = combo",
+            "        .map((v, i) => ({ PropertyName: dims[i], ValueName: v }))",
+            "        .concat([{ PropertyName: lastName, ValueName: value }]);",
+            "      st.skuMap[spec.map(s => s.ValueName).join(' / ')] = {",
+            "        Price: pm ? Number(pm[1]) : null,",
+            "        Quantity: sm ? Number(sm[1]) : null,",
+            "        SkuSpec: spec",
+            "      };",
+            "      const ci = card.querySelector('img');",
+            "      const cr = String(",
+            "        (ci && (ci.currentSrc || ci.src || ci.getAttribute('data-src'))) || ''",
+            "      ).trim();",
+            "      if (/^https?:\\/\\//.test(cr))",
+            "        st.skuImages[lastName + '|' + value] = {",
+            "          propertyName: lastName,",
+            "          valueName: value,",
+            "          imageUrl: cr",
+            "        };",
+            "    }",
+            "    st.done[key] = 1;",
+            "    visited++;",
+            "  }",
+            "  const missing = expected.filter(c => !st.done[c.join(' / ')]);",
+            "  st.coverage = {",
+            "    expectedCombinationCount: expected.length,",
+            "    visitedCombinationCount: expected.length - missing.length,",
+            "    missingCombinations: missing,",
+            "    unavailableCombinations: Object.keys(st.emptyCombos)",
+            "  };",
+            "  return {",
+            "    visitedThisRound: visited,",
+            "    total: expected.length,",
+            "    missing: missing.length,",
+            "    skus: Object.keys(st.skuMap).length",
+            "  };",
+            "})()"
+          ]
+        }
+      },
+      "page": "source1688",
+      "gate": {
+        "all": [
+          "pageHydrated"
+        ]
+      }
+    },
+    {
+      "goal": "条件门3:滚动累积主图(排掉 url(undefined) 幻影图),直到两次不再增长",
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "(() => {",
+            "  const vis = bcpDom.visible;",
+            "  const ok = v => {",
+            "    if (!/^https?:\\/\\//.test(v)) return '';",
+            "    try {",
+            "      if (/\\/(undefined|null)$/.test(new URL(v).pathname)) return '';",
+            "    } catch (e) {",
+            "      return '';",
+            "    }",
+            "    return v;",
+            "  };",
+            "  const st = window.__bcp1688;",
+            "  const gm = document.querySelector('[data-module=\"od_picture_gallery\"]');",
+            "  const gl = gm && gm.querySelector('.od-picture-gallery-list');",
+            "  if (!gl) return true;",
+            "  for (const n of [gl, ...gl.querySelectorAll('*')]) {",
+            "    const s = getComputedStyle(n);",
+            "    if (n.scrollHeight > n.clientHeight && /(auto|scroll)/.test(s.overflowY || s.overflow || ''))",
+            "      n.scrollTop = Math.min(",
+            "        n.scrollHeight - n.clientHeight,",
+            "        n.scrollTop + Math.max(1, Math.floor(n.clientHeight * 0.8))",
+            "      );",
+            "    if (n.scrollWidth > n.clientWidth && /(auto|scroll)/.test(s.overflowX || s.overflow || ''))",
+            "      n.scrollLeft = Math.min(",
+            "        n.scrollWidth - n.clientWidth,",
+            "        n.scrollLeft + Math.max(1, Math.floor(n.clientWidth * 0.8))",
+            "      );",
+            "  }",
+            "  for (const li of gl.querySelectorAll('li')) {",
+            "    if (!vis(li)) continue;",
+            "    const m = String(getComputedStyle(li).backgroundImage || '').match(",
+            "      /url\\(\\s*['\"]?([^'\")]+)['\"]?\\s*\\)/i",
+            "    );",
+            "    if (!m) continue;",
+            "    const u = ok(m[1].trim());",
+            "    if (u) st.gallery[u] = 1;",
+            "  }",
+            "  const n = Object.keys(st.gallery).length;",
+            "  const prev = st.galPrev;",
+            "  st.galPrev = n;",
+            "  return prev === n;",
+            "})()"
+          ],
+          "equals": "true"
+        },
+        "noErrors": true
+      },
+      "onFail": "retry",
+      "maxRetries": 15,
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(() => {",
+            "  const vis = bcpDom.visible;",
+            "  const ok = v => {",
+            "    if (!/^https?:\\/\\//.test(v)) return '';",
+            "    try {",
+            "      if (/\\/(undefined|null)$/.test(new URL(v).pathname)) return '';",
+            "    } catch (e) {",
+            "      return '';",
+            "    }",
+            "    return v;",
+            "  };",
+            "  const st = window.__bcp1688;",
+            "  const gm = document.querySelector('[data-module=\"od_picture_gallery\"]');",
+            "  const gl = gm && gm.querySelector('.od-picture-gallery-list');",
+            "  if (!gl) return true;",
+            "  for (const n of [gl, ...gl.querySelectorAll('*')]) {",
+            "    const s = getComputedStyle(n);",
+            "    if (n.scrollHeight > n.clientHeight && /(auto|scroll)/.test(s.overflowY || s.overflow || ''))",
+            "      n.scrollTop = Math.min(",
+            "        n.scrollHeight - n.clientHeight,",
+            "        n.scrollTop + Math.max(1, Math.floor(n.clientHeight * 0.8))",
+            "      );",
+            "    if (n.scrollWidth > n.clientWidth && /(auto|scroll)/.test(s.overflowX || s.overflow || ''))",
+            "      n.scrollLeft = Math.min(",
+            "        n.scrollWidth - n.clientWidth,",
+            "        n.scrollLeft + Math.max(1, Math.floor(n.clientWidth * 0.8))",
+            "      );",
+            "  }",
+            "  for (const li of gl.querySelectorAll('li')) {",
+            "    if (!vis(li)) continue;",
+            "    const m = String(getComputedStyle(li).backgroundImage || '').match(",
+            "      /url\\(\\s*['\"]?([^'\")]+)['\"]?\\s*\\)/i",
+            "    );",
+            "    if (!m) continue;",
+            "    const u = ok(m[1].trim());",
+            "    if (u) st.gallery[u] = 1;",
+            "  }",
+            "  const n = Object.keys(st.gallery).length;",
+            "  const prev = st.galPrev;",
+            "  st.galPrev = n;",
+            "  return prev === n;",
+            "})()"
+          ]
+        }
+      },
+      "page": "source1688",
+      "gate": {
+        "all": [
+          "galleryReady"
+        ]
+      }
+    },
+    {
+      "goal": "条件门4:将详情宿主(V-DETAIL-*)滚入视口触发懒加载,累积 shadowRoot 内 #detail img,直到两次不再增长;没有详情模块则记空放行",
+      "verify": {
+        "evalCheck": {
+          "code": [
+            "(() => {",
+            "  const st = window.__bcp1688;",
+            "  const dm = document.querySelector('[data-module=\"od_product_description\"]');",
+            "  if (!dm) return true;",
+            "  let host = null;",
+            "  for (const n of dm.querySelectorAll('*')) {",
+            "    if (/^V-DETAIL-/.test(String(n.tagName || ''))) {",
+            "      host = n;",
+            "      break;",
+            "    }",
+            "  }",
+            "  if (!host) {",
+            "    if (dm.scrollIntoView) dm.scrollIntoView({ block: 'center' });",
+            "    const t = (st.noHost = (st.noHost || 0) + 1);",
+            "    return t > 6;",
+            "  }",
+            "  st.profile = String(host.tagName).toLowerCase();",
+            "  if (host.scrollIntoView) host.scrollIntoView({ block: 'center' });",
+            "  const root = host.shadowRoot;",
+            "  if (!root) {",
+            "    const t = (st.noRoot = (st.noRoot || 0) + 1);",
+            "    return t > 6;",
+            "  }",
+            "  for (const img of root.querySelectorAll('#detail img')) {",
+            "    const v = String(",
+            "      img.currentSrc ||",
+            "        img.src ||",
+            "        img.getAttribute('data-src') ||",
+            "        img.getAttribute('data-lazy-src') ||",
+            "        ''",
+            "    ).trim();",
+            "    if (/^https?:\\/\\//.test(v)) st.detail[v] = 1;",
+            "  }",
+            "  const n = Object.keys(st.detail).length;",
+            "  const prev = st.detPrev;",
+            "  st.detPrev = n;",
+            "  if (n === 0) {",
+            "    const z = (st.detZero = (st.detZero || 0) + 1);",
+            "    return z > 6;",
+            "  }",
+            "  return prev === n;",
+            "})()"
+          ],
+          "equals": "true"
+        },
+        "noErrors": true
+      },
+      "onFail": "retry",
+      "maxRetries": 20,
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(() => {",
+            "  const st = window.__bcp1688;",
+            "  const dm = document.querySelector('[data-module=\"od_product_description\"]');",
+            "  if (!dm) return true;",
+            "  let host = null;",
+            "  for (const n of dm.querySelectorAll('*')) {",
+            "    if (/^V-DETAIL-/.test(String(n.tagName || ''))) {",
+            "      host = n;",
+            "      break;",
+            "    }",
+            "  }",
+            "  if (!host) {",
+            "    if (dm.scrollIntoView) dm.scrollIntoView({ block: 'center' });",
+            "    const t = (st.noHost = (st.noHost || 0) + 1);",
+            "    return t > 6;",
+            "  }",
+            "  st.profile = String(host.tagName).toLowerCase();",
+            "  if (host.scrollIntoView) host.scrollIntoView({ block: 'center' });",
+            "  const root = host.shadowRoot;",
+            "  if (!root) {",
+            "    const t = (st.noRoot = (st.noRoot || 0) + 1);",
+            "    return t > 6;",
+            "  }",
+            "  for (const img of root.querySelectorAll('#detail img')) {",
+            "    const v = String(",
+            "      img.currentSrc ||",
+            "        img.src ||",
+            "        img.getAttribute('data-src') ||",
+            "        img.getAttribute('data-lazy-src') ||",
+            "        ''",
+            "    ).trim();",
+            "    if (/^https?:\\/\\//.test(v)) st.detail[v] = 1;",
+            "  }",
+            "  const n = Object.keys(st.detail).length;",
+            "  const prev = st.detPrev;",
+            "  st.detPrev = n;",
+            "  if (n === 0) {",
+            "    const z = (st.detZero = (st.detZero || 0) + 1);",
+            "    return z > 6;",
+            "  }",
+            "  return prev === n;",
+            "})()"
+          ]
+        }
+      },
+      "page": "source1688",
+      "gate": {
+        "all": [
+          "detailHostReady"
+        ]
+      }
+    },
+    {
+      "goal": "把商品属性注入到 [data-module=\"od_product_attributes\"] 表格(合并顶部 cpv-decision-attr 区 + 底部 offer-attr-item 区)。1688 中文站把商品属性拆成两个区:详情图上方的\"商品属性\"(.cpv-decision-attr .cpv-attr-item,含 面料名称/功能/产品类别/款式/厚薄)和下方\"详情参数\"表(原生 od_product_attributes,只有 品牌/领型/袖长 等另一批)。组装步只读原生表,不合并就整批漏掉前者。必须排在滚动步之后:cpv 区是懒渲染的。和 1688-random-offer-snatch.json 同源逻辑,改动需同步。",
+      "verify": {
+        "noErrors": true
+      },
+      "onFail": "retry",
+      "maxRetries": 2,
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(() => {",
+            "  const norm = n =>",
+            "    String((n && n.textContent) || '')",
+            "      .replace(/\\s+/g, ' ')",
+            "      .trim();",
+            "  let tbl = document.querySelector('[data-module=\"od_product_attributes\"] table');",
+            "  if (!tbl) {",
+            "    const root = document.createElement('div');",
+            "    root.dataset.module = 'od_product_attributes';",
+            "    tbl = document.createElement('table');",
+            "    root.appendChild(tbl);",
+            "    document.body.appendChild(root);",
+            "  }",
+            "  for (const it of document.querySelectorAll('.offer-attr-item')) {",
+            "    const L = norm(it.querySelector('.offer-attr-item-name')),",
+            "      V = norm(it.querySelector('.offer-attr-item-value'));",
+            "    if (!L) continue;",
+            "    const tr = document.createElement('tr'),",
+            "      th = document.createElement('th'),",
+            "      td = document.createElement('td');",
+            "    th.textContent = L;",
+            "    td.textContent = V;",
+            "    tr.append(th, td);",
+            "    tbl.append(tr);",
+            "  }",
+            "  for (const it of document.querySelectorAll('.cpv-decision-attr .cpv-attr-item')) {",
+            "    const L = norm(it.querySelector('.cpv-attr-label')),",
+            "      V = norm(it.querySelector('.cpv-attr-value'));",
+            "    if (!L) continue;",
+            "    const tr = document.createElement('tr'),",
+            "      th = document.createElement('th'),",
+            "      td = document.createElement('td');",
+            "    th.textContent = L;",
+            "    td.textContent = V;",
+            "    tr.append(th, td);",
+            "    tbl.append(tr);",
+            "  }",
+            "  return tbl.querySelectorAll('tr').length > 0;",
+            "})()"
+          ]
+        }
+      },
+      "page": "source1688",
+      "gate": {
+        "all": [
+          "pageHydrated"
+        ]
+      }
+    },
+    {
+      "goal": "从暂存组装 evidence(标题/属性/多维度SKU/规格图/主图/详情图)并返回",
+      "verify": {
+        "urlIncludes": "detail.1688.com/offer",
+        "noErrors": true
+      },
+      "onFail": "retry",
+      "maxRetries": 2,
+      "action": {
+        "method": "browser.eval",
+        "params": {
+          "code": [
+            "(() => {",
+            "  const st = window.__bcp1688 || {};",
+            "  const txt = n =>",
+            "    String((n && n.textContent) || '')",
+            "      .replace(/\\s+/g, ' ')",
+            "      .trim();",
+            "  // 1688 alicdn 图床后缀归一化:'.jpg_b.jpg' / '.jpg_sum.jpg' / '.jpg_400x400.jpg' 等",
+            "  // 都是原图的降采样版本,真正的原图是裸 '.jpg'(800x800)。抖店主图硬约束 ≥600×600,",
+            "  // 不归一化就只能抓到 220×220。",
+            "  const norm1688 = u => String(u || '').replace(/\\.jpg_[\\w-]+\\.jpg$/, '.jpg');",
+            "  const dedupeUrls = arr => {",
+            "    const seen = new Set();",
+            "    const out = [];",
+            "    for (const u of arr) {",
+            "      const n = norm1688(u);",
+            "      if (n && !seen.has(n)) {",
+            "        seen.add(n);",
+            "        out.push(n);",
+            "      }",
+            "    }",
+            "    return out;",
+            "  };",
+            "  const dedupeSkuImages = arr => {",
+            "    const seen = new Set();",
+            "    const out = [];",
+            "    for (const s of arr) {",
+            "      const u = norm1688(s.imageUrl || '');",
+            "      if (u && !seen.has(u)) {",
+            "        seen.add(u);",
+            "        out.push({ ...s, imageUrl: u });",
+            "      }",
+            "    }",
+            "    return out;",
+            "  };",
+            "  const attributes = [",
+            "    ...document.querySelectorAll('[data-module=\"od_product_attributes\"] tr')",
+            "  ].flatMap(row => {",
+            "    const ths = [...row.querySelectorAll('th')],",
+            "      tds = [...row.querySelectorAll('td')];",
+            "    return ths",
+            "      .map((th, i) => {",
+            "        const L = txt(th),",
+            "          V = txt(tds[i]);",
+            "        return L && V ? { Label: L, Value: V } : null;",
+            "      })",
+            "      .filter(Boolean);",
+            "  });",
+            "  const m = location.pathname.match(/\\/offer\\/(\\d+)/);",
+            "  const skus = Object.values(st.skuMap || {});",
+            "  const mainImages = dedupeUrls(Object.keys(st.gallery || {}));",
+            "  const detailImages = dedupeUrls(Object.keys(st.detail || {}));",
+            "  const skuImages = dedupeSkuImages(Object.values(st.skuImages || {}));",
+            "  return {",
+            "    title: txt(document.querySelector('[data-module=\"od_title\"] h1')),",
+            "    offerId: m ? m[1] : '',",
+            "    sourceUrl: location.href,",
+            "    capturedBy: 'playbook:1688-offer-snatch',",
+            "    pageState: /验证码|滑块|风控|访问受限/.test(txt(document.body)) ? 'blocked' : 'product',",
+            "    skuDimensions: st.dims || [],",
+            "    skus,",
+            "    skuImages,",
+            "    mainImages,",
+            "    detailImages,",
+            "    detailProfile: st.profile || '',",
+            "    attributes,",
+            "    captureMeta: {",
+            "      skuCount: skus.length,",
+            "      skuWithPrice: skus.filter(s => s.Price != null).length,",
+            "      skuWithStock: skus.filter(s => s.Quantity != null).length,",
+            "      mainImageCount: mainImages.length,",
+            "      detailImageCount: detailImages.length,",
+            "      skuImageCount: skuImages.length,",
+            "      attributeCount: attributes.length",
+            "    }",
+            "  };",
+            "})()"
+          ]
+        }
+      },
+      "page": "source1688",
+      "gate": {
+        "all": [
+          "pageHydrated"
+        ]
+      }
+    },
+    {
+      "goal": "规范化 evidence:移除采集运行时字段，仅保留转换器契约字段",
+      "verify": {
+        "actionSucceeded": true
+      },
+      "onFail": "retry",
+      "action": {
+        "method": "local.eval",
+        "params": {
+          "code": [
+            "const unwrap = entry => {",
+            "  const v = entry && entry.value;",
+            "  return v && typeof v === 'object' && 'value' in v ? v.value : v;",
+            "};",
+            "const evidence = [...results]",
+            "  .reverse()",
+            "  .map(unwrap)",
+            "  .find(",
+            "    v =>",
+            "      v &&",
+            "      typeof v === 'object' &&",
+            "      typeof v.offerId === 'string' &&",
+            "      v.offerId &&",
+            "      typeof v.title === 'string' &&",
+            "      Array.isArray(v.mainImages) &&",
+            "      Array.isArray(v.skus) &&",
+            "      v.captureMeta &&",
+            "      typeof v.captureMeta === 'object'",
+            "  );",
+            "if (!evidence) throw new Error('no 1688 evidence found in this run');",
+            "const { capturedBy, ...normalized } = evidence;",
+            "return normalized;"
+          ]
+        }
+      },
+      "page": "source1688",
+      "gate": {
+        "all": [
+          "pageHydrated"
+        ]
+      }
+    },
+    {
+      "goal": "将 evidence 原样序列化为 JSON 文本",
+      "verify": {
+        "actionSucceeded": true
+      },
+      "onFail": "retry",
+      "action": {
+        "method": "local.eval",
+        "params": {
+          "code": [
+            "// Pick this run's evidence out of `results` by SHAPE, not by index — the step",
+            "// layout can shift and an index-based pick would silently serialize another",
+            "// step's value. Browser eval results arrive wrapped as {value, truncated}.",
+            "const unwrap = entry => {",
+            "  const v = entry && entry.value;",
+            "  return v && typeof v === 'object' && 'value' in v ? v.value : v;",
+            "};",
+            "const evidence = [...results]",
+            "  .reverse()",
+            "  .map(unwrap)",
+            "  .find(",
+            "    v =>",
+            "      v &&",
+            "      typeof v === 'object' &&",
+            "      typeof v.offerId === 'string' &&",
+            "      v.offerId &&",
+            "      typeof v.title === 'string' &&",
+            "      Array.isArray(v.mainImages) &&",
+            "      Array.isArray(v.skus) &&",
+            "      v.captureMeta &&",
+            "      typeof v.captureMeta === 'object'",
+            "  );",
+            "if (!evidence) throw new Error(\"no 1688 evidence found in this run's results\");",
+            "return JSON.stringify(evidence, null, 2);"
+          ]
+        }
+      },
+      "page": "source1688",
+      "gate": {
+        "all": [
+          "pageHydrated"
+        ]
+      }
+    },
+    {
+      "goal": "写入本地目录 reports/{{outFile}}",
+      "optional": true,
+      "verify": {
+        "actionSucceeded": true
+      },
+      "onFail": "retry",
+      "action": {
+        "method": "local.writeFile",
+        "params": {
+          "path": "{{outFile}}"
+        }
+      },
+      "page": "source1688",
+      "gate": {
+        "all": [
+          "pageHydrated"
+        ]
+      }
+    },
+    {
+      "goal": "返回符合 raw-1688-offer 契约的结构化采集结果，供 Flow 直接预处理",
+      "verify": {
+        "actionSucceeded": true
+      },
+      "onFail": "escalate",
+      "action": {
+        "method": "local.eval",
+        "params": {
+          "code": [
+            "const unwrap = entry => {",
+            "  const v = entry && entry.value;",
+            "  return v && typeof v === 'object' && 'value' in v ? v.value : v;",
+            "};",
+            "const raw = [...results]",
+            "  .reverse()",
+            "  .map(unwrap)",
+            "  .find(v => v && typeof v === 'object' && typeof v.offerId === 'string' && v.offerId && typeof v.title === 'string' && Array.isArray(v.mainImages) && Array.isArray(v.skus) && v.captureMeta && typeof v.captureMeta === 'object');",
+            "if (!raw) throw new Error('no raw-1688-offer capture found in this run');",
+            "const skus = raw.skus.filter(s => Number.isInteger(s.Quantity) && s.Quantity >= 0);",
+            "if (skus.length === 0) throw new Error('all captured SKUs have unknown stock; refusing to fabricate inventory');",
+            "return { ...raw, skus, captureMeta: { ...raw.captureMeta, skuCount: skus.length, skuWithPrice: skus.filter(s => s.Price != null).length, skuWithStock: skus.length } };"
+          ]
+        }
+      },
+      "page": "source1688",
+      "gate": {
+        "all": [
+          "pageHydrated"
+        ]
+      }
+    },
+    {
+      "goal": "关闭本次抓取用的 tab(窗口随最后一个 tab 一同关闭),不留孤儿窗口",
+      "verify": {
+        "actionSucceeded": true
+      },
+      "onFail": "escalate",
+      "action": {
+        "method": "browser.closeTab",
+        "params": {}
+      },
+      "page": "source1688",
+      "gate": {
+        "all": [
+          "pageHydrated"
+        ]
+      }
+    }
+  ],
+  "deliveries": [],
+  "schemaVersion": 2,
+  "pages": {
+    "source1688": {
+      "description": "1688 商品详情页(独立工作窗口)",
+      "signals": {
+        "pageHydrated": {
+          "condition": {
+            "selector": "[data-module=\"od_title\"] h1, .title-text"
+          },
+          "description": "标题模块已渲染,页面水合完成"
+        },
+        "skuModuleReady": {
+          "condition": {
+            "selector": "[data-module=\"od_sku_selection\"] .feature-item, .pc-sku-wrapper .sku-item-wrapper"
+          },
+          "description": "SKU 选择模块已渲染"
+        },
+        "galleryReady": {
+          "condition": {
+            "selector": "[data-module=\"od_picture_gallery\"] .od-picture-gallery-list li, .detail-gallery-img"
+          },
+          "description": "主图区已渲染"
+        },
+        "detailHostReady": {
+          "condition": {
+            "selector": "[data-module=\"od_product_description\"], .offer-attr"
+          },
+          "description": "详情宿主已渲染"
+        }
+      }
+    }
+  }
+}

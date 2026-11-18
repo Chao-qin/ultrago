@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+#
+# Pre-commit hook: regenerate playbook types and schemas, then refuse the commit if it
+# produced uncommitted changes, so packages/shared/src/generated/* never drifts
+# out of sync with resource/playbooks/*.json.
+#
+# Skip with `SKIP_PLAYBOOK_GENERATE=1 git commit ...` (e.g. inside CI where the check runs
+# separately, or while iterating on a playbook).
+set -euo pipefail
+
+if [ "${SKIP_PLAYBOOK_GENERATE:-0}" = "1" ]; then
+  exit 0
+fi
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+echo "[hook] pnpm playbooks:generate..."
+pnpm playbooks:generate
+
+if ! git diff --quiet -- packages/shared/src/generated/; then
+  echo ""
+  echo "❌ packages/shared/src/generated/ is out of date."
+  echo "   Run \`pnpm playbooks:generate\`, review the changed generated files, and stage them."
+  exit 1
+fi
+echo "[hook] ✓ generated/ is up to date"

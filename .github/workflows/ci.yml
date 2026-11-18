@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  # Named for what it gates, which is now more than typecheck. Everything the
+  # repo can verify without a browser or a live backend belongs here: a check
+  # nothing runs automatically is documentation, not a defence.
+  #
+  # The 2026-08-28 entries in .agent/learn.md are four guards that asserted
+  # nothing — one of them the convergence checker added six days earlier, in
+  # 4e6922b, defeated by the exact class of bug it was written to catch. None
+  # was caught by running it; all four were found by deliberately breaking
+  # what they claimed to protect. Writing a guard is one step, and until some
+  # job executes it, it is the only step that happened.
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.24.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          version: '0.11.2'
+
+      - name: Set up project Python
+        run: pnpm python:setup
+
+      - name: Python tests
+        run: pnpm test:python
+
+      # Explicit because packages/shared/dist is gitignored and every other
+      # package resolves `@bcp/shared` to dist/index.js. Today it happens to
+      # exist by the time anything needs it — packages/extension's typecheck
+      # script starts with this very command — but that is a side effect of an
+      # unrelated package's script, not a guarantee, and it silently stops
+      # holding the moment someone edits that script.
+      - name: Build shared
+        run: pnpm --filter @bcp/shared build
+
+      # @bcp/backend resolves @bcp/weclaw through its package exports, which
+      # point at dist/. A clean checkout has no ignored dist/ directory, so
+      # typecheck must build this dependency explicitly rather than relying on
+      # a previous local build or pnpm's typecheck ordering.
+      - name: Build weclaw
+        run: pnpm --filter @bcp/weclaw build
+
+      - name: Typecheck
+        run: pnpm -r typecheck
+
+      - name: Playbook generation freshness
+        run: |
+          pnpm playbooks:generate
+          if [[ -n "$(git diff -- packages/shared/src/generated/)" ]]; then
+            echo "::error::packages/shared/src/generated/ is out of date — run \`pnpm playbooks:generate\` and commit."
+            exit 1
+          fi
+
+      # @bcp/extension's screenshot-compression tests launch playwright-core
+      # directly. The npm package does not download Chromium, so a clean
+      # runner otherwise fails with "Executable doesn't exist" before tests
+      # begin.
+      - name: Install Chromium for browser tests
+        run: pnpm --filter @bcp/extension exec playwright-core install --with-deps chromium
+
+      # Desktop integration tests import @bcp/backend through its dist exports.
+      - name: Build backend
+        run: pnpm --filter @bcp/backend build
+
+      # 394 tests across shared/weclaw/console/backend, none of which ran in CI
+      # before 2026-08-28. Pure node:test — no browser, no network, no live
+      # backend. `pnpm install` already ran console's postinstall, so the Prisma
+      # client its tests import exists by now.
+      - name: Test
+        run: pnpm -r test
+
+      # The SQLite database is intentionally not committed. Rebuild the
+      # disposable CI database from migrations before the structural
+      # convergence assertions inspect it.
+      - name: Initialize console database
+        env:
+          DATABASE_URL: file:../../../resource/db/console.db
+        run: pnpm --filter @bcp/console prisma:deploy
+
+      # Structural assertions about the committed resource/db/console.db that
+      # typecheck cannot make: dropped tables stay dropped, the hand-written
+      # CHECK and partial unique index survive a table rebuild, every table
+      # carries its timestamps. Kept separate from Test so a schema regression
+      # reads as a schema regression in the job list rather than as one more
+      # failing assertion.
+      - name: Convergence
+        run: pnpm check:convergence
+
+      # book 的内联 JS 是 JSON 字符串里的裸代码：没有 typecheck，没有 lint，写坏了
+      # 要跑到那一步才炸。这个脚本是它唯一的防线（语法可解析、返回值没被尾分号吞掉、
+      # 等待带钟且在 eval cap 内、signal 只写表达式、等待走 bcpWait 而非手写轮询）。
+      # 纯 node — 无浏览器、无网络，shared 已在上面构建过。
+      # 2026-09-09 接进来之前它只是一个没人调用的 package.json script，和
+      # check:convergence 2026-08-28 之前一样：防线写了，执法面没接，等于没写。
+      - name: Books
+        run: pnpm check:books

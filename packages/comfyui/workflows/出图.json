@@ -1,0 +1,645 @@
+{
+  "id": "c8e32f24-6540-5562-ab7b-25bc29ae6f91",
+  "revision": 0,
+  "last_node_id": 32,
+  "last_link_id": 11,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "Fast Groups Bypasser (rgthree)",
+      "pos": [
+        0,
+        -220
+      ],
+      "size": [
+        460,
+        200
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "OPT_CONNECTION",
+          "type": "*",
+          "links": []
+        }
+      ],
+      "properties": {
+        "matchColors": "",
+        "matchTitle": "可选：",
+        "showNav": true,
+        "sort": "position",
+        "customSortAlphabet": "",
+        "toggleRestriction": "default"
+      },
+      "widgets_values": [],
+      "title": "开关：可选功能"
+    },
+    {
+      "id": 2,
+      "type": "LoadImage",
+      "pos": [
+        0,
+        0
+      ],
+      "size": [
+        300,
+        360
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 4,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            3
+          ]
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "example.png",
+        "image"
+      ],
+      "title": "参考图 1"
+    },
+    {
+      "id": 3,
+      "type": "LoadImage",
+      "pos": [
+        0,
+        400
+      ],
+      "size": [
+        300,
+        360
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 4,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            4
+          ]
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "example.png",
+        "image"
+      ],
+      "title": "参考图 2"
+    },
+    {
+      "id": 4,
+      "type": "bcp:batch_lines",
+      "pos": [
+        0,
+        860
+      ],
+      "size": [
+        340,
+        200
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 4,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "lines",
+          "type": "STRING",
+          "links": [
+            2
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "bcp:batch_lines"
+      },
+      "widgets_values": [
+        "一座漂浮在云海上的小岛，岛上有一座灯塔，夜晚满天星空\n樱花树下的小猫，春日午后"
+      ],
+      "title": "批量描述（每行一张）"
+    },
+    {
+      "id": 10,
+      "type": "bcp:skill",
+      "pos": [
+        380,
+        0
+      ],
+      "size": [
+        340,
+        300
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "spec",
+          "type": "STRING",
+          "link": 1
+        },
+        {
+          "name": "batch",
+          "type": "STRING",
+          "link": 2
+        }
+      ],
+      "outputs": [
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "links": [
+            5,
+            11
+          ]
+        },
+        {
+          "name": "size",
+          "type": "STRING",
+          "links": [
+            6
+          ]
+        },
+        {
+          "name": "skill",
+          "type": "STRING",
+          "links": [
+            10
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "bcp:skill"
+      },
+      "widgets_values": [
+        "自由生图",
+        "在这里写画面描述",
+        "",
+        ""
+      ],
+      "title": "技能"
+    },
+    {
+      "id": 11,
+      "type": "bcp:shot_spec",
+      "pos": [
+        380,
+        340
+      ],
+      "size": [
+        340,
+        330
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "spec",
+          "type": "STRING",
+          "links": [
+            1
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "bcp:shot_spec"
+      },
+      "widgets_values": [
+        "默认",
+        "默认",
+        "默认",
+        "默认",
+        "默认",
+        "默认",
+        "默认",
+        ""
+      ],
+      "title": "拍摄规格"
+    },
+    {
+      "id": 20,
+      "type": "bcp:openai_image",
+      "pos": [
+        760,
+        0
+      ],
+      "size": [
+        380,
+        440
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image_1",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 3
+        },
+        {
+          "name": "image_2",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 4
+        },
+        {
+          "name": "image_3",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_4",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_5",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_6",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_7",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "image_8",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "mask",
+          "shape": 7,
+          "type": "MASK",
+          "link": null
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "widget": {
+            "name": "prompt"
+          },
+          "link": 5
+        },
+        {
+          "name": "size",
+          "type": "STRING",
+          "widget": {
+            "name": "size"
+          },
+          "link": 6
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": [
+            7
+          ]
+        },
+        {
+          "name": "alpha",
+          "type": "MASK",
+          "links": [
+            8
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "bcp:openai_image"
+      },
+      "widgets_values": [
+        "gpt-image-2.5",
+        "",
+        "auto",
+        "medium",
+        1,
+        "auto",
+        0,
+        "randomize"
+      ],
+      "title": "出图"
+    },
+    {
+      "id": 21,
+      "type": "JoinImageWithAlpha",
+      "pos": [
+        760,
+        480
+      ],
+      "size": [
+        260,
+        80
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 7
+        },
+        {
+          "name": "alpha",
+          "type": "MASK",
+          "link": 8
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            9
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "JoinImageWithAlpha"
+      },
+      "widgets_values": [],
+      "title": "合成透明度"
+    },
+    {
+      "id": 30,
+      "type": "SaveImage",
+      "pos": [
+        1180,
+        0
+      ],
+      "size": [
+        340,
+        400
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 9
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "SaveImage"
+      },
+      "widgets_values": [
+        "出图/图"
+      ]
+    },
+    {
+      "id": 31,
+      "type": "PreviewAny",
+      "pos": [
+        380,
+        720
+      ],
+      "size": [
+        380,
+        220
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "source",
+          "type": "*",
+          "link": 10
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "PreviewAny"
+      },
+      "widgets_values": [],
+      "title": "实际使用的技能"
+    },
+    {
+      "id": 32,
+      "type": "PreviewAny",
+      "pos": [
+        760,
+        620
+      ],
+      "size": [
+        380,
+        220
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "source",
+          "type": "*",
+          "link": 11
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "PreviewAny"
+      },
+      "widgets_values": [],
+      "title": "最终提示词"
+    },
+    {
+      "id": 5,
+      "type": "Note",
+      "pos": [
+        1180,
+        460
+      ],
+      "size": [
+        340,
+        360
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "Note"
+      },
+      "widgets_values": [
+        "一个工作流覆盖文生图、参考图、批量、AI 选技能、透明底：\n1. 技能：下拉选用途；选「AI 自动选择」由文本模型挑技能并扩写描述（要先在 设置 → BCP 配文本模型）。\n2. 拍摄规格：每个维度「默认」= 用技能的预设；选了别的就覆盖这一项。最终提示词在下方显示。\n3. 左上「开关」：打开「参考图」上传最多 2 张参考（会走改图接口）；打开「批量描述」每行出一张。\n4. 出图节点 background 选 transparent 就保存透明 PNG；quality 先用 low 试，满意再调高。\n5. 每次 Run 都重新出图；想复用上次结果把 seed 下面的控制改成 fixed。"
+      ],
+      "title": "使用说明"
+    }
+  ],
+  "links": [
+    [
+      1,
+      11,
+      0,
+      10,
+      0,
+      "STRING"
+    ],
+    [
+      2,
+      4,
+      0,
+      10,
+      1,
+      "STRING"
+    ],
+    [
+      3,
+      2,
+      0,
+      20,
+      0,
+      "IMAGE"
+    ],
+    [
+      4,
+      3,
+      0,
+      20,
+      1,
+      "IMAGE"
+    ],
+    [
+      5,
+      10,
+      0,
+      20,
+      9,
+      "STRING"
+    ],
+    [
+      6,
+      10,
+      1,
+      20,
+      10,
+      "STRING"
+    ],
+    [
+      7,
+      20,
+      0,
+      21,
+      0,
+      "IMAGE"
+    ],
+    [
+      8,
+      20,
+      1,
+      21,
+      1,
+      "MASK"
+    ],
+    [
+      9,
+      21,
+      0,
+      30,
+      0,
+      "IMAGE"
+    ],
+    [
+      10,
+      10,
+      2,
+      31,
+      0,
+      "*"
+    ],
+    [
+      11,
+      10,
+      0,
+      32,
+      0,
+      "*"
+    ]
+  ],
+  "groups": [
+    {
+      "id": 1,
+      "title": "可选：参考图",
+      "bounding": [
+        -20,
+        -60,
+        340,
+        840
+      ],
+      "color": "#3f789e",
+      "font_size": 24,
+      "flags": {}
+    },
+    {
+      "id": 2,
+      "title": "可选：批量描述",
+      "bounding": [
+        -20,
+        800,
+        380,
+        280
+      ],
+      "color": "#3f789e",
+      "font_size": 24,
+      "flags": {}
+    }
+  ],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.6,
+      "offset": [
+        200,
+        460
+      ]
+    }
+  },
+  "version": 0.4
+}

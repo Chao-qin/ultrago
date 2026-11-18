@@ -1,0 +1,55 @@
+.service-recovery {
+  position: relative;
+  isolation: isolate;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  padding: 24px;
+  border: 1px solid color-mix(in srgb, var(--c-accent) 22%, var(--c-line));
+  border-radius: 18px;
+  background: radial-gradient(ellipse at 0 0, color-mix(in srgb, var(--c-accent) 9%, transparent), transparent 65%), var(--c-surface);
+  box-shadow: 0 8px 28px -22px color-mix(in srgb, var(--c-accent) 45%, transparent);
+  text-align: left;
+}
+.recovery-heading { display: flex; align-items: center; gap: 20px; }
+.recovery-signal { position: relative; display: grid; place-items: center; width: 80px; height: 80px; flex: none; color: var(--c-warn); border-radius: 50%; background: radial-gradient(circle, color-mix(in srgb, var(--c-warn) 12%, transparent), transparent 70%); }
+.recovery-signal > svg:first-child { position: absolute; inset: 0; width: 100%; height: 100%; fill: none; stroke: color-mix(in srgb, var(--c-accent) 38%, var(--c-line)); stroke-width: 1; }
+.recovery-signal > svg:first-child circle:first-child { stroke-dasharray: 4 7; }
+.recovery-signal > svg:first-child circle:last-child { fill: var(--c-accent); stroke: none; }
+.recovery-copy { flex: 1; min-width: 0; }
+.recovery-eyebrow { display: block; margin-bottom: 7px; font-size: 9px; letter-spacing: 2px; color: var(--c-ink-3); }
+.recovery-copy h2 { margin: 0; font-size: 20px; line-height: 1.35; font-weight: 650; letter-spacing: -.3px; color: var(--c-ink-1); }
+.recovery-copy p { margin: 7px 0 0; font-size: 12px; line-height: 1.7; color: var(--c-ink-2); }
+.recovery-retry.ant-btn { height: 38px; flex: none; border-radius: 10px; padding: 0 14px; font-size: 12px; }
+.recovery-issues { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 20px; }
+.recovery-issue { flex: 1 1 220px; min-width: 0; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--c-line); background: color-mix(in srgb, var(--c-bg) 58%, transparent); }
+.recovery-issue-label { display: flex; align-items: center; gap: 7px; color: var(--c-ink-1); font-size: 12px; }
+.recovery-issue-label i { width: 6px; height: 6px; border-radius: 50%; background: var(--c-bad); flex: none; }
+.recovery-issue-label strong { font-weight: 550; }
+.recovery-issue-label > span { margin-left: auto; padding: 2px 5px; border: 1px solid var(--c-line); border-radius: 4px; font-size: 9px; white-space: nowrap; color: var(--c-ink-3); }
+.recovery-issue p { margin: 6px 0 0; font-size: 11px; line-height: 1.7; color: var(--c-ink-2); }
+.recovery-issue summary { display: flex; align-items: center; gap: 5px; width: fit-content; margin-top: 8px; font-size: 10px; color: var(--c-ink-3); cursor: pointer; list-style: none; }
+.recovery-issue summary::-webkit-details-marker { display: none; }
+.recovery-issue summary:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 4px; border-radius: 2px; }
+.recovery-issue details[open] summary svg { transform: rotate(180deg); }
+.recovery-issue pre { margin: 8px 0 0; padding: 8px; border: 1px solid var(--c-line); border-radius: 6px; background: var(--c-bg); color: var(--c-ink-2); font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 120px; overflow: auto; }
+.recovery-retry-error { margin: 12px 0 0; color: var(--c-bad); font-size: 12px; overflow-wrap: anywhere; }
+.service-recovery.is-compact { padding: 16px 20px; border-radius: 14px; }
+.is-compact .recovery-signal { width: 56px; height: 56px; }
+.is-compact .recovery-copy h2 { font-size: 17px; }
+.is-compact .recovery-issues { margin-top: 14px; }
+.console-error-state { display: flex; justify-content: center; width: 100%; padding: 28px 18px; }
+.console-error-state .service-recovery { max-width: 640px; }
+@media (max-width: 767px) {
+  .service-recovery, .service-recovery.is-compact { padding: 16px; }
+  .recovery-heading { flex-wrap: wrap; gap: 12px; }
+  .recovery-signal { width: 56px; height: 56px; }
+  .recovery-copy { flex-basis: calc(100% - 68px); }
+  .recovery-copy h2 { font-size: 17px; }
+  .recovery-retry.ant-btn { width: 100%; }
+  .recovery-issues { margin-top: 14px; }
+  .console-error-state { padding: 18px 8px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .service-recovery *, .service-recovery *::before, .service-recovery *::after { animation: none !important; transition: none !important; }
+}
