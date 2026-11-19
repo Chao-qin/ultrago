@@ -196,3 +196,16 @@ test("the desktop client switches eval and the screenshot folder in a running ba
     await ingress.close(); await runner.close();
   }
 });
+
+test("微信桥默认关闭，只有 BCP_WECLAW_ENABLE 打开它，BCP_WECLAW_DISABLE 仍能强制关闭", async () => {
+  const restore = restoreEnv(["BCP_WECLAW_ENABLE", "BCP_WECLAW_DISABLE"]);
+  try {
+    const fresh = async () => (await import(`./config.js?weclaw=${Math.random()}`)).config.weclawDisabled as boolean;
+    delete process.env.BCP_WECLAW_ENABLE; delete process.env.BCP_WECLAW_DISABLE;
+    assert.equal(await fresh(), true, "首次使用不需要 Go 和微信扫码");
+    process.env.BCP_WECLAW_ENABLE = "1";
+    assert.equal(await fresh(), false);
+    process.env.BCP_WECLAW_DISABLE = "1";
+    assert.equal(await fresh(), true);
+  } finally { restore(); }
+});

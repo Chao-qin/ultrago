@@ -51,7 +51,7 @@ if [ -f "$ROOT/.env" ]; then
 elif [ -f "$ROOT/.env.example" ]; then
   say "creating .env from .env.example"
   cp "$ROOT/.env.example" "$ROOT/.env"
-  warn ".env created with example values — review BCP_TOKEN / ports / allowed-domains before exposing this host"
+  warn ".env created from .env.example — set BCP_TOKEN to a random value before exposing BCP_HOST beyond this machine"
 else
   warn "no .env and no .env.example — leaving .env untouched (backend.sh will fall back to compiled-in defaults)"
 fi
@@ -64,7 +64,7 @@ fi
 WECLAW_HOME="${HOME}/.weclaw"
 WECLAW_TARGET="$ROOT/packages/weclaw/config"
 if [ ! -d "$WECLAW_TARGET" ]; then
-  warn "weclaw config dir $WECLAW_TARGET does not exist — skipping symlink (maybe BCP_WECLAW_DISABLE=1?)"
+  warn "weclaw config dir $WECLAW_TARGET does not exist — skipping symlink (only needed with BCP_WECLAW_ENABLE=1)"
 elif [ -L "$WECLAW_HOME" ] && [ "$(readlink "$WECLAW_HOME")" = "$WECLAW_TARGET" ]; then
   say "~/.weclaw already points at $WECLAW_TARGET — skipping"
 elif [ -e "$WECLAW_HOME" ]; then
@@ -144,42 +144,12 @@ fi
 if bash "$ROOT/packages/llm/scripts/local-llm.sh" ensure; then
   say "local LLM runtime ready (provider decided by profile)"
 else
-  warn "local LLM runtime not ready — pnpm start will fail until it is; set BCP_LLM_ENABLE=0 in .env to skip the local LLM entirely"
+  warn "local LLM runtime not ready — with BCP_LLM_ENABLE=1, pnpm start fails until it is; remove that line from .env to skip the local LLM"
 fi
 
-say "init done — next: pnpm start (or pnpm dev for backend-only without WeClaw)"
-# The two steps below cannot run from here: both talk to the console's HTTP API,
-# and init.sh does not start the console. On a database this script just created
-# (or one that was reset) BOTH tables are empty, and neither empty table is
-# loudly broken at runtime — an unseeded registry degrades books to their inline
-# contract with only a warning. So the ordering has to be stated rather than
-# assumed. The console repeats both hints in its own boot log.
-say ""
-say "console.db is not in git (2026-08-29) — it is per-machine data, and a live"
-say "SQLite file cannot be version-controlled without clobbering someone. So the"
-say "database this script just created is EMPTY on every machine, every time, and"
-say "the things that make it useful have to be seeded. They all go over the"
-say "console's HTTP API, which means the console has to be running first:"
-say "  1. pnpm start                          # builds, then serves on CONSOLE_PORT (.env, default 8790)"
-say "  2. node scripts/register-schemas.mjs   # seed the Schema registry"
-say "  3. POST /api/books/rescan              # index resource/playbooks/ (= the Books page's 重新扫描)"
-say "  4. node scripts/sync-product-preprocess-flow.mjs          # flow「商品预处理」"
-say "     node scripts/sync-product-preprocess-publish-flow.mjs  # flow「商品预处理与发布」"
-say ""
-say "Step 4 was missing from this message until 2026-09-08, which made flows the"
-say "one thing a fresh clone silently lacked: books come back from files via the"
-say "rescan in step 3, schemas via step 2 — but a Flow lives ONLY as a row in"
-say "console.db. These two scripts ARE the materialised form of the two live"
-say "flows (idempotent: they match by name, POST when absent, PATCH when the"
-say "graph drifted). A flow built by hand in the console UI has no such script,"
-say "so it exists on exactly one machine — if you want it to survive a clone,"
-say "write its sync script the way these two are written."
-say ""
-say "One more per-machine thing has a repo-side source of truth: the preprocess"
-say "POLICY values (a SchemaRecord's content — e.g. text.replaceRules). Step 2 only"
-say "seeds that record when none exists, so editing"
-say ".claude/skills/product-preprocess/product-preprocess-config.example.json later"
-say "never reaches a machine that already has a record. That gap is what this closes:"
-say "  node scripts/sync-preprocess-config.mjs   # example.json → the DB record (idempotent)"
-say "Direction is repo-over-DB: edits made to that record in the console UI are"
-say "overwritten on the next run — put the change back in example.json instead."
+say "init done — next: pnpm start"
+say "pnpm start builds, starts the backend and the console, and fills a fresh database"
+say "(contract registry, playbook index, the two built-in flows) — nothing to seed by hand."
+say "Then load the extension, connect your agent, and run \`pnpm doctor\` to check every step."
+say "Optional parts stay off until you turn them on in .env: BCP_WECLAW_ENABLE=1 (WeChat,"
+say "needs Go 1.25+ and a QR login) and BCP_LLM_ENABLE=1 (local model)."

@@ -41,7 +41,7 @@ env_val() {
   fi
 }
 
-BCP_LLM_ENABLE="$(env_val BCP_LLM_ENABLE)"; BCP_LLM_ENABLE="${BCP_LLM_ENABLE:-1}"
+BCP_LLM_ENABLE="$(env_val BCP_LLM_ENABLE)"; BCP_LLM_ENABLE="${BCP_LLM_ENABLE:-0}"
 BCP_LLM_PORT="$(env_val BCP_LLM_PORT)";     BCP_LLM_PORT="${BCP_LLM_PORT:-11435}"
 BCP_LLM_MODEL="$(env_val BCP_LLM_MODEL)";   BCP_LLM_MODEL="${BCP_LLM_MODEL:-qwen3.5:4b}"
 # The backend's own port. BCP_LLM_PORT belongs to the gateway; every local

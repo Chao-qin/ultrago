@@ -44,7 +44,7 @@ env_val() {
   fi
 }
 
-BCP_LLM_ENABLE="$(env_val BCP_LLM_ENABLE)"; BCP_LLM_ENABLE="${BCP_LLM_ENABLE:-1}"
+BCP_LLM_ENABLE="$(env_val BCP_LLM_ENABLE)"; BCP_LLM_ENABLE="${BCP_LLM_ENABLE:-0}"
 LMSTUDIO_PORT="$(env_val BCP_LLM_LMSTUDIO_PORT)"; LMSTUDIO_PORT="${LMSTUDIO_PORT:-11436}"
 # MODEL_KEY = HF 下载 key(lms get 用);RUNTIME_KEY = LM Studio 注册的运行时 key
 # (lms ls/load 用)。两者不同名:lms get 把 HF 仓库下载后注册成短 key。
