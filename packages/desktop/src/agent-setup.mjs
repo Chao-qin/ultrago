@@ -73,9 +73,38 @@ export function agentCliSteps(client, command, args, version = '') {
   throw new Error('该助手没有命令行。');
 }
 
+/** The newest versions first: a version manager keeps every Node it ever installed, and the assistant is on one of them. */
+async function versionBins(root, ...rest) {
+  let versions;
+  try { versions = await readdir(root); } catch { return []; }
+  return versions.sort((a, b) => b.localeCompare(a, undefined, { numeric: true })).map((version) => join(root, version, ...rest));
+}
+
 /**
- * PATH lookup as the user's shell does it, plus the folders the Windows installers document: npm links global
- * commands straight into %AppData%\npm, and the Claude Code installer puts claude.exe in %USERPROFILE%\.local\bin.
+ * Where macOS keeps assistants that a GUI launch cannot see. A client started from Finder inherits launchd's PATH
+ * (/usr/bin:/bin:/usr/sbin:/sbin), not the shell's, so every Homebrew, npm or version-manager install is invisible
+ * until the user happens to start the client from a terminal. These are the folders those installers document;
+ * the version-manager ones are read from the user's home instead of guessed.
+ */
+export async function macFolders(env = process.env) {
+  const folders = ['/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin', '/opt/local/bin'];
+  const home = env.HOME;
+  if (!home) return folders;
+  folders.push(
+    join(home, '.local', 'bin'), join(home, 'bin'), join(home, '.npm-global', 'bin'), join(home, 'Library', 'pnpm'),
+    join(home, '.bun', 'bin'), join(home, '.volta', 'bin'), join(home, '.asdf', 'shims'),
+    // OpenCode's own installer links its command here.
+    join(home, '.opencode', 'bin'),
+  );
+  folders.push(...await versionBins(join(home, '.nvm', 'versions', 'node'), 'bin'));
+  folders.push(...await versionBins(join(home, 'Library', 'Application Support', 'fnm', 'node-versions'), 'installation', 'bin'));
+  return folders;
+}
+
+/**
+ * PATH lookup as the user's shell does it, plus the folders the installers document: npm links global commands
+ * straight into %AppData%\npm, the Claude Code installer puts claude.exe in %USERPROFILE%\.local\bin, and macOS
+ * keeps everything outside launchd's PATH (see macFolders).
  * Windows never updates a running process's environment, so without them an assistant installed after this client
  * started (it autostarts at login) would stay undetected until the client is quit.
  */
@@ -83,6 +112,7 @@ export async function findExecutable(name, env = process.env, platform = process
   const extensions = platform === 'win32' ? (env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean) : [''];
   const folders = (env.PATH || '').split(platform === 'win32' ? ';' : ':');
   if (platform === 'win32') folders.push(env.APPDATA && join(env.APPDATA, 'npm'), env.USERPROFILE && join(env.USERPROFILE, '.local', 'bin'));
+  else if (platform === 'darwin') folders.push(...await macFolders(env));
   for (const folder of folders.filter(Boolean)) {
     for (const extension of extensions) {
       const file = join(folder, name + extension);

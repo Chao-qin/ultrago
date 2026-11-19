@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, cp, rm } from 'node:fs/promises';
+import { mkdtemp, cp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -13,7 +13,9 @@ const { build } = createRequire(webRequire.resolve('vite'))('esbuild');
 const root = resolve(process.argv[2] || 'release/win-unpacked');
 const mac = root.endsWith('.app');
 const archive = join(root, mac ? 'Contents/Resources/app.asar' : 'resources/app.asar');
-const temporary = await mkdtemp(join(tmpdir(), 'bcp-packaged-runtime-'));
+// Resolved: on macOS os.tmpdir() is /var/..., which is a symlink to /private/var, and esbuild reports the real paths
+// it reads. Keeping the symlinked spelling would make every in-package importer look like it came from outside.
+const temporary = await realpath(await mkdtemp(join(tmpdir(), 'bcp-packaged-runtime-')));
 try {
   extractAll(archive, temporary);
   await cp(`${archive}.unpacked`, temporary, { recursive: true });

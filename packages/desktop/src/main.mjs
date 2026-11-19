@@ -173,6 +173,12 @@ else {
         demo: async () => { await coordinator.runDemo(); return coordinator.snapshot(); },
         repairBridge: async () => { await coordinator.prepareBridge(); return coordinator.snapshot(); },
         extensionFolder: () => shell.openPath(paths.extension),
+        // Chrome's “加载已解压的扩展程序” dialog needs the folder typed in, so offer the path itself as well.
+        copyExtensionFolder: async () => {
+          const { clipboard } = await import('electron');
+          await clipboard.writeText(paths.extension);
+          return paths.extension;
+        },
         extensions: () => shell.openExternal('https://support.google.com/chrome_webstore/answer/2664769?hl=zh-Hans'),
         chromeDownload: () => shell.openExternal('https://www.google.com/chrome/'),
         chromeShortcut: async () => {

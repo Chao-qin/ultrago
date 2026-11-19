@@ -1,13 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { agentCliSteps, agentLink, agentSetup, checkMcp, checkMcpStdio, claudeConfigFile, connectAgent, decodeOutput, detectAgents, findExecutable, installAgentConfig, runAgentCli } from '../src/agent-setup.mjs';
+import { agentCliSteps, agentLink, agentSetup, checkMcp, checkMcpStdio, claudeConfigFile, connectAgent, decodeOutput, detectAgents, findExecutable, installAgentConfig, macFolders, runAgentCli } from '../src/agent-setup.mjs';
 import { requestNotDelivered, watchResponses } from '../src/mcp-bridge.mjs';
 import { StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { randomUUID } from 'node:crypto';
 import { createIngress } from '../src/ingress.mjs';
 import { startMcpHttpServer } from '../../backend/dist/mcp-http.js';
 import { EventStore } from '../../backend/dist/event-store.js';
-import { lstat, mkdir, mkdtemp, readdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -288,7 +288,8 @@ test('only requests that provably never reached a session are retried', () => {
 });
 
 test('assistant config is merged with a backup, kept when already current and never overwritten when unreadable', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'bcp-agent-config-'));
+  // Resolved: macOS tmpdir() is /var/..., a symlink, and the merge reports where the file really lives.
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'bcp-agent-config-')));
   const executable = 'C:\\Program Files\\UltraGo Internal\\resources\\native\\bcp-native-host.exe';
   assert.equal(claudeConfigFile('C:\\Users\\卖家\\AppData\\Roaming'), join('C:\\Users\\卖家\\AppData\\Roaming', 'Claude', 'claude_desktop_config.json'));
 
@@ -602,6 +603,23 @@ test('a CLI is found the way the shell finds it, and a Windows .cmd shim is run 
   }
   await runAgentCli('C:\\Users\\卖家\\.local\\bin\\claude.exe', ['mcp', 'list'], { platform: 'win32', run });
   assert.deepEqual(calls.at(-1), { file: 'C:\\Users\\卖家\\.local\\bin\\claude.exe', args: ['mcp', 'list'], options: undefined }, '.exe 直接启动，不经过 cmd');
+});
+
+test('a Mac client started from Finder still finds the assistants launchd hides, newest version manager first', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'bcp-home-'));
+  await mkdir(join(home, '.local', 'bin'), { recursive: true });
+  await writeFile(join(home, '.local', 'bin', 'fixture-cli'), '');
+  const nvm = join(home, '.nvm', 'versions', 'node');
+  for (const version of ['v20.19.0', 'v22.13.0']) {
+    await mkdir(join(nvm, version, 'bin'), { recursive: true });
+    await writeFile(join(nvm, version, 'bin', 'fixture-nvm'), '');
+  }
+  const launchd = { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: home };
+  assert.equal(await findExecutable('fixture-cli', launchd, 'darwin'), join(home, '.local', 'bin', 'fixture-cli'), '~/.local/bin');
+  assert.equal(await findExecutable('fixture-nvm', launchd, 'darwin'), join(nvm, 'v22.13.0', 'bin', 'fixture-nvm'), '版本管理器取最新的 Node');
+  assert.equal(await findExecutable('fixture-cli', launchd, 'linux'), null, '其他系统只按 shell 的 PATH 找');
+  assert.deepEqual((await macFolders({ HOME: home })).slice(0, 2), ['/opt/homebrew/bin', '/opt/homebrew/sbin'], 'Homebrew 先于用户目录');
+  assert.equal((await macFolders({})).includes('/opt/homebrew/bin'), true, '没有 HOME 时仍然查系统目录');
 });
 
 test("cmd.exe's own errors in the legacy code page are decoded, UTF-8 output is kept", () => {

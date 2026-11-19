@@ -295,6 +295,14 @@ async function action(name, input, background = name === 'state') {
 }
 document.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => void action(button.dataset.action, button.dataset.input)));
 $('select-browser').addEventListener('click', () => void action('selectBrowser', $('browser-select').value));
+$('extension-copy').addEventListener('click', async () => {
+  $('extension-copy-status').textContent = '';
+  try {
+    if (!bridge) throw new Error('此页面需要在 Electron 客户端内打开。');
+    const folder = await bridge.action('copyExtensionFolder');
+    $('extension-copy-status').textContent = `已复制：${folder}`;
+  } catch (error) { $('extension-copy-status').textContent = error.message; }
+});
 $('chrome-shortcut').addEventListener('click', async () => {
   $('error').hidden = true;
   try {
