@@ -10,7 +10,7 @@ import { join, resolve } from "node:path";
 import { access, link, lstat, mkdtemp, mkdir, readdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { InternalRunner } from "./internal-runner.js";
 import type { SnapshotElement } from "@bcp/shared";
-import { config, envFlag, EVAL_DISABLED, LOCAL_EVAL_DISABLED } from "./config.js";
+import { config, envFlag, envFlagDefaultOn, EVAL_DISABLED, LOCAL_EVAL_DISABLED } from "./config.js";
 import { createBrowserHttpRouter } from "./browser-http.js";
 import { resolveShotPath, writeShot } from "./browser-mcp-tools-capture.js";
 import { renderSnapshotView, SNAPSHOT_CHAR_BUDGET, windowFocusLabel, windowFocusLegend } from "./browser-mcp-render.js";
@@ -31,8 +31,24 @@ test("switches accept every common spelling of on, and only those", () => {
     assert.equal(config.evalEnabled, true, "BCP_EVAL=1 用户最常写的形式必须生效");
   } finally { restore(); }
   assert.match(EVAL_DISABLED, /允许页面脚本/);
-  assert.match(EVAL_DISABLED, /BCP_EVAL=on/);
+  assert.match(EVAL_DISABLED, /BCP_EVAL=off/);
   assert.match(LOCAL_EVAL_DISABLED, /允许本机脚本/);
+});
+
+test("page eval and local eval are on unless explicitly switched off", () => {
+  for (const value of [undefined, "", "on", "1", "anything"]) assert.equal(envFlagDefaultOn(value), true, String(value));
+  for (const value of ["off", "OFF", "0", "false", "no", " off "]) assert.equal(envFlagDefaultOn(value), false, value);
+  const restore = restoreEnv(["BCP_EVAL", "BCP_LOCAL_EVAL"]);
+  try {
+    delete process.env.BCP_EVAL;
+    delete process.env.BCP_LOCAL_EVAL;
+    assert.equal(config.evalEnabled, true, "未设置 BCP_EVAL 时页面 eval 默认开启");
+    assert.equal(config.localEvalEnabled, true, "未设置 BCP_LOCAL_EVAL 时 local.eval 默认开启");
+    process.env.BCP_EVAL = "off";
+    process.env.BCP_LOCAL_EVAL = "off";
+    assert.equal(config.evalEnabled, false);
+    assert.equal(config.localEvalEnabled, false);
+  } finally { restore(); }
 });
 
 test("screenshots may go to the temp folder or the folder the user chose, nowhere else", () => {

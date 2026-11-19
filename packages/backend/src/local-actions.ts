@@ -27,13 +27,25 @@ export function resolveReportFile(directory: string, file: string, paths = pathA
 export function runLocalEval(code: string, results: PlaybackStepResult[]): unknown {
   const context = vm.createContext(Object.create(null));
   context.__input = JSON.stringify(results);
-  const script = new vm.Script(
-    // A returned Promise is settled inside the context first: left alone, its rejection surfaces in the backend as
-    // an unhandledRejection and takes the whole process down. local.eval is synchronous by contract.
-    `(() => { const value = (function (results) {\n${code}\n})(JSON.parse(__input));` +
-      ` if (value && typeof value.then === "function") { value.then(undefined, () => {}); throw new Error("local.eval must return its value synchronously, not a Promise"); }` +
-      ` return value === undefined ? undefined : JSON.stringify(value); })()`,
-  );
+  // Same two compile forms as page eval (extension background.ts), in the same
+  // order: a bare expression is returned implicitly, otherwise the code is a
+  // function body that needs an explicit `return`. Without the expression form
+  // `results.length` evaluated to undefined here while the identical code
+  // returned a value from eval.
+  const compile = (body: string): vm.Script =>
+    new vm.Script(
+      // A returned Promise is settled inside the context first: left alone, its rejection surfaces in the backend as
+      // an unhandledRejection and takes the whole process down. local.eval is synchronous by contract.
+      `(() => { const value = (function (results) {\n${body}\n})(JSON.parse(__input));` +
+        ` if (value && typeof value.then === "function") { value.then(undefined, () => {}); throw new Error("local.eval must return its value synchronously, not a Promise"); }` +
+        ` return value === undefined ? undefined : JSON.stringify(value); })()`,
+    );
+  let script: vm.Script;
+  try {
+    script = compile(`return (${code}\n);`);
+  } catch {
+    script = compile(code);
+  }
   const out = script.runInContext(context, { timeout: 2000 }) as string | undefined;
   return out === undefined ? undefined : JSON.parse(out);
 }
@@ -52,6 +64,27 @@ export function runLocalEval(code: string, results: PlaybackStepResult[]): unkno
  * - "rename": keep the old file and write to `<name>-<timestamp><ext>`
  *   (ISO-ish stamp, filesystem-safe).
  */
+/** A `local.writeFile` step writes the value of the step RIGHT BEFORE it —
+ * the previous plan step, matched by index. `results` only keeps steps that
+ * advanced with exactly one action, so "the last entry" could be an older
+ * step's value whenever the previous step produced none; that is refused here
+ * instead of silently writing the wrong data. Shared by the write_file tool and
+ * both playback channels. */
+export async function writePreviousStepValue(
+  path: string,
+  results: PlaybackStepResult[],
+  stepIndex: number,
+  opts?: { overwrite?: "overwrite" | "error" | "rename" },
+): Promise<string> {
+  const prev = results.find((r) => r.index === stepIndex - 1);
+  if (!prev)
+    throw new Error(
+      `local.writeFile writes the value of the step right before it (step ${stepIndex}), but that step produced no single value — ` +
+        `put the step that computes the content (one action, e.g. local_eval) immediately before write_file`,
+    );
+  return writeLocalFile(path, typeof prev.value === "string" ? prev.value : JSON.stringify(prev.value), opts);
+}
+
 export async function writeLocalFile(
   path: string,
   content: string,

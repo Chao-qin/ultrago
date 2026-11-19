@@ -668,8 +668,9 @@ async function main() {
   {
     const { readFileSync } = await import("node:fs");
     const docs = readFileSync(pathResolve(HERE, "../../shared/src/mcp-instructions.ts"), "utf8");
+    // The docs state the list once (CONFIRM_DOC, shared by click and double_click); any extra copy must match it.
     const copies = [...docs.matchAll(/label contains one of: ([^.]+)\. Pass it only/g)].map((m) => m[1]);
-    eq(copies.length >= 2 && copies.every((c) => c === copies[0]), true, "every copy of the confirm list is identical");
+    eq(copies.length >= 1 && copies.every((c) => c === copies[0]), true, "every copy of the confirm list is identical");
     const listed = copies[0];
     const risky = /const RISKY = (\/.+\/i);/.exec(runtimeSource) ?? /RISKY = (\/.+\/i);/.exec(runtimeSource);
     eq(!!listed && !!risky, true, "the documented confirm list and the RISKY gate are both found");
@@ -1297,6 +1298,41 @@ async function main() {
       eq(p2.value?.delta?.defaultPrevented, true, "an editor that consumes the paste is reported as having done so");
       eq(await page.evaluate(() => document.getElementById("rich").textContent), "EDITOR:粘贴内容",
         "and we did NOT also insert it ourselves");
+    },
+  );
+
+  // A paste lands where a real one would: at the caret of a field that already
+  // had focus (replacing the selection), else at the end — and it never
+  // flattens an editor's existing markup into plain text.
+  await withPage(
+    `<input id="field" type="text" value="abcdef">
+     <input id="cold" type="text" value="abc">
+     <div id="doc" contenteditable="true"><b>粗体</b> 正文</div>`,
+    async (t) => {
+      await page.evaluate(() => { const f = document.getElementById("field"); f.focus(); f.setSelectionRange(2, 4); });
+      eq((await t.call("paste", { ref: t.ref("field"), text: "XY" })).error, undefined, "paste into a focused field resolves");
+      eq(await t.value("field"), "abXYef", "it replaces the selection at the caret instead of appending");
+      await t.call("paste", { ref: t.ref("cold"), text: "!" });
+      eq(await t.value("cold"), "abc!", "a field that had no focus gets the text at the end");
+      await t.call("paste", { ref: t.ref("doc"), text: "追加" });
+      eq(await page.evaluate(() => document.querySelector("#doc b")?.textContent), "粗体", "the editor keeps its markup");
+      eq(await page.evaluate(() => document.getElementById("doc").textContent), "粗体 正文追加", "and the text is appended after it");
+    },
+  );
+
+  // hover and right-click take the same locator as click: a description works
+  // where a ref used to be the only way in.
+  await withPage(
+    `<div id="menuTrigger" tabindex="0" style="width:120px;height:30px"
+       onmouseenter="window.__hovered = 1">更多操作</div>
+     <div id="rowItem" tabindex="0" style="width:120px;height:30px"
+       oncontextmenu="event.preventDefault(); window.__ctx = 1">订单 1001</div>`,
+    async (t) => {
+      await page.evaluate(() => { window.__hovered = 0; window.__ctx = 0; });
+      eq((await t.call("hover", { text: "更多操作" })).error, undefined, "hover by visible text resolves");
+      eq(await page.evaluate(() => window.__hovered), 1, "and reaches the element's mouseenter handler");
+      eq((await t.call("contextmenu", { text: "订单 1001" })).error, undefined, "right-click by visible text resolves");
+      eq(await page.evaluate(() => window.__ctx), 1, "and the page's contextmenu handler runs");
     },
   );
 

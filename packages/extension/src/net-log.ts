@@ -5,7 +5,7 @@
  * Bounded per tab: a long-lived page would otherwise grow this without limit,
  * and only the tail is ever useful.
  */
-import type { NetworkRequest } from "@bcp/shared";
+import { NETWORK_LOG_PER_TAB, type NetworkRequest } from "@bcp/shared";
 
 export interface NetLog {
   push(tabId: number, r: NetworkRequest): void;
@@ -13,7 +13,7 @@ export interface NetLog {
   forget(tabId: number): void;
 }
 
-export function createNetLog(cap = 100): NetLog {
+export function createNetLog(cap = NETWORK_LOG_PER_TAB): NetLog {
   const byTab = new Map<number, NetworkRequest[]>();
   return {
     push(tabId, r) {

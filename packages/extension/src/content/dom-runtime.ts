@@ -845,6 +845,12 @@ export async function bcpDomRuntime(
     const realPaste = async (target: HTMLElement, text: string, timeoutMs = 5000): Promise<ActOutcome> => {
       const el = followLabel(target);
       await reachTarget(el, "paste", timeoutMs);
+      // Where a real paste lands: at the caret when the field already had focus
+      // (an earlier type/click/selection put it there), otherwise at the end —
+      // focusing a field fresh does not give it a meaningful caret.
+      let active: Element | null = document.activeElement;
+      while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+      const hadFocus = active === el;
       el.focus();
       const editable = el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement;
       if (!editable && !el.isContentEditable)
@@ -862,8 +868,29 @@ export async function bcpDomRuntime(
           bubbles: true, cancelable: true, composed: true, inputType: "insertFromPaste", data: text,
         }));
         if (ok) {
-          if (editable) setNativeValue(el, el.value + text);
-          else el.textContent = (el.textContent ?? "") + text;
+          if (editable) {
+            const len = el.value.length;
+            const start = hadFocus ? (el.selectionStart ?? len) : len;
+            const end = hadFocus ? (el.selectionEnd ?? start) : len;
+            setNativeValue(el, el.value.slice(0, start) + text + el.value.slice(end));
+            try { el.setSelectionRange(start + text.length, start + text.length); } catch { /* type without a caret (email/number) */ }
+          } else {
+            // Insert a text node rather than rewriting textContent, which
+            // flattened the editor's existing markup into plain text.
+            const node = document.createTextNode(text);
+            const sel = getSelection();
+            const range = hadFocus && sel && sel.rangeCount && el.contains(sel.getRangeAt(0).commonAncestorContainer) ? sel.getRangeAt(0) : null;
+            if (range) {
+              range.deleteContents();
+              range.insertNode(node);
+              range.setStartAfter(node);
+              range.collapse(true);
+              sel!.removeAllRanges();
+              sel!.addRange(range);
+            } else {
+              el.appendChild(node);
+            }
+          }
           el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertFromPaste", data: text }));
         }
       } else {
@@ -2207,11 +2234,11 @@ export async function bcpDomRuntime(
         return withResolved({ value: { ok: true, delta } });
       }
       case "hover": {
-        const el = resolve(params.ref!);
+        const el = targetOf("hover");
         const before = captureSig();
         await realHover(el);
         await sleep(150); // let a hover-triggered tooltip/menu render
-        return { value: { ok: true, delta: afterDelta(before) } };
+        return withResolved({ value: { ok: true, delta: afterDelta(before) } });
       }
       case "clickText": {
         const want = (params.text ?? "").trim();
@@ -2263,7 +2290,7 @@ export async function bcpDomRuntime(
                     ? "no element's text EQUALS it, which is what exact:true requires — drop exact, or pass the full text quoted above"
                     : `every copy is hidden, so re-wording cannot help${openerFor(hiddenCause(loose[0]))}`
                 }`
-              : ` — that string is nowhere in this document; read_content to see what is, or snapshot if the target may be in another frame (click_text sees the main frame only)`),
+              : ` — that string is nowhere in this document; read_content to see what is, or snapshot if the target may be in another frame (this text match covers the main frame only)`),
           );
         }
         if (params.nth !== undefined && !matches[params.nth])
@@ -2827,6 +2854,9 @@ export function bcpNetworkPatch(): void {
   const report = (method: string, url: string, status: number, ct: string | null, text: string): void => {
     if (!w.__bcpNetOn) return;
     const truncated = text.length > CAP;
+    // Absolute, like the request log read_network shows: a page's fetch("/api/x")
+    // must pair with the log's https://host/api/x entry.
+    try { url = new URL(url, location.href).href; } catch { /* keep what the page passed */ }
     window.postMessage({
       __bcp: "event", kind: "network_body",
       summary: `body ${status} ${method} ${url}`,

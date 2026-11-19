@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
+import { READ_DUMP_TTL_MS } from "@bcp/shared";
 
 export interface ReadPageOverview {
   headings: string[];
@@ -15,7 +16,6 @@ export interface ReadDumpInput {
   totalChars: number;
   overview?: ReadPageOverview;
   maxChars?: number;
-  requestedOffset?: number;
 }
 
 export interface ReadDumpChunk {
@@ -45,7 +45,7 @@ const MEDIUM_PAGE_CHARS = 64_000;
 const MEDIUM_CHUNK_CHARS = 16_000;
 const MAX_OVERVIEW_HEADINGS = 40;
 const MAX_OVERVIEW_EXCERPT = 800;
-const DUMP_TTL_MS = 5 * 60_000;
+const DUMP_TTL_MS = READ_DUMP_TTL_MS;
 
 function defaultChunkChars(totalChars: number): number {
   if (totalChars <= SHORT_PAGE_CHARS) return Math.max(1, totalChars || DEFAULT_CHUNK_CHARS);
@@ -185,8 +185,7 @@ export class PageReadDumpStore {
         await writeFile(manifestPath, JSON.stringify({
           version: 1,
           ...dump,
-          requestedOffset: input.requestedOffset ?? 0,
-          instructions: "Read this manifest, then open only the chunk files needed for the current question. The dump is deleted before the next browser operation.",
+          instructions: `Read this manifest, then open only the chunk files needed for the current question. The dump is deleted before the next browser operation, and after ${DUMP_TTL_MS / 60_000} minutes at most.`,
         }, null, 2) + "\n", "utf8");
         this.expiry = setTimeout(() => { void this.cleanup(); }, DUMP_TTL_MS);
         this.expiry.unref();

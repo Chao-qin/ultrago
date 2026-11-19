@@ -3,13 +3,17 @@
  *
  * Split out of browser-mcp.ts. It touches no session state at all: every step
  * goes through `call`, so the group moves as-is.
+ *
+ * Each step's arguments are the SAME shapes the single tools take (shared
+ * locator fields included), so "each step's args match the matching single
+ * tool" is true by construction rather than a promise the schema broke.
  */
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { RpcMethod, type ActionDelta } from "@bcp/shared";
 import type { BrowserCall } from "./browser-mcp-types.js";
-import { renderDelta, text } from "./browser-mcp-render.js";
-import { looseBool, tabId } from "./browser-mcp-shapes.js";
+import { deltaGate, describeTarget, gateNote, renderDelta, text } from "./browser-mcp-render.js";
+import { locatorShape, looseBool, tabId } from "./browser-mcp-shapes.js";
 
 export interface BatchToolDeps {
   server: McpServer;
@@ -17,55 +21,88 @@ export interface BatchToolDeps {
   drainEvents: (onTab?: number) => string;
 }
 
+const fieldLocator = {
+  ref: locatorShape.ref, name: locatorShape.name, role: locatorShape.role, css: locatorShape.css,
+  near: locatorShape.near, exact: locatorShape.exact, nth: locatorShape.nth,
+};
+
+const stepShape = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("click"), ...locatorShape, humanize: looseBool.optional(), confirm: looseBool.optional() }),
+  z.object({
+    action: z.literal("type_text"), ...fieldLocator,
+    text: z.string().describe("The value to type — NOT a locator. Replaces the field's current content"),
+    submit: looseBool.optional(), humanize: looseBool.optional(), confirm: looseBool.optional(),
+  }),
+  z.object({ action: z.literal("select_option"), ref: z.string(), values: z.array(z.string()) }),
+  z.object({ action: z.literal("press_key"), key: z.string(), ref: z.string().optional() }),
+  z.object({ action: z.literal("hover"), ...locatorShape }),
+  z.object({ action: z.literal("scroll"), ref: z.string().optional(), deltaY: z.coerce.number().optional(), toBottom: looseBool.optional(), humanize: looseBool.optional() }),
+]);
+
 /** Registers batch. */
 export function registerBatchTools({ server, call, drainEvents }: BatchToolDeps): void {
   server.registerTool(
     "batch",
     {
       description:
-        "Run several browser actions in ONE call to save agent round-trips — e.g. fill a form (type into 3 fields) then click submit, without a separate tool call per step. Steps run in order and STOP at the first error. Use for a known sequence on an already-snapshotted page; if the DOM changes unpredictably between steps (a click opens a portal), snapshot and act separately instead. Each step's args match the matching single tool.",
+        "Run several browser actions in ONE call to save agent round-trips — e.g. fill a form (type into 3 fields) then click submit, without a separate tool call per step. Steps run in order and STOP at the first error. Each step is { action, ...args } where args are exactly what the single tool (click / type_text / select_option / press_key / hover / scroll) takes, minus tabId (set once for the batch). Use for a known sequence; if a step changes the page unpredictably (a click opens a portal), prefer descriptions over refs or act separately.",
       inputSchema: {
-        steps: z.array(
-          z.object({
-            action: z.enum(["click", "type_text", "select_option", "press_key", "hover", "scroll"]),
-            ref: z.string().optional(),
-            text: z.string().optional(),
-            values: z.array(z.string()).optional(),
-            key: z.string().optional(),
-            submit: looseBool.optional(),
-            confirm: looseBool.optional(),
-            deltaY: z.coerce.number().optional(),
-            toBottom: looseBool.optional(),
-          }),
-        ).describe("Ordered steps; each is { action, ...args }"),
+        steps: z.array(stepShape).min(1).describe("Ordered steps; each is { action, ...the single tool's args }"),
         tabId,
       },
     },
     async ({ steps, tabId }) => {
       const results: string[] = [];
+      let gate: string | null = null;
       for (let i = 0; i < steps.length; i++) {
-        const s = steps[i];
-        // Each step's evidence used to be thrown away — no variable received the
-        // call's result — and every step that did not throw printed the same
-        // fixed "✓". Filling and submitting a form is the case that most needs
-        // evidence, and it was the one getting the least.
+        const s = steps[i]!;
         let stepDelta: ActionDelta | undefined;
+        let label = "";
         try {
           switch (s.action) {
-            case "click": stepDelta = (await call(RpcMethod.Click, { ref: s.ref!, confirm: s.confirm, tabId })).delta; break;
-            case "type_text": stepDelta = (await call(RpcMethod.Type, { ref: s.ref!, text: s.text ?? "", submit: s.submit, confirm: s.confirm, tabId })).delta; break;
-            case "select_option": stepDelta = (await call(RpcMethod.SelectOption, { ref: s.ref!, values: s.values ?? [], tabId })).delta; break;
-            case "press_key": stepDelta = (await call(RpcMethod.PressKey, { key: s.key ?? "", ref: s.ref, tabId })).delta; break;
-            case "hover": stepDelta = (await call(RpcMethod.Hover, { ref: s.ref!, tabId })).delta; break;
-            case "scroll": await call(RpcMethod.Scroll, { ref: s.ref, deltaY: s.deltaY, toBottom: s.toBottom, tabId }); break;
+            case "click": {
+              const { action: _a, ...args } = s;
+              stepDelta = (await call(RpcMethod.Click, { ...args, tabId })).delta;
+              label = describeTarget(args);
+              if (s.confirm) gate ??= "a confirmed critical/irreversible action";
+              break;
+            }
+            case "type_text": {
+              const { action: _a, ...args } = s;
+              stepDelta = (await call(RpcMethod.Type, { ...args, tabId })).delta;
+              // `text` is the typed VALUE (maybe a password) — never echo it as the target.
+              label = describeTarget({ ref: s.ref, name: s.name, role: s.role, css: s.css, near: s.near });
+              if (s.submit) gate ??= "a form submission";
+              break;
+            }
+            case "select_option":
+              stepDelta = (await call(RpcMethod.SelectOption, { ref: s.ref, values: s.values, tabId })).delta;
+              label = s.ref;
+              break;
+            case "press_key":
+              stepDelta = (await call(RpcMethod.PressKey, { key: s.key, ref: s.ref, tabId })).delta;
+              label = `${s.key}${s.ref ? ` on ${s.ref}` : ""}`;
+              break;
+            case "hover": {
+              const { action: _a, ...args } = s;
+              stepDelta = (await call(RpcMethod.Hover, { ...args, tabId })).delta;
+              label = describeTarget(args);
+              break;
+            }
+            case "scroll": {
+              const r = await call(RpcMethod.Scroll, { ref: s.ref, deltaY: s.deltaY, toBottom: s.toBottom, humanize: s.humanize, tabId });
+              label = r.via === "dom" ? `${r.target} by ${r.movedBy}px` : `${r.target} (synthetic wheel)`;
+              break;
+            }
           }
-          results.push(`${i + 1}. ${s.action} ${s.ref ?? ""}${renderDelta(stepDelta) || "  (nothing observably changed)"}`);
+          gate ??= deltaGate(stepDelta);
+          results.push(`${i + 1}. ${s.action} ${label}${renderDelta(stepDelta) || "  (nothing observably changed)"}`);
         } catch (e) {
           results.push(`${i + 1}. ${s.action} ✗ ${e instanceof Error ? e.message : String(e)}`);
-          return text(`Batch stopped at step ${i + 1}/${steps.length}:\n${results.join("\n")}`);
+          return text(`Batch stopped at step ${i + 1}/${steps.length}:\n${results.join("\n")}${gateNote(gate)}`);
         }
       }
-      return text(`Batch done (${steps.length} steps):\n${results.join("\n")}${drainEvents(tabId)}`);
+      return text(`Batch done (${steps.length} steps):\n${results.join("\n")}${gateNote(gate)}${drainEvents(tabId)}`);
     },
   );
 }

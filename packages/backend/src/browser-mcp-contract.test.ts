@@ -88,16 +88,20 @@ async function connect(opts: {
  * has to edit by hand makes "I removed a tool" a visible decision in the diff.
  */
 const EXPECTED_TOOLS = [
-  "advance", "analyze_page", "batch", "browser_state", "browser_status",
-  "claim_tab", "click", "click_text", "close_tab", "close_window", "double_click", "download",
-  "drag", "eval", "go_back", "go_forward", "hover", "launch_browser", "list_browsers",
-  "list_playbooks", "list_tabs", "list_windows", "local_eval", "navigate", "new_tab",
+  "advance", "analyze_page", "batch", "browser_state",
+  "claim_tab", "click", "close_tab", "close_window", "double_click", "download",
+  "drag", "eval", "go_back", "go_forward", "hover", "launch_browser",
+  "list_playbooks", "list_windows", "local_eval", "navigate", "new_tab",
   "new_window", "page_state", "paste_text", "pick_option", "plan", "plan_abort", "plan_status",
   "press_key", "read_content", "read_content_dump", "read_events", "read_network", "record_stop", "reload",
   "right_click", "run_playbook", "screenshot", "scroll", "select_option", "set_browser_mode",
   "set_network_capture", "snapshot", "stop_browser", "switch_tab", "type_text", "upload_file",
-  "use_browser", "wait_for", "wait_for_event", "wait_signal", "write_file",
+  "use_browser", "wait_for", "wait_for_event", "write_file",
 ];
+
+/** Tools that existed and were folded into another — a name an agent might
+ *  still reach for, so no agent-facing text may mention it again. */
+const RETIRED_TOOLS = ["list_tabs", "list_browsers", "browser_status", "click_text", "wait_signal"];
 
 test("每个工具都还在，没有多出来的", async () => {
   const { client, close } = await connect();
@@ -141,8 +145,13 @@ test("关键工具的参数名与必填集不变", async () => {
       props: ["confirm", "css", "exact", "humanize", "name", "near", "nth", "ref", "role", "submit", "tabId", "text"],
       required: ["text"],
     },
-    read_content: { props: ["maxChars", "offset", "tabId"], required: [] },
-    analyze_page: { props: ["maxChars", "offset", "saveScreenshot", "screenshotPath", "tabId"], required: [] },
+    read_content: { props: ["maxChars", "tabId"], required: [] },
+    analyze_page: { props: ["maxChars", "saveScreenshot", "screenshotPath", "tabId"], required: [] },
+    // The same locator fields as click — "same targeting as click" is a schema fact, not a promise.
+    right_click: { props: ["css", "exact", "name", "near", "nth", "ref", "role", "tabId", "text", "x", "y"], required: [] },
+    double_click: { props: ["confirm", "css", "exact", "name", "near", "nth", "ref", "role", "tabId", "text", "x", "y"], required: [] },
+    hover: { props: ["css", "exact", "name", "near", "nth", "ref", "role", "tabId", "text", "x", "y"], required: [] },
+    pick_option: { props: ["css", "exact", "name", "near", "nth", "option", "ref", "role", "tabId", "text", "x", "y"], required: ["option"] },
     use_browser: { props: ["instanceId", "kind"], required: ["kind"] },
     claim_tab: { props: ["release", "tabId"], required: [] },
     stop_browser: { props: ["confirm", "instanceId", "kind"], required: ["confirm", "instanceId", "kind"] },
@@ -165,7 +174,7 @@ test("关键工具的参数名与必填集不变", async () => {
   await close();
 });
 
-test("read_content 把分页 offset 传给浏览器，并明确告诉客户端如何继续", async () => {
+test("read_content 把正文写进临时文件，回复只给 manifest", async () => {
   const { client, calls, close } = await connect({
     result: {
       title: "长页面",
@@ -177,11 +186,11 @@ test("read_content 把分页 offset 传给浏览器，并明确告诉客户端�
       overview: { headings: ["章节"], excerpt: "开头" },
     },
   });
-  const reply = (await client.callTool({ name: "read_content", arguments: { maxChars: 6, offset: 32000, tabId: 7 } })) as {
+  const reply = (await client.callTool({ name: "read_content", arguments: { maxChars: 6, tabId: 7 } })) as {
     content: Array<{ text?: string }>;
   };
   const rendered = reply.content.map((c) => c.text ?? "").join("\n");
-  assert.deepEqual(calls.at(-1)?.params, { maxChars: 6, offset: 32000, full: true, tabId: 7 });
+  assert.deepEqual(calls.at(-1)?.params, { maxChars: 6, full: true, tabId: 7 });
   assert.match(rendered, /Page text dumped to temporary files/);
   const manifest = rendered.match(/Manifest: (.+)/)?.[1];
   assert.ok(manifest, "read_content should return a manifest path");
@@ -266,7 +275,7 @@ test("plan / batch 系的参数，含嵌套的 step 与 verify 形状", async ()
 test("没有 lifecycle 时，生命周期工具不注册（其余照常）", async () => {
   const { client, close } = await connect({ lifecycle: null });
   const names = new Set((await client.listTools()).tools.map((t) => t.name));
-  for (const gone of ["launch_browser", "stop_browser", "browser_status"]) {
+  for (const gone of ["launch_browser", "stop_browser"]) {
     assert.equal(names.has(gone), false, `${gone} 不该在无 lifecycle 时注册`);
   }
   assert.equal(names.has("snapshot"), true, "普通工具应当不受影响");
@@ -445,13 +454,15 @@ test("快照的覆盖记账跟着实际读到的标签页走，变化基线按�
   } finally { await Promise.all([a.close(), b.close()]); }
 });
 
-test("pick_option 内部读的快照不带会话键，不挪动 agent 的变化基线", async () => {
+test("pick_option 内部读的快照用自己的基线键，不挪动 agent 的变化基线", async () => {
   const { client, calls, close } = await connect({ result: { tabId: 1, url: "u", title: "t", moreBelow: false, elements: [{ ref: "e1", tag: "li", role: "option", name: "北京" }], ok: true } });
   try {
+    await client.callTool({ name: "snapshot", arguments: {} });
+    const sessionKey = calls.at(-1)?.params.deltaKey;
     await client.callTool({ name: "pick_option", arguments: { ref: "e0", option: "北京" } });
-    const internal = calls.find((c) => c.method === RpcMethod.Snapshot);
-    assert.ok(internal, "pick_option 应当读过一次快照");
-    assert.equal(internal.params.deltaKey, undefined);
+    const internal = calls.filter((c) => c.method === RpcMethod.Snapshot).slice(1);
+    assert.ok(internal.length >= 1, "pick_option 应当读过快照");
+    for (const c of internal) assert.notEqual(c.params.deltaKey, sessionKey, "内部快照不能用 agent 的会话键");
   } finally { await close(); }
 });
 
@@ -461,5 +472,145 @@ test("agent 自己的截图在 auto 模式下才允许把读不出的后台窗�
     await client.callTool({ name: "screenshot", arguments: {} });
     const shot = calls.find((c) => c.method === RpcMethod.Screenshot);
     assert.equal(shot?.params.activate, true);
+  } finally { await close(); }
+});
+
+/* ───────────────────── agent-facing text vs. the tool list ─────────────────────
+ * What an agent reads (tool descriptions, every parameter description, the
+ * server instructions) must only point it at tools that exist, and must
+ * describe every argument it can pass. Both drifted silently before: params
+ * with no description, and prose naming `browser_eval` / `list_tabs` long
+ * after those names stopped being tools. */
+
+test("每个工具的每个参数都有说明", async () => {
+  const { client, close } = await connect();
+  const { tools } = await client.listTools();
+  const missing: string[] = [];
+  for (const t of tools) {
+    const props = (t.inputSchema as { properties?: Record<string, { description?: string }> }).properties ?? {};
+    for (const [k, v] of Object.entries(props)) if (!v.description?.trim()) missing.push(`${t.name}.${k}`);
+  }
+  assert.deepEqual(missing, [], "这些参数没有说明");
+  await close();
+});
+
+test("说明文字里点名的工具都已注册，退役的工具名不再出现", async () => {
+  const { client, close } = await connect();
+  const { tools } = await client.listTools();
+  const registered = new Set(tools.map((t) => t.name));
+  const params = new Set<string>();
+  const texts: Array<[string, string]> = [["instructions", client.getInstructions() ?? ""]];
+  const walk = (where: string, schema: unknown): void => {
+    if (!schema || typeof schema !== "object") return;
+    const o = schema as Record<string, unknown>;
+    if (typeof o.description === "string") texts.push([where, o.description]);
+    for (const [k, v] of Object.entries((o.properties as Record<string, unknown>) ?? {})) {
+      params.add(k);
+      walk(`${where}.${k}`, v);
+    }
+    for (const key of ["items", "anyOf", "oneOf"]) {
+      const v = o[key];
+      for (const x of Array.isArray(v) ? v : [v]) walk(where, x);
+    }
+  };
+  for (const t of tools) {
+    texts.push([t.name, t.description ?? ""]);
+    walk(t.name, t.inputSchema);
+  }
+  // snake_case identifiers that are not tools: event kinds, verify fields, wire values.
+  const notTools = new Set([
+    "browser_online", "browser_offline", "mode_changed", "claim_changed", "target_changed", "window_opened", "window_closed",
+    "console_error", "network_failed", "network_body", "dom_changed", "tab_closed", "captcha_appeared", "captcha_cleared",
+    "waiting_extension", "executable_missing", "protocol_incompatible", "auth_rejected",
+  ]);
+  const bad: string[] = [];
+  for (const [where, s] of texts) {
+    // A name in backticks, or written as a call: `snapshot`, click({…}), plan().
+    for (const m of s.matchAll(/`([a-z]+(?:_[a-z]+)+)`|\b([a-z]+(?:_[a-z]+)+)\(/g)) {
+      const name = m[1] ?? m[2]!;
+      if (!registered.has(name) && !params.has(name) && !notTools.has(name)) bad.push(`${where}: ${name}`);
+    }
+    for (const name of RETIRED_TOOLS) if (new RegExp(`\\b${name}\\b`).test(s)) bad.push(`${where}: retired ${name}`);
+    for (const m of s.matchAll(/\bbrowser_([a-z_]+)\b/g)) if (registered.has(m[1]!)) bad.push(`${where}: browser_${m[1]}`);
+  }
+  assert.deepEqual(bad, [], "说明里点名了不存在的工具");
+  await close();
+});
+
+test("registerRpcTool：schema 与说明对不上时拒绝注册", async () => {
+  const { describedShape } = await import("./browser-mcp-tool-spec.js");
+  const { z } = await import("zod");
+  assert.throws(() => describedShape(RpcMethod.Navigate, { url: z.string(), extra: z.string() }), /"extra" has no description/);
+  assert.throws(() => describedShape(RpcMethod.Navigate, {}), /"url" is documented but missing/);
+  assert.throws(() => describedShape(RpcMethod.ClickText, {}), /has no MCP tool/);
+  const ok = describedShape(RpcMethod.Navigate, { url: z.string() });
+  assert.match((ok.url as { description?: string }).description ?? "", /Absolute URL/);
+});
+
+test("read_network 把开启抓取后的响应体挂在对应请求下面", async () => {
+  const events = new EventStore();
+  const { client, close } = await connect({
+    events,
+    result: { tabId: 3, requests: [
+      { method: "GET", url: "https://x/api/list", status: 200, type: "xmlhttprequest", ts: 1 },
+      { method: "POST", url: "https://x/api/save", status: 200, type: "xmlhttprequest", ts: 2 },
+    ] },
+  });
+  try {
+    events.push({ kind: "network_body", tabId: 3, ts: 3, browser: "inst-a", summary: "body 200 POST https://x/api/save", detail: { url: "https://x/api/save", method: "POST", status: 200, body: '{"code":500,"msg":"库存不足"}' } });
+    events.push({ kind: "network_body", tabId: 4, ts: 3, browser: "inst-a", summary: "other tab", detail: { url: "https://x/api/list", method: "GET", status: 200, body: "OTHER-TAB" } });
+    const reply = (await client.callTool({ name: "read_network", arguments: {} })) as { content: Array<{ text?: string }> };
+    const out = reply.content.map((c) => c.text ?? "").join("\n");
+    assert.match(out, /POST https:\/\/x\/api\/save\n {4}body: \{"code":500,"msg":"库存不足"\}/);
+    assert.doesNotMatch(out, /OTHER-TAB/, "别的标签页的响应体不能挂过来");
+  } finally { await close(); }
+});
+
+test("close_tab 回复说出实际关掉的标签页，并释放认领", async () => {
+  const { client, close } = await connect({ result: { closed: true, tabId: 9 } });
+  try {
+    await client.callTool({ name: "claim_tab", arguments: { tabId: 9 } });
+    const reply = (await client.callTool({ name: "close_tab", arguments: {} })) as { content: Array<{ text?: string }> };
+    assert.match(reply.content[0]?.text ?? "", /Closed tab 9 \(this session's claimed tab/);
+  } finally { await close(); }
+});
+
+test("wait_for：text 与 selector 二选一，条件等待把超时显式发给浏览器", async () => {
+  const { client, calls, close } = await connect({ result: { matched: false } });
+  try {
+    const both = (await client.callTool({ name: "wait_for", arguments: { text: "a", selector: "#b" } })) as { isError?: boolean };
+    assert.equal(both.isError, true);
+    const before = calls.length;
+    const r = (await client.callTool({ name: "wait_for", arguments: { text: "已保存" } })) as { content: Array<{ text?: string }> };
+    assert.equal(calls.length, before + 1);
+    assert.equal(calls.at(-1)?.params.ms, 5000);
+    assert.match(r.content[0]?.text ?? "", /Timed out after 5000ms waiting for text "已保存"/);
+  } finally { await close(); }
+});
+
+test("browser_state 给完整实例 id、本会话的目标与认领", async () => {
+  const { client, close } = await connect({ lifecycle: null });
+  try {
+    await client.callTool({ name: "claim_tab", arguments: { tabId: 4 } });
+    const reply = (await client.callTool({ name: "browser_state", arguments: {} })) as { content: Array<{ text?: string }> };
+    const out = reply.content[0]?.text ?? "";
+    assert.match(out, /this session: .*claimed tab 4 in chrome:inst-a/);
+    assert.match(out, /### chrome:inst-b \[auto\]/);
+  } finally { await close(); }
+});
+
+test("batch 的每一步接受与单个工具相同的定位参数", async () => {
+  const { client, calls, close } = await connect({ result: { ok: true } });
+  try {
+    const r = (await client.callTool({ name: "batch", arguments: { steps: [
+      { action: "click", text: "保存", near: "商品A" },
+      { action: "type_text", name: "标题", text: "新标题", submit: true },
+    ] } })) as { content: Array<{ text?: string }> };
+    const out = r.content[0]?.text ?? "";
+    assert.deepEqual(calls.at(-2)?.params, { text: "保存", near: "商品A", tabId: undefined });
+    assert.equal(calls.at(-1)?.params.name, "标题");
+    assert.match(out, /Verify gate — a form submission/);
+    assert.doesNotMatch(out, /新标题/, "输入的值（可能是密码）不能被当成目标回显");
+    assert.match(out, /type_text name="标题"/);
   } finally { await close(); }
 });

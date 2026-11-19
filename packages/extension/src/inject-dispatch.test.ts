@@ -284,11 +284,11 @@ test("MUTATING 的操作要额外警告「可能已经落地」", async () => {
   );
 });
 
-test("整个 tab 都没了 → 指向 list_tabs / new_tab，而不是让人对着 frame 发呆", async () => {
+test("整个 tab 都没了 → 指向 list_windows / new_tab，而不是让人对着 frame 发呆", async () => {
   const h = harness();
   h.setFrames(null);
   h.setExec(async () => []);
-  await assert.rejects(() => h.dispatch(RpcMethod.Click, { ref: "e1" }), /no longer exists.*list_tabs/s);
+  await assert.rejects(() => h.dispatch(RpcMethod.Click, { ref: "e1" }), /no longer exists.*list_windows/s);
 });
 
 test("DOM op 返回 error 时抛出带诊断的错误", async () => {

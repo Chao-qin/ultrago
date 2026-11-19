@@ -7,7 +7,7 @@
  * closure — so they are the part of that file that can be read, and tested,
  * on its own.
  */
-import type { ActionDelta, PageState, SnapshotElement, StepVerify, TabInfo } from "@bcp/shared";
+import { RpcMethod, toolNameOf, type ActionDelta, type PageState, type SnapshotElement, type StepVerify, type TabInfo } from "@bcp/shared";
 import type { RecordingNote } from "./orchestrator.js";
 import type { ReadDump } from "./browser-read-dump.js";
 
@@ -35,6 +35,30 @@ export function renderReadDump(dump: ReadDump): string {
     `Opening excerpt: ${dump.overview.excerpt || "(empty)"}`,
     `Read the manifest first, then only the chunk file(s) needed for the current question. The dump is deleted before the next browser operation.`,
   ].join("\n");
+}
+
+/** How a tool reply names the element it acted on: the ref, the point, or the description it was given. */
+export function describeTarget(t: { ref?: string; text?: string; role?: string; name?: string; css?: string; near?: string; x?: number; y?: number }): string {
+  if (t.ref) return t.ref;
+  if (t.x !== undefined && t.y !== undefined) return `(${t.x},${t.y})`;
+  const bits = [
+    t.text && `text=${JSON.stringify(t.text)}`,
+    t.role && `role=${t.role}`,
+    t.name && `name=${JSON.stringify(t.name)}`,
+    t.css && `css=${t.css}`,
+    t.near && `near=${JSON.stringify(t.near)}`,
+  ].filter(Boolean);
+  return bits.length ? bits.join(" + ") : "the target";
+}
+
+/** A playbook step's action as the tool call that performs it. */
+export function describeAction(action: { method: string; params: Record<string, unknown> } | undefined): string {
+  if (!action) return "(check-only — nothing to perform)";
+  const tool = toolNameOf(action.method);
+  const args = JSON.stringify(action.params);
+  if (!tool) return `${action.method} ${args} (runner-only — no tool performs it; use mode:"auto")`;
+  if (action.method === RpcMethod.ClickText) return `click ${JSON.stringify({ ...action.params })} (text matched innermost-first; pass nth when several match)`;
+  return `${tool} ${args}`;
 }
 
 /** After a gate-triggering action, the tool result appends this reminder so ANY

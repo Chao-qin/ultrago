@@ -8,12 +8,13 @@
  */
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { MCP_TOOL_INSTRUCTIONS, RpcMethod, type PageState, type SnapshotElement } from "@bcp/shared";
+import { RpcMethod, WAIT_FOR_DEFAULT_MS, WAIT_FOR_MAX_MS, type PageState, type SnapshotElement } from "@bcp/shared";
 import { config, EVAL_DISABLED } from "./config.js";
 import type { BrowserCall, ReadSnapshot } from "./browser-mcp-types.js";
-import { deltaGate, fail, gateNote, renderDelta, renderHistoryNav, renderPageState, renderReadDump, text } from "./browser-mcp-render.js";
+import { deltaGate, describeTarget, fail, gateNote, renderDelta, renderHistoryNav, renderPageState, renderReadDump, text } from "./browser-mcp-render.js";
 import { PageReadDumpStore } from "./browser-read-dump.js";
-import { looseBool, tabId } from "./browser-mcp-shapes.js";
+import { locatorShape, looseBool, tabId } from "./browser-mcp-shapes.js";
+import { registerRpcTool } from "./browser-mcp-tool-spec.js";
 
 export interface DomToolDeps {
   server: McpServer;
@@ -26,17 +27,15 @@ export interface DomToolDeps {
 
 /** Registers the page-reading and page-acting tools. */
 export function registerDomTools({ server, call, deltaKey, drainEvents, readDumps, readSnapshot }: DomToolDeps): void {
-  server.registerTool(
-    "snapshot",
+  registerRpcTool(
+    server,
+    RpcMethod.Snapshot,
     {
-      description: MCP_TOOL_INSTRUCTIONS[RpcMethod.Snapshot].description,
-      inputSchema: {
-        tabId,
-        query: z.string().optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Snapshot].params["query"]),
-        viewportOnly: looseBool.optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Snapshot].params["viewportOnly"]),
-        limit: z.coerce.number().int().positive().optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Snapshot].params["limit"]),
-        after: z.string().optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Snapshot].params["after"]),
-      },
+      tabId,
+      query: z.string().optional(),
+      viewportOnly: looseBool.optional(),
+      limit: z.coerce.number().int().positive().optional(),
+      after: z.string().optional(),
     },
     async ({ tabId, query, viewportOnly, limit, after }) => {
       try {
@@ -49,15 +48,13 @@ export function registerDomTools({ server, call, deltaKey, drainEvents, readDump
     },
   );
 
-  server.registerTool(
-    "page_state",
+  registerRpcTool(
+    server,
+    RpcMethod.PageState,
     {
-      description: MCP_TOOL_INSTRUCTIONS[RpcMethod.PageState].description,
-      inputSchema: {
-        tabId,
-        verbosity: z.preprocess((v) => (typeof v === "string" ? v.toLowerCase() : v), z.enum(["summary", "detail"])).optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.PageState].params["verbosity"]),
-        resetDelta: looseBool.optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.PageState].params["resetDelta"]),
-      },
+      tabId,
+      verbosity: z.preprocess((v) => (typeof v === "string" ? v.toLowerCase() : v), z.enum(["summary", "detail"])).optional(),
+      resetDelta: looseBool.optional(),
     },
     async ({ tabId, verbosity, resetDelta }) => {
       try {
@@ -69,30 +66,14 @@ export function registerDomTools({ server, call, deltaKey, drainEvents, readDump
     },
   );
 
-  server.registerTool(
-    "click",
-    {
-      description: MCP_TOOL_INSTRUCTIONS[RpcMethod.Click].description,
-      inputSchema: {
-        ref: z.string().optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Click].params["ref"]),
-        text: z.string().optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Click].params["text"]),
-        role: z.string().optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Click].params["role"]),
-        name: z.string().optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Click].params["name"]),
-        css: z.string().optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Click].params["css"]),
-        near: z.string().optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Click].params["near"]),
-        exact: looseBool.optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Click].params["exact"]),
-        nth: z.coerce.number().optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Click].params["nth"]),
-        x: z.coerce.number().optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Click].params["x"]),
-        y: z.coerce.number().optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Click].params["y"]),
-        tabId,
-        humanize: looseBool.optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Click].params["humanize"]),
-        confirm: looseBool.optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Click].params["confirm"]),
-      },
-    },
+  registerRpcTool(
+    server,
+    RpcMethod.Click,
+    { ...locatorShape, tabId, humanize: looseBool.optional(), confirm: looseBool.optional() },
     async ({ ref, text: byText, role, name, css, near, exact, nth, x, y, tabId, humanize, confirm }) => {
       try {
         const r = await call(RpcMethod.Click, { ref, text: byText, role, name, css, near, exact, nth, x, y, tabId, humanize, confirm });
-        const named = ref ?? (x !== undefined && y !== undefined ? `(${x},${y})` : [byText && `text=${JSON.stringify(byText)}`, role && `role=${role}`, name && `name=${JSON.stringify(name)}`, css && `css=${css}`, near && `near=${JSON.stringify(near)}`].filter(Boolean).join(" + "));
+        const named = describeTarget({ ref, text: byText, role, name, css, near, x, y });
         return text(`Clicked ${named}${renderDelta(r.delta)}${gateNote(confirm ? "a confirmed critical/irreversible action" : deltaGate(r.delta))}`);
       } catch (e) {
         return fail(e);
@@ -100,28 +81,27 @@ export function registerDomTools({ server, call, deltaKey, drainEvents, readDump
     },
   );
 
-  server.registerTool(
-    "type_text",
+  registerRpcTool(
+    server,
+    RpcMethod.Type,
     {
-      description: MCP_TOOL_INSTRUCTIONS[RpcMethod.Type].description,
-      inputSchema: {
-        ref: z.string().optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Type].params["ref"]),
-        text: z.string().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Type].params["text"]),
-        name: z.string().optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Type].params["name"]),
-        role: z.string().optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Type].params["role"]),
-        css: z.string().optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Type].params["css"]),
-        near: z.string().optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Type].params["near"]),
-        exact: looseBool.optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Type].params["exact"]),
-        nth: z.coerce.number().optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Type].params["nth"]),
-        submit: looseBool.optional(), tabId,
-        humanize: looseBool.optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Type].params["humanize"]),
-        confirm: looseBool.optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Type].params["confirm"]),
-      },
+      ref: locatorShape.ref,
+      text: z.string(),
+      name: locatorShape.name,
+      role: locatorShape.role,
+      css: locatorShape.css,
+      near: locatorShape.near,
+      exact: locatorShape.exact,
+      nth: locatorShape.nth,
+      submit: looseBool.optional(),
+      tabId,
+      humanize: looseBool.optional(),
+      confirm: looseBool.optional(),
     },
     async ({ ref, text: value, name, role, css, near, exact, nth, submit, tabId, humanize, confirm }) => {
       try {
         const r = await call(RpcMethod.Type, { ref, text: value, name, role, css, near, exact, nth, submit, tabId, humanize, confirm });
-        const named = ref ?? [name && `name=${JSON.stringify(name)}`, role && `role=${role}`, css && `css=${css}`, near && `near=${JSON.stringify(near)}`].filter(Boolean).join(" + ");
+        const named = describeTarget({ ref, role, name, css, near });
         // "and submitted" used to be printed off the `submit` PARAMETER — i.e.
         // off what the caller asked for, never off what happened. It is now
         // stated only when the runtime saw requestSubmit() actually reached;
@@ -134,19 +114,16 @@ export function registerDomTools({ server, call, deltaKey, drainEvents, readDump
     },
   );
 
-  server.registerTool(
-    "read_content",
+  registerRpcTool(
+    server,
+    RpcMethod.ReadContent,
     {
-      description: MCP_TOOL_INSTRUCTIONS[RpcMethod.ReadContent].description,
-      inputSchema: {
-        maxChars: z.coerce.number().int().positive().optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.ReadContent].params["maxChars"]),
-        offset: z.coerce.number().int().nonnegative().optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.ReadContent].params["offset"]),
-        tabId,
-      },
+      maxChars: z.coerce.number().int().positive().optional(),
+      tabId,
     },
-    async ({ maxChars, offset, tabId }) => {
+    async ({ maxChars, tabId }) => {
       try {
-        const r = await call(RpcMethod.ReadContent, { maxChars, offset, full: true, tabId });
+        const r = await call(RpcMethod.ReadContent, { maxChars, full: true, tabId });
         if (!r.text.trim() && r.totalChars === 0)
           return text(`# ${r.title}\n${r.url}\n\n(no visible text after waiting for the DOM to settle — the page may still be loading slowly, be behind a login/consent wall, or render inside a canvas/iframe. Try wait_for a known element, or screenshot to see it.)`);
         const dump = await readDumps.create({
@@ -156,7 +133,6 @@ export function registerDomTools({ server, call, deltaKey, drainEvents, readDump
           totalChars: r.totalChars,
           overview: r.overview,
           maxChars,
-          requestedOffset: offset,
         });
         return text(`# ${r.title}\n${r.url}\n\n${renderReadDump(dump)}${drainEvents(tabId)}`);
       } catch (e) {
@@ -169,7 +145,7 @@ export function registerDomTools({ server, call, deltaKey, drainEvents, readDump
     "read_content_dump",
     {
       description:
-        "Read one file from the currently-live page text dump created by read_content or analyze_page. Start with the returned manifest path, then pass only the needed chunk path. The path is sandboxed to the current dump directory; the dump expires before the next browser operation.",
+        "Read one file of the current page-text dump that read_content or analyze_page wrote on the backend host — for when your own file reader cannot reach that host. Start with the manifest path from the reply, then pass only the chunk path you need. Paths are sandboxed to the current dump directory. Reading does not count as a browser operation, so the dump stays available until your next browser tool call.",
       inputSchema: {
         path: z.string().describe("Absolute path copied from the current dump manifest or read_content reply"),
         maxChars: z.coerce.number().int().positive().optional().describe("Optional output cap for this file; omit to read the whole selected chunk"),
@@ -184,52 +160,37 @@ export function registerDomTools({ server, call, deltaKey, drainEvents, readDump
     },
   );
 
-  server.registerTool(
-    "wait_for",
+  registerRpcTool(
+    server,
+    RpcMethod.WaitFor,
     {
-      description: MCP_TOOL_INSTRUCTIONS[RpcMethod.WaitFor].description,
-      inputSchema: { text: z.string().optional(), selector: z.string().optional(), state: z.preprocess((v) => (typeof v === "string" ? v.toLowerCase() : v), z.enum(["visible", "hidden"])).optional(), ms: z.coerce.number().optional(), tabId },
+      text: z.string().optional(),
+      selector: z.string().optional(),
+      state: z.preprocess((v) => (typeof v === "string" ? v.toLowerCase() : v), z.enum(["visible", "hidden"])).optional(),
+      ms: z.coerce.number().int().nonnegative().max(WAIT_FOR_MAX_MS).optional(),
+      tabId,
     },
     async ({ text: t, selector, state, ms, tabId }) => {
       try {
-        const r = await call(RpcMethod.WaitFor, { text: t, selector, state, ms, tabId });
-        return text(r.matched ? "Condition met." : "Timed out waiting.");
+        if (t && selector) return fail(new Error("wait_for takes `text` OR `selector`, not both — make two calls if you need both"));
+        if (state && !selector) return fail(new Error("`state` applies to `selector` only"));
+        const condition = t || selector;
+        if (!condition && ms === undefined) return fail(new Error("wait_for needs `text`, `selector`, or a fixed delay in `ms`"));
+        const timeout = ms ?? WAIT_FOR_DEFAULT_MS;
+        const r = await call(RpcMethod.WaitFor, { text: t, selector, state, ms: timeout, tabId });
+        if (!condition) return text(`Waited ${timeout}ms.`);
+        const what = t ? `text ${JSON.stringify(t)}` : `${selector} to be ${state ?? "visible"}`;
+        return text(r.matched ? `Condition met: ${what}.` : `Timed out after ${timeout}ms waiting for ${what}.`);
       } catch (e) {
         return fail(e);
       }
     },
   );
 
-  server.registerTool(
-    "wait_signal",
-    {
-      description: MCP_TOOL_INSTRUCTIONS[RpcMethod.WaitSignal].description,
-      inputSchema: {
-        condition: z.record(z.string(), z.unknown()).describe("Declarative Book v2 signal condition tree (urlIncludes/settled/networkIdle/selector/textPresent/script/all/any/not)"),
-        timeoutMs: z.coerce.number().positive().optional().describe("Absolute wait ceiling in ms (default 30s)"),
-        tabId,
-      },
-    },
-    async ({ condition, timeoutMs, tabId }) => {
-      try {
-        const deadline = timeoutMs ?? 30_000;
-        const r = await call(RpcMethod.WaitSignal, { condition: condition as unknown as import("@bcp/shared").SignalCondition, timeoutMs: deadline, tabId });
-        if (r.satisfied) {
-          const ev = r.evidence === undefined ? "" : ` evidence: ${JSON.stringify(r.evidence)}`;
-          return text(`Signal satisfied.${ev}`);
-        }
-        return text(
-          `Signal timed out after ${deadline}ms.${r.failedPaths?.length ? ` failed: ${r.failedPaths.join(", ")}` : ""} url=${r.url ?? "?"} pageState=${JSON.stringify(r.pageState ?? {})}`,
-        );
-      } catch (e) {
-        return fail(e);
-      }
-    },
-  );
-
-  server.registerTool(
-    "select_option",
-    { description: MCP_TOOL_INSTRUCTIONS[RpcMethod.SelectOption].description, inputSchema: { ref: z.string(), values: z.array(z.string()).describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.SelectOption].params["values"]), tabId } },
+  registerRpcTool(
+    server,
+    RpcMethod.SelectOption,
+    { ref: z.string(), values: z.array(z.string()), tabId },
     async ({ ref, values, tabId }) => {
       try {
         const r = await call(RpcMethod.SelectOption, { ref, values, tabId });
@@ -240,9 +201,10 @@ export function registerDomTools({ server, call, deltaKey, drainEvents, readDump
     },
   );
 
-  server.registerTool(
-    "press_key",
-    { description: MCP_TOOL_INSTRUCTIONS[RpcMethod.PressKey].description, inputSchema: { key: z.string(), ref: z.string().optional(), tabId } },
+  registerRpcTool(
+    server,
+    RpcMethod.PressKey,
+    { key: z.string(), ref: z.string().optional(), tabId },
     async ({ key, ref, tabId }) => {
       try {
         const r = await call(RpcMethod.PressKey, { key, ref, tabId });
@@ -253,9 +215,10 @@ export function registerDomTools({ server, call, deltaKey, drainEvents, readDump
     },
   );
 
-  server.registerTool(
-    "scroll",
-    { description: MCP_TOOL_INSTRUCTIONS[RpcMethod.Scroll].description, inputSchema: { ref: z.string().optional(), deltaY: z.coerce.number().optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Scroll].params["deltaY"]), toBottom: looseBool.optional(), humanize: looseBool.optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Scroll].params["humanize"]), tabId } },
+  registerRpcTool(
+    server,
+    RpcMethod.Scroll,
+    { ref: z.string().optional(), deltaY: z.coerce.number().optional(), toBottom: looseBool.optional(), humanize: looseBool.optional(), tabId },
     async ({ ref, deltaY, toBottom, humanize, tabId }) => {
       try {
         const r = await call(RpcMethod.Scroll, { ref, deltaY, toBottom, humanize, tabId });
@@ -277,9 +240,10 @@ export function registerDomTools({ server, call, deltaKey, drainEvents, readDump
     },
   );
 
-  server.registerTool(
-    "go_back",
-    { description: MCP_TOOL_INSTRUCTIONS[RpcMethod.GoBack].description, inputSchema: { tabId } },
+  registerRpcTool(
+    server,
+    RpcMethod.GoBack,
+    { tabId },
     async ({ tabId }) => {
       try {
         const r = await call(RpcMethod.GoBack, { tabId });
@@ -290,9 +254,10 @@ export function registerDomTools({ server, call, deltaKey, drainEvents, readDump
     },
   );
 
-  server.registerTool(
-    "go_forward",
-    { description: MCP_TOOL_INSTRUCTIONS[RpcMethod.GoForward].description, inputSchema: { tabId } },
+  registerRpcTool(
+    server,
+    RpcMethod.GoForward,
+    { tabId },
     async ({ tabId }) => {
       try {
         const r = await call(RpcMethod.GoForward, { tabId });
@@ -303,9 +268,10 @@ export function registerDomTools({ server, call, deltaKey, drainEvents, readDump
     },
   );
 
-  server.registerTool(
-    "reload",
-    { description: MCP_TOOL_INSTRUCTIONS[RpcMethod.Reload].description, inputSchema: { tabId } },
+  registerRpcTool(
+    server,
+    RpcMethod.Reload,
+    { tabId },
     async ({ tabId }) => {
       try {
         const r = await call(RpcMethod.Reload, { tabId });
@@ -316,15 +282,13 @@ export function registerDomTools({ server, call, deltaKey, drainEvents, readDump
     },
   );
 
-  server.registerTool(
-    "eval",
+  registerRpcTool(
+    server,
+    RpcMethod.Eval,
     {
-      description: MCP_TOOL_INSTRUCTIONS[RpcMethod.Eval].description,
-      inputSchema: {
-        code: z.string(),
-        tabId,
-        frameId: z.coerce.number().optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Eval].params["frameId"]),
-      },
+      code: z.string(),
+      tabId,
+      frameId: z.coerce.number().optional(),
     },
     async ({ code, tabId, frameId }) => {
       try {

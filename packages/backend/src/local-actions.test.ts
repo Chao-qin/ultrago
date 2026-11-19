@@ -73,3 +73,20 @@ test("local.eval code cannot reach the backend process through any object it is 
   assert.equal(runLocalEval(`return undefined;`, results), undefined);
   assert.throws(() => runLocalEval(`return Promise.reject(new Error("x"));`, results), /synchronously/, "a rejected Promise must not reach the backend as an unhandled rejection");
 });
+
+
+test("local.eval：单个表达式隐式返回，和页面 eval 一致；多语句仍需 return", () => {
+  const results = [{ index: 0, goal: "g", method: "browser.eval", value: { value: [1, 2, 3] } }];
+  assert.equal(actions.runLocalEval("results[0].value.value.length", results), 3);
+  assert.equal(actions.runLocalEval("const n = results.length; return n * 2;", results), 2);
+});
+
+test("local.writeFile 写的是紧挨着的上一步的值；上一步没有值就拒绝，而不是写更早的", async () => {
+  const results = [
+    { index: 0, goal: "read", method: "browser.eval", value: "旧数据" },
+    { index: 2, goal: "render", method: "local.eval", value: "# 报告" },
+  ];
+  const ok = await actions.writePreviousStepValue("r.md", results, 3);
+  assert.equal(await readFile(ok, "utf8"), "# 报告");
+  await assert.rejects(() => actions.writePreviousStepValue("r2.md", results, 2), /produced no single value/);
+});

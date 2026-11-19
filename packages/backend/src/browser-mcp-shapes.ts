@@ -7,6 +7,7 @@
  * growing its own copy of the contract.
  */
 import { z } from "zod";
+import { LOCATOR_DOCS, TAB_ID_DOC } from "@bcp/shared";
 
 /** Tolerant boolean for MCP args: some clients (or a stringifying transport) send
  * booleans as JSON strings. Map "true"/"false" (and "1"/"0") to real booleans,
@@ -35,7 +36,7 @@ export const verifyShape = z
     evalCheck: z
       .object({ code: z.string().min(1), equals: z.string().optional() })
       .optional()
-      .describe("Runner runs this page JS and gates on its value (equals, or truthy). Arbitrary expressiveness; needs BCP_EVAL=on; read-only"),
+      .describe("Runner runs this page JS and gates on its value (equals, or truthy). Arbitrary expressiveness; read-only; refused only when the backend runs with BCP_EVAL=off"),
     noErrors: looseBool.optional(),
     settled: looseBool.optional(),
     dialogOpen: looseBool.optional(),
@@ -50,4 +51,20 @@ export const stepShape = z.object({
   risk: z.enum(["confirm"]).optional().describe('Mark this step irreversible (submit/delete/pay/send/publish). If this plan is being recorded, the marker carries into the saved playbook, where auto playback will always pause before executing it.'),
 });
 
-export const tabId = z.coerce.number().optional().describe("Target tab id (from new_window/new_tab/list_tabs); omit for the active tab");
+export const tabId = z.coerce.number().optional().describe(TAB_ID_DOC);
+
+/** Every element locator field, described once. Tools that target an element
+ *  spread the subset they support, so "same targeting as click" holds by
+ *  construction rather than by each registration copying the list. */
+export const locatorShape = {
+  ref: z.string().optional().describe(LOCATOR_DOCS.ref),
+  text: z.string().optional().describe(LOCATOR_DOCS.text),
+  role: z.string().optional().describe(LOCATOR_DOCS.role),
+  name: z.string().optional().describe(LOCATOR_DOCS.name),
+  css: z.string().optional().describe(LOCATOR_DOCS.css),
+  near: z.string().optional().describe(LOCATOR_DOCS.near),
+  exact: looseBool.optional().describe(LOCATOR_DOCS.exact),
+  nth: z.coerce.number().int().nonnegative().optional().describe(LOCATOR_DOCS.nth),
+  x: z.coerce.number().optional().describe(LOCATOR_DOCS.x),
+  y: z.coerce.number().optional().describe(LOCATOR_DOCS.y),
+};
