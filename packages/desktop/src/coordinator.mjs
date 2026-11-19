@@ -12,6 +12,7 @@ import { constants } from 'node:fs';
 import { DESKTOP_BOOK_NAMES, desktopBookSchemas } from '@bcp/backend/dist/desktop-books.js';
 import { registerNativeHost } from './native-registration.mjs';
 import { createAgentConnections } from './agent-connections.mjs';
+import { LOCAL_MODEL, detectOllama, pullModel, startOllama } from './local-model.mjs';
 
 const BACKUP_KEEP = 5;
 const BACKUP_NAME = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$/;
@@ -47,9 +48,10 @@ export async function upgradeBundledDemo(source, destination) {
 }
 
 export class Coordinator extends EventEmitter {
-  constructor({ paths, fork, forkJob, safeStorage, registerBridge = () => registerNativeHost(paths), readMigrations = appliedMigrations, openConnections }) {
+  constructor({ paths, fork, forkJob, safeStorage, registerBridge = () => registerNativeHost(paths), readMigrations = appliedMigrations, openConnections, ollama = { detect: detectOllama, start: startOllama, pull: pullModel } }) {
     super();
-    Object.assign(this, { paths, fork, forkJob, safeStorage, registerBridge, readMigrations, openConnections });
+    Object.assign(this, { paths, fork, forkJob, safeStorage, registerBridge, readMigrations, openConnections, ollama });
+    this.localModel = { checked: false, installed: false, running: false, hasModel: false, version: '', pull: null };
     this.agentConnections = createAgentConnections();
     this.connectionsSince = Date.now();
     this.generation = randomUUID();
@@ -143,7 +145,7 @@ export class Coordinator extends EventEmitter {
       services: Object.keys(endpoints), browsers: this.browsers,
       browserId: this.settings.browserId || '',
       browserReady: this.pairedGeneration === this.generation && !!selectedBrowser(this.browsers, this.settings.browserId),
-      modelMode: this.settings.modelMode, modelConfigured: !!this.settings.cloud,
+      modelMode: this.settings.modelMode, modelConfigured: !!this.settings.cloud, localModel: { ...this.localModel, model: LOCAL_MODEL, configured: !!this.settings.local },
       allowEval: this.settings.allowEval !== false, allowLocalEval: this.settings.allowLocalEval !== false, screenshotDir: this.settings.screenshotDir || '',
       model: this.settings.cloud?.model || '', dataDirectory: this.paths.userData,
       modelUrl: this.settings.cloud?.url || '',
@@ -253,6 +255,9 @@ export class Coordinator extends EventEmitter {
       await this.prepareBridge();
       const llmDir = join(this.paths.userData, 'llm');
       const model = await this.writeChannels();
+      if (this.settings.modelMode === 'local' && !(await this.detectLocalModel()).running) {
+        this.recordLog({ service: 'desktop', text: '本机 Ollama 没有运行，验证码提醒暂不可用；打开 Ollama 后自动恢复，不用重新准备。' });
+      }
       const origin = this.ingress.origin;
       const supervisor = this.supervisor = new Supervisor({
         fork: this.fork, forkJob: this.forkJob, worker: fileURLToPath(new URL('./worker.mjs', import.meta.url)),
@@ -320,7 +325,7 @@ export class Coordinator extends EventEmitter {
       await Promise.all([
         this.supervisor.start('backend', this.paths.entries.backend),
         this.supervisor.start('console', this.paths.entries.console),
-        ...(model ? [this.supervisor.start('llm', this.paths.entries.llm, { BCP_DESKTOP_UPSTREAM_KEY: model.key })] : []),
+        ...(model ? [this.supervisor.start('llm', this.paths.entries.llm, model.key ? { BCP_DESKTOP_UPSTREAM_KEY: model.key } : {})] : []),
       ]);
       // A switch flipped while the services were starting was saved after their env was fixed; apply it now.
       await this.pushPolicy();
@@ -370,14 +375,92 @@ export class Coordinator extends EventEmitter {
     for (const old of others.filter((entry) => entry !== name).slice(0, Math.max(0, others.length - (BACKUP_KEEP - 1)))) await rm(join(root, old), { recursive: true, force: true });
   }
 
-  /** Writes the gateway channel list; returns the decrypted upstream key only when a cloud model is configured. */
+  /** Writes the gateway channel list; returns the model in use (with the decrypted key for a cloud API), or null. */
   async writeChannels() {
+    const file = join(this.paths.userData, 'llm', 'channels.json');
+    if (this.settings.modelMode === 'local') {
+      const local = this.settings.local;
+      if (!local) throw new Error('请先完成本机模型准备，或选择暂不设置。');
+      // numCtx: without it Ollama silently cuts the input at 2048 tokens; 8192 fits a screenshot and stays light on memory.
+      await this.atomic(file, { channels: [{ id: local.model, adapter: 'ollama', baseUrl: local.url, model: local.model, options: { numCtx: 8192 } }] });
+      return { model: local.model, key: '' };
+    }
     const cloud = this.settings.modelMode === 'cloud' ? this.settings.cloud : null;
     if (this.settings.modelMode === 'cloud' && !cloud) throw new Error('请填写云 API 配置，或选择稍后设置。');
     const key = cloud ? this.safeStorage.decryptString(Buffer.from(cloud.encryptedKey, 'base64')) : '';
-    await this.atomic(join(this.paths.userData, 'llm', 'channels.json'), { channels: cloud ? [{ id: cloud.model, adapter: 'openai', baseUrl: cloud.url, model: cloud.model, apiKey: 'env.BCP_DESKTOP_UPSTREAM_KEY' }] : [] });
+    await this.atomic(file, { channels: cloud ? [{ id: cloud.model, adapter: 'openai', baseUrl: cloud.url, model: cloud.model, apiKey: 'env.BCP_DESKTOP_UPSTREAM_KEY' }] : [] });
     return cloud ? { model: cloud.model, key } : null;
   }
+
+  /** Checks Ollama and the model again; the setup page calls this while the model step is open. */
+  async detectLocalModel() {
+    const found = await this.ollama.detect();
+    this.localModel = { ...found, checked: true, pull: this.localModel.pull };
+    this.emit('change');
+    return this.localModel;
+  }
+
+  /** A second click while Ollama is starting waits for the first instead of launching another server. */
+  startLocalModel() {
+    this.startingOllama ??= this.launchOllama().finally(() => { this.startingOllama = undefined; });
+    return this.startingOllama;
+  }
+
+  async launchOllama() {
+    const found = await this.detectLocalModel();
+    if (found.running) return;
+    if (!found.executable) throw new Error('没有找到 Ollama，请先下载安装。');
+    this.ollama.start(found.executable);
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await new Promise((done) => setTimeout(done, 500));
+      if ((await this.detectLocalModel()).running) {
+        this.recordLog({ service: 'desktop', text: '已启动本机 Ollama。' });
+        return;
+      }
+    }
+    throw new Error('Ollama 没有在 10 秒内启动，请从开始菜单打开 Ollama 后重新检测。');
+  }
+
+  /**
+   * Starts downloading the model through Ollama and returns once it is under way; progress goes into the snapshot
+   * and `pullTask` settles when the download ends. Only the user's click starts it.
+   */
+  async pullLocalModel() {
+    // Taken before the first await, so a double click cannot start two downloads.
+    if (this.pullStarting || this.localModel.pull?.status === 'running') return;
+    this.pullStarting = true;
+    try {
+      const found = await this.detectLocalModel();
+      if (!found.running) throw new Error('Ollama 没有运行，请先启动 Ollama。');
+      if (found.hasModel) return;
+      this.pullTask = this.runPull(found.baseUrl);
+    } finally { this.pullStarting = false; }
+  }
+
+  async runPull(baseUrl) {
+    const controller = this.pullController = new AbortController();
+    this.localModel.pull = { status: 'running', completed: 0, total: 0, error: '' };
+    this.emit('change');
+    try {
+      await this.ollama.pull({ baseUrl, model: LOCAL_MODEL, signal: controller.signal, onProgress: ({ completed, total }) => {
+        this.localModel.pull = { status: 'running', completed, total, error: '' };
+        this.emit('change');
+      } });
+      // Re-checked before the progress is cleared, so the page never flashes the download button back.
+      await this.detectLocalModel();
+      this.localModel.pull = null;
+      this.recordLog({ service: 'desktop', text: `本机模型 ${LOCAL_MODEL} 已下载。` });
+    } catch (error) {
+      const cancelled = controller.signal.aborted;
+      this.localModel.pull = cancelled ? null : { ...this.localModel.pull, status: 'failed', error: error.message };
+      if (!cancelled) this.recordLog({ service: 'desktop', text: `本机模型下载失败：${error.message}` });
+    } finally {
+      if (this.pullController === controller) this.pullController = undefined;
+      this.emit('change');
+    }
+  }
+
+  cancelLocalPull() { this.pullController?.abort(); }
 
   async refreshBrowsers() {
     try {
@@ -431,6 +514,12 @@ export class Coordinator extends EventEmitter {
   async saveModel(input) {
     if (this.busy) throw new Error('工作台准备中，请稍后修改模型配置。');
     if (input?.mode === 'skip') { this.settings.modelMode = 'skip'; }
+    else if (input?.mode === 'local') {
+      const found = await this.detectLocalModel();
+      if (!found.running || !found.hasModel) throw new Error(`请先启动 Ollama 并下载 ${LOCAL_MODEL}。`);
+      this.settings.modelMode = 'local';
+      this.settings.local = { url: found.baseUrl, model: LOCAL_MODEL };
+    }
     else {
       const url = new URL(input?.url);
       if (url.protocol !== 'https:' || url.username || url.password || url.hash || url.search) throw new Error('云 API 地址必须是无用户名和密码的 HTTPS 地址。');
@@ -458,12 +547,12 @@ export class Coordinator extends EventEmitter {
       try {
         model = await this.writeChannels();
         await this.supervisor.stop('llm');
-        if (model) await this.supervisor.start('llm', this.paths.entries.llm, { BCP_DESKTOP_UPSTREAM_KEY: model.key });
+        if (model) await this.supervisor.start('llm', this.paths.entries.llm, model.key ? { BCP_DESKTOP_UPSTREAM_KEY: model.key } : {});
       } catch (error) {
         this.recordLog({ service: 'desktop', text: `模型网关未能启动：${error.message}` });
         throw new Error(`模型设置已保存，但模型网关未能启动：${error.message}`);
       }
-      this.recordLog({ service: 'desktop', text: model ? `模型设置已生效：${model.model}。` : '已停用云 API，浏览器与工作台继续运行。' });
+      this.recordLog({ service: 'desktop', text: model ? `模型设置已生效：${model.model}。` : '已停用模型，浏览器与工作台继续运行。' });
     } finally {
       if (this.operation === operation) this.busy = false;
       this.emit('change');
@@ -554,6 +643,7 @@ export class Coordinator extends EventEmitter {
   }
 
   async close() {
+    this.cancelLocalPull();
     await this.supervisor?.close();
     await this.ingress?.close();
     await this.logWrite;

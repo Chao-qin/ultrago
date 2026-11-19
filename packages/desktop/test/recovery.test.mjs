@@ -527,3 +527,58 @@ test('page and backend eval are on by default, reach the backend through one cha
     await assert.rejects(coordinator.savePolicy({ allowLocalEval: 1 }), /本机脚本开关无效/);
   } finally { await coordinator.close(); }
 });
+
+test('a local model is used only once Ollama runs with it, starts the gateway with no key, and downloads only on request', async () => {
+  const { coordinator, paths, children, live, prepare } = await preparedFixture();
+  const ollama = { running: true, hasModel: false, pulls: [] };
+  coordinator.ollama = {
+    detect: async () => ({ baseUrl: 'http://127.0.0.1:11434', executable: 'ollama', installed: true, running: ollama.running, version: '0.12.0', hasModel: ollama.hasModel }),
+    start: () => { ollama.starts = (ollama.starts || 0) + 1; ollama.running = true; },
+    pull: ({ onProgress, signal }) => new Promise((done, fail) => {
+      ollama.pulls.push({ onProgress, done: () => { ollama.hasModel = true; done(); } });
+      signal.addEventListener('abort', () => fail(new Error('aborted')));
+    }),
+  };
+  try {
+    await prepare();
+    ollama.running = false;
+    await Promise.all([coordinator.startLocalModel(), coordinator.startLocalModel()]);
+    assert.equal(ollama.starts, 1, '连点只启动一个 Ollama');
+    await assert.rejects(coordinator.saveModel({ mode: 'local' }), /下载 qwen3\.5:4b/);
+    assert.equal(coordinator.settings.modelMode, 'skip', '没准备好时不切换');
+    assert.equal(ollama.pulls.length, 0, '检测不会触发下载');
+
+    await Promise.all([coordinator.pullLocalModel(), coordinator.pullLocalModel()]);
+    assert.equal(ollama.pulls.length, 1, '连点只下载一次');
+    ollama.pulls[0].onProgress({ completed: 512, total: 2048 });
+    assert.deepEqual(coordinator.snapshot().localModel.pull, { status: 'running', completed: 512, total: 2048, error: '' });
+    await coordinator.pullLocalModel();
+    assert.equal(ollama.pulls.length, 1, '下载中再点不会重复下载');
+    coordinator.cancelLocalPull();
+    await coordinator.pullTask;
+    assert.equal(coordinator.snapshot().localModel.pull, null, '取消不算失败');
+
+    await coordinator.pullLocalModel();
+    const seen = [];
+    const watch = () => seen.push(coordinator.snapshot().localModel);
+    coordinator.on('change', watch);
+    ollama.pulls[1].done();
+    await coordinator.pullTask;
+    coordinator.off('change', watch);
+    assert.ok(seen.every((local) => local.pull?.status === 'running' || local.hasModel), '下载完成时不会先闪回「未下载」');
+    assert.equal(coordinator.snapshot().localModel.hasModel, true);
+
+    const before = children.length;
+    const saving = coordinator.saveModel({ mode: 'local' });
+    await until(() => children.length === before + 1, 'gateway started');
+    const gateway = live('llm');
+    assert.equal(Object.hasOwn(gateway.env, 'BCP_DESKTOP_UPSTREAM_KEY'), false, '本机模型没有上游密钥');
+    gateway.ready();
+    await saving;
+    assert.deepEqual(JSON.parse(await readFile(join(paths.userData, 'llm', 'channels.json'), 'utf8')).channels, [
+      { id: 'qwen3.5:4b', adapter: 'ollama', baseUrl: 'http://127.0.0.1:11434', model: 'qwen3.5:4b', options: { numCtx: 8192 } },
+    ]);
+    assert.equal(coordinator.snapshot().modelMode, 'local');
+    assert.equal(coordinator.snapshot().localModel.configured, true);
+  } finally { await coordinator.close(); }
+});

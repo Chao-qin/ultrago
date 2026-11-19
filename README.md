@@ -57,7 +57,8 @@ service worker 用扩展 API 执行 → 回 `rpc_response` → 结果连同 `↳
 1. 安装 `UltraGo-<版本>-win-x64-setup.exe`（自行构建见 [`packages/desktop/README.md`](packages/desktop/README.md)）。
 2. 打开客户端，点「准备工作台」：数据库、服务、内置模板全部自动完成。
 3. 「连接浏览器」：按提示加载扩展；点「在桌面创建快捷方式」，以后用桌面上的「Chrome（UltraGo）」打开 Chrome。
-4. 「接入 AI 助手」：选 Claude Desktop / Cursor / Codex 等，客户端直接写好 MCP 配置。
+4. 「AI 模型」（可跳过）：推荐本机模型，客户端检测 Ollama、引导安装，点击后下载 `qwen3.5:4b`；它用于验证码提醒，截图不出本机。不设置时任务卡在验证码不会提醒。
+5. 「接入 AI 助手」（可跳过）：选 Claude Desktop / Cursor / Codex 等，客户端直接写好 MCP 配置。
 
 ### 从源码运行（macOS / Linux / 开发者）
 
