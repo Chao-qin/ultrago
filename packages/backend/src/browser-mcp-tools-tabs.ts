@@ -8,11 +8,12 @@
  */
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { MCP_TOOL_INSTRUCTIONS, RpcMethod, type BrowserTarget, type TabInfo } from "@bcp/shared";
+import { RpcMethod, type BrowserTarget, type TabInfo } from "@bcp/shared";
 import { domainAllowed } from "./config.js";
 import type { BrowserCall } from "./browser-mcp-types.js";
-import { fail, gateNote, renderTabsByWindow, text, windowFocusLabel, windowFocusLegend } from "./browser-mcp-render.js";
+import { fail, gateNote, text, windowFocusLabel, windowFocusLegend } from "./browser-mcp-render.js";
 import { looseBool, tabId } from "./browser-mcp-shapes.js";
+import { registerRpcTool } from "./browser-mcp-tool-spec.js";
 
 /** The session's claim, as this group needs to see it. */
 export type Claim = { target: BrowserTarget | null; tabId: number } | null;
@@ -28,11 +29,12 @@ export interface TabsToolDeps {
   drainEvents: (onTab?: number) => string;
 }
 
-/** Registers navigate / new_tab / close_tab / new_window / close_window / list_tabs / list_windows. */
+/** Registers navigate / new_tab / close_tab / new_window / close_window / list_windows. */
 export function registerTabsTools({ server, call, resolvedTarget, claimFor, setClaimed, getClaimed, drainEvents }: TabsToolDeps): void {
-  server.registerTool(
-    "navigate",
-    { description: MCP_TOOL_INSTRUCTIONS[RpcMethod.Navigate].description, inputSchema: { url: z.string().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Navigate].params["url"]), tabId } },
+  registerRpcTool(
+    server,
+    RpcMethod.Navigate,
+    { url: z.string(), tabId },
     async ({ url, tabId }) => {
       try {
         const d = domainAllowed(url);
@@ -64,15 +66,13 @@ export function registerTabsTools({ server, call, resolvedTarget, claimFor, setC
     },
   );
 
-  server.registerTool(
-    "new_tab",
+  registerRpcTool(
+    server,
+    RpcMethod.NewTab,
     {
-      description: MCP_TOOL_INSTRUCTIONS[RpcMethod.NewTab].description,
-      inputSchema: {
-        url: z.string().optional(),
-        active: looseBool.optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.NewTab].params["active"]),
-        claim: looseBool.optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.NewTab].params["claim"]),
-      },
+      url: z.string().optional(),
+      active: looseBool.optional(),
+      claim: looseBool.optional(),
     },
     async ({ url, active, claim }) => {
       try {
@@ -93,41 +93,40 @@ export function registerTabsTools({ server, call, resolvedTarget, claimFor, setC
     },
   );
 
-  server.registerTool(
-    "close_tab",
-    { description: MCP_TOOL_INSTRUCTIONS[RpcMethod.CloseTab].description, inputSchema: { tabId: z.coerce.number().optional() } },
+  registerRpcTool(
+    server,
+    RpcMethod.CloseTab,
+    { tabId },
     async ({ tabId }) => {
       try {
         // Resolve the target before the await so the post-close claim check
         // matches the browser the close actually routed to (not a failed-over one).
         const tgt = resolvedTarget();
-        const closed = tabId ?? claimFor(tgt);
-        await call(RpcMethod.CloseTab, { tabId });
+        const r = await call(RpcMethod.CloseTab, { tabId });
+        // An extension older than this backend does not report the id; fall back to what we sent.
+        const closed = r.tabId ?? tabId ?? claimFor(tgt);
         // Drop a dangling claim if we just closed the claimed tab (explicitly,
         // or via the claim-default injection that call() applied for us).
         const held = getClaimed();
         if (held && closed === held.tabId && held.target?.instanceId === tgt?.instanceId) {
           setClaimed(null);
         }
-        return text(tabId != null ? `Closed tab ${tabId}` : "Closed the active tab");
+        const why = tabId != null ? "" : held && closed === held.tabId ? " (this session's claimed tab — the claim is released)" : " (the active tab of the last-focused window)";
+        return text(closed != null ? `Closed tab ${closed}${why}` : "Closed the active tab of the last-focused window");
       } catch (e) {
         return fail(e);
       }
     },
   );
 
-  server.registerTool(
-    "new_window",
+  registerRpcTool(
+    server,
+    RpcMethod.NewWindow,
     {
-      description: MCP_TOOL_INSTRUCTIONS[RpcMethod.NewWindow].description,
-      inputSchema: {
-        url: z.string().optional(), focused: looseBool.optional(), minimized: looseBool.optional(),
-        left: z.coerce.number().optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.NewWindow].params["left"]),
-        top: z.coerce.number().optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.NewWindow].params["top"]),
-        width: z.coerce.number().optional(), height: z.coerce.number().optional(),
-        restoreFocus: looseBool.optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.NewWindow].params["restoreFocus"]),
-      },
-      annotations: { openWorldHint: true },
+      url: z.string().optional(), focused: looseBool.optional(), minimized: looseBool.optional(),
+      left: z.coerce.number().optional(), top: z.coerce.number().optional(),
+      width: z.coerce.number().optional(), height: z.coerce.number().optional(),
+      restoreFocus: looseBool.optional(),
     },
     async ({ url, focused, minimized, left, top, width, height, restoreFocus }) => {
       try {
@@ -145,43 +144,28 @@ export function registerTabsTools({ server, call, resolvedTarget, claimFor, setC
         return fail(e);
       }
     },
+    { openWorldHint: true },
   );
 
-  server.registerTool(
-    "close_window",
-    { description: MCP_TOOL_INSTRUCTIONS[RpcMethod.CloseWindow].description, inputSchema: { windowId: z.coerce.number().optional() } },
+  registerRpcTool(
+    server,
+    RpcMethod.CloseWindow,
+    { windowId: z.coerce.number().optional() },
     async ({ windowId }) => {
       try {
-        await call(RpcMethod.CloseWindow, { windowId });
-        return text(windowId != null ? `Closed window ${windowId}` : "Closed the active window");
+        const r = await call(RpcMethod.CloseWindow, { windowId });
+        const closed = r.windowId ?? windowId;
+        return text(closed != null ? `Closed window ${closed}${windowId != null ? "" : " (the last-focused window)"}` : "Closed the last-focused window");
       } catch (e) {
         return fail(e);
       }
     },
   );
 
-  server.registerTool(
-    "list_tabs",
-    {
-      description: MCP_TOOL_INSTRUCTIONS[RpcMethod.ListTabs].description,
-      inputSchema: {},
-    },
-    async () => {
-      try {
-        const { tabs } = await call(RpcMethod.ListTabs, {});
-        return text(renderTabsByWindow(tabs));
-      } catch (e) {
-        return fail(e);
-      }
-    },
-  );
-
-  server.registerTool(
-    "list_windows",
-    {
-      description: MCP_TOOL_INSTRUCTIONS[RpcMethod.ListWindows].description,
-      inputSchema: {},
-    },
+  registerRpcTool(
+    server,
+    RpcMethod.ListWindows,
+    {},
     async () => {
       try {
         const { windows, focusedWindowId, lastFocusedWindowId } = await call(RpcMethod.ListWindows, {});

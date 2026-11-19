@@ -27,15 +27,15 @@ export function registerPlanTools({ server, runner }: PlanToolDeps): void {
     "plan",
     {
       description:
-        "Register an ordered, verifiable plan for a MULTI-STEP task, then work it with advance(). Each step declares its own done-criteria (verify) + recovery (onFail); once you're in a plan, advance re-reads the page ITSELF and won't move to the next step until the current step's verify holds. IMPORTANT — this is an OPT-IN gate: P0 does NOT force your actions through the plan, so its value depends on you choosing to plan multi-step tasks and giving each step a REAL, non-empty verify (empty or \"\" verifies are rejected). Verification is COARSE (structural facts only — no response body, no CDP): it can't prove an exact field value or a business result carried in a 200 body. In manual mode, claim a tab first (verification reads target your claimed/current tab). Skip planning for a trivial single action; you still perform each action with the normal tools — plan/advance only gate.",
+        "Register an ordered, verifiable plan for a MULTI-STEP task, then work it with advance(). Each step declares its own done-criteria (verify) + recovery (onFail); once you're in a plan, advance re-reads the page ITSELF and won't move to the next step until the current step's verify holds. IMPORTANT — this is an OPT-IN gate (unless the backend runs with BCP_FORCE_PLAN=on): its value depends on you choosing to plan multi-step tasks and giving each step a REAL, non-empty verify (empty or \"\" verifies are rejected). Prefer the strongest check that fits: elementValue for a field's exact value, networkOk (+ bodyIncludes to check the response body) for a save that must reach the server, evalCheck for anything a page expression can compute; assert / visualAssert hand a claim back to you to judge. In manual mode, claim a tab first (verification reads target your claimed/current tab). Skip planning for a trivial single action; you still perform each action with the normal tools — plan/advance only gate.",
       inputSchema: {
-        goal: z.string(),
-        steps: z.array(stepShape).min(1),
+        goal: z.string().describe("What the whole plan accomplishes"),
+        steps: z.array(stepShape).min(1).describe("Ordered steps, each with its own goal and verify"),
         record: z
           .object({ paramNames: z.array(z.string()), paramValues: z.record(z.string(), z.string()) })
           .optional()
           .describe(
-            "Turn on recording for this plan. Every advance()'d step's action gets captured; record_stop() then saves it as a reusable playbook. paramValues are THIS run's concrete values for each paramName — used to auto-substitute {{slot}} placeholders when saving.",
+            "Turn on recording for this plan. Every advance()'d step's action gets captured; record_stop() then saves it as a reusable playbook. paramValues are THIS run's concrete values for each paramName: when saving, every exactly-equal string in a step's action params AND verify becomes its {{slot}}.",
           ),
       },
     },
@@ -57,10 +57,10 @@ export function registerPlanTools({ server, runner }: PlanToolDeps): void {
     "advance",
     {
       description:
-        "Verify the CURRENT step of a plan and move to the next. The runner gathers its own evidence and checks the step's declared criteria: pass → returns the next step; fail → says what's still wrong and whether to retry/rescan or that recovery is exhausted (escalate). It never performs the action — do that first, then call this. If the step has an agent-judged `assert`, a first advance (after the mechanical checks pass) returns the claim for YOU to judge — gather evidence / screenshot, then call advance again with confirm:true (it holds) or confirm:false (it doesn't).",
+        "Verify the CURRENT step of a plan and move to the next. The runner gathers its own evidence and checks the step's declared criteria: pass → returns the next step; fail → says what's still wrong and whether to redo the step (onFail retry/rescan, while its maxRetries budget lasts) or to stop (onFail \"escalate\", which is the default when a step sets none). It never performs the action — do that first, then call this. If the step has an agent-judged `assert` / `visualAssert`, a first advance (after the mechanical checks pass) returns the claim for YOU to judge — gather evidence / screenshot, then call advance again with confirm:true (it holds) or confirm:false (it doesn't).",
       inputSchema: {
-        planId: z.string(),
-        confirm: looseBool.optional().describe("Your verdict for a step's agent-judged `assert`, AFTER you've looked: true = it holds, false = it doesn't"),
+        planId: z.string().describe("Plan id from plan() / run_playbook"),
+        confirm: looseBool.optional().describe("Your verdict for a step's agent-judged `assert` / `visualAssert`, AFTER you've looked: true = it holds, false = it doesn't"),
       },
     },
     async ({ planId, confirm }) => {
@@ -92,10 +92,14 @@ export function registerPlanTools({ server, runner }: PlanToolDeps): void {
           msg =
             `✗ Not verified yet: ${r.failed.join("; ")}.\n` +
             `Recovery: ${r.strategy}${r.strategy === "rescan" ? " — re-snapshot before retrying" : ""}. Redo the step, then call advance again (retries left: ${r.remaining}).`;
-        else
+        else {
+          const why = (r.step.onFail ?? "escalate") === "escalate"
+            ? `This step stops on its first failure (onFail ${r.step.onFail ? '"escalate"' : 'not set — the default is "escalate"'})`
+            : "Its retry budget is used up";
           msg =
             `⚠ Step ${r.index + 1}/${r.total} FAILED verification: ${r.failed.join("; ")}.\n` +
-            `Goal was: ${r.step.goal}. Auto-recovery is exhausted — STOP: fix the underlying cause then advance again, replan, or ask the user. Do NOT proceed as if it succeeded.`;
+            `Goal was: ${r.step.goal}. ${why} — STOP: fix the underlying cause then advance again, replan, or ask the user. Do NOT proceed as if it succeeded.`;
+        }
         return text(msg);
       } catch (e) {
         return fail(e);
@@ -108,7 +112,7 @@ export function registerPlanTools({ server, runner }: PlanToolDeps): void {
     {
       description:
         "Show a plan's current step and its done-criteria — use it to re-orient if you've lost track of where you are in a multi-step task. Also reports whether the plan is RECORDING and how much of it has captured a replayable action so far, which nothing else surfaces once plan()'s reply has scrolled away.",
-      inputSchema: { planId: z.string() },
+      inputSchema: { planId: z.string().describe("Plan id from plan() / run_playbook") },
     },
     async ({ planId }) => {
       try {
@@ -119,7 +123,7 @@ export function registerPlanTools({ server, runner }: PlanToolDeps): void {
           : s.done
             ? `\n⏺ Recording finished — ${r.captured}/${s.total} step(s) captured a replayable action` +
               (r.checkOnly ? `, ${r.checkOnly} check-only (auto replay will pause there)` : "") +
-              `.\n  record_stop({planId:"${planId}", name:"<name>"}) saves it — re-saving the same name just overwrites. plan_abort throws it away.`
+              `.\n  record_stop({planId:"${planId}", name:"<name>"}) saves it (an existing playbook of that name is kept unless you pass overwrite:true). plan_abort throws it away.`
             : `\n⏺ RECORDING — ${r.captured}/${s.index} finished step(s) captured a replayable action` +
               (r.checkOnly ? `, ${r.checkOnly} saved check-only (auto replay will pause there)` : "") +
               `. Slots: ${r.paramNames.join(", ") || "(none declared)"}.` +
@@ -139,7 +143,7 @@ export function registerPlanTools({ server, runner }: PlanToolDeps): void {
     {
       description:
         "Drop a plan you're not going to finish — a recording you'd rather re-do from scratch, or an auto-playbook run that went wrong and shouldn't be resumed. Any recording is DISCARDED (nothing is written to disk; already-saved playbooks are untouched). This is the only way to end a run early: record_stop refuses an incomplete plan by design, and an abandoned plan otherwise stays 'active' — which matters when BCP_FORCE_PLAN is on, since it would keep letting mutating actions through. Page state is NOT rolled back; whatever the run already did to the browser stays done.",
-      inputSchema: { planId: z.string() },
+      inputSchema: { planId: z.string().describe("Plan id to abort") },
     },
     async ({ planId }) => {
       try {
@@ -159,15 +163,19 @@ export function registerPlanTools({ server, runner }: PlanToolDeps): void {
     "record_stop",
     {
       description:
-        "Finalize a recording plan (started via plan(..., {record})) into a playbook, saved to resource/playbooks/<name>.json. The plan must be COMPLETE (every step advanced) — a half-finished run isn't a usable playbook. Review the returned JSON before trusting it: {{slot}} auto-substitution matches by exact value, so a coincidental match can misfire.",
-      inputSchema: { planId: z.string(), name: z.string() },
+        "Finalize a recording plan (started via plan(..., {record})) into a playbook, saved to resource/playbooks/<name>.json. The plan must be COMPLETE (every step advanced) — a half-finished run isn't a usable playbook. An existing playbook of the same name is NOT replaced unless overwrite:true. Review the returned JSON before trusting it: {{slot}} auto-substitution matches by exact value, so a coincidental match can misfire.",
+      inputSchema: {
+        planId: z.string().describe("The completed recording plan's id"),
+        name: z.string().describe('Playbook name = file name: letters, digits, ".", "_" or "-"'),
+        overwrite: looseBool.optional().describe("Replace an existing playbook of that name (default false: refuse)"),
+      },
     },
-    async ({ planId, name }) => {
+    async ({ planId, name, overwrite }) => {
       try {
         const { steps, paramNames, warnings } = runner.stopRecording(planId);
         const status = runner.status(planId);
         const pb: Playbook = { name, goal: status.goal, paramNames, steps };
-        const path = await savePlaybook(pb);
+        const path = await savePlaybook(pb, { overwrite });
         const warnText = warnings.length ? `\n⚠ ${warnings.join("\n⚠ ")}` : "";
         return text(`Saved playbook "${name}" → ${path}${warnText}\n\nReview before trusting it:\n${JSON.stringify(pb, null, 2)}`);
       } catch (e) {

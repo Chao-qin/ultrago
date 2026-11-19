@@ -282,6 +282,13 @@ const PLAN_CAP = 50;
  */
 export class PlanRunner {
   private readonly plans = new Map<string, PlanRecord>();
+  /** >0 while a composite action (pick_option) is running its inner RPCs. */
+  private compositeDepth = 0;
+
+  /** True while a composite's inner RPCs run — their noteAction calls are not step actions. */
+  get inComposite(): boolean {
+    return this.compositeDepth > 0;
+  }
 
   constructor(private readonly evidence: EvidenceReader) {}
 
@@ -354,7 +361,7 @@ export class PlanRunner {
   noteAction(action: PlaybookStepAction, value: unknown): void {
     for (const p of this.plans.values()) {
       if (p.done) continue;
-      if (!p.verifying) {
+      if (!p.verifying && this.compositeDepth === 0) {
         p.pendingActions.push(action);
         p.pendingValues.push(value);
       }
@@ -369,6 +376,23 @@ export class PlanRunner {
       p.trace.push({ step: p.cursor + 1, method: action.method, value, ...(p.verifying ? { phase: "verify" as const } : {}) });
       if (p.trace.length > 500) p.trace.shift();
     }
+  }
+
+  /** Run a composite action (several RPCs that together are ONE step action,
+   *  e.g. pick_option's open-then-choose) so the step records exactly that one
+   *  action. Inner calls still reach the debug trace but not the step's
+   *  pending actions — otherwise the step would count 2+ actions and save as
+   *  check-only, unreplayable. */
+  async asOneAction<T>(action: PlaybookStepAction, run: () => Promise<T>): Promise<T> {
+    this.compositeDepth++;
+    let value: T;
+    try {
+      value = await run();
+    } finally {
+      this.compositeDepth--;
+    }
+    this.noteAction(action, value);
+    return value;
   }
 
   /** Every action this run observed, with its value — see `trace` in
@@ -399,7 +423,10 @@ export class PlanRunner {
       );
     const { paramValues, paramNames, actions } = p.recording;
     const warnings: string[] = [];
-    const steps = p.steps.map((s, i) => {
+    const steps = p.steps.map((step, i) => {
+      // verify carries this run's literals too (the typed title, the URL it
+      // landed on) — slot them like the action, or replay checks run-1's data.
+      const s = { ...step, verify: extractSlots(step.verify as unknown as Record<string, unknown>, paramValues) as unknown as PlanStep["verify"] };
       const raw = actions[i];
       if (raw === undefined) {
         warnings.push(`step ${i + 1} ("${s.goal}") recorded 0 or >1 actions — saved as check-only, add action manually if needed`);
@@ -610,6 +637,9 @@ export class PlanRunner {
     const visual = step.verify.visualAssert?.trim();
     const assert = step.verify.assert?.trim();
     if (visual) {
+      // A step may declare both: one confirm answers both, so the agent is
+      // asked about both (the text assert used to be skipped silently).
+      const claim = assert ? `${visual}" AND "${assert}` : visual;
       if (confirm === undefined) {
         let dataUrl = "";
         try {
@@ -617,9 +647,9 @@ export class PlanRunner {
         } catch {
           /* no screenshot — the agent still judges from the claim text */
         }
-        return { kind: "judgeVisual", index: p.cursor, total: p.steps.length, step, claim: visual, dataUrl };
+        return { kind: "judgeVisual", index: p.cursor, total: p.steps.length, step, claim, dataUrl };
       }
-      if (confirm === false) return this.failStep(p, step, [`you judged the visual claim false: "${visual}"`]);
+      if (confirm === false) return this.failStep(p, step, [`you judged the claim false: "${claim}"`]);
       // confirm === true → fall through to advance.
     } else if (assert) {
       if (confirm === undefined) return { kind: "judge", index: p.cursor, total: p.steps.length, step, assert };

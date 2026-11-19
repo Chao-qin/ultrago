@@ -52,14 +52,17 @@ export const RpcMethod = {
 
 export type RpcMethod = (typeof RpcMethod)[keyof typeof RpcMethod];
 
-/** Non-browser steps a playbook can also replay (run entirely in the BACKEND
- * process). Gated by BCP_LOCAL_EVAL since arbitrary JS here runs in the
- * backend's own Node process. */
+/** Steps the BACKEND executes itself instead of forwarding one browser RPC:
+ * backend JS, file writes, and composites of several browser RPCs that a
+ * playbook must replay as ONE step action. Only `Eval` runs arbitrary code in
+ * the backend process, so only it is gated by BCP_LOCAL_EVAL. */
 export const LocalMethod = {
   /** Run JS against `results` (this run's PlaybackStepResult[] so far). */
   Eval: "local.eval",
   /** Write a prior step's value to a file under reports/. */
   WriteFile: "local.writeFile",
+  /** Open a custom dropdown and choose an option (the pick_option tool). */
+  PickOption: "local.pickOption",
 } as const;
 
 export type LocalMethod = (typeof LocalMethod)[keyof typeof LocalMethod];

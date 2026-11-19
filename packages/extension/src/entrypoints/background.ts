@@ -653,7 +653,7 @@ export default defineBackground(() => {
         const { windowId } = params as RpcContracts[typeof RpcMethod.CloseWindow]["params"];
         const id = windowId ?? (await getActiveTab()).windowId;
         await cx.windows.remove(id);
-        return { closed: true };
+        return { closed: true, windowId: id };
       }
       case RpcMethod.SetWindowState: {
         const { tabId, minimized } = params as RpcContracts[typeof RpcMethod.SetWindowState]["params"];
@@ -682,7 +682,7 @@ export default defineBackground(() => {
         const { tabId } = params as RpcContracts[typeof RpcMethod.CloseTab]["params"];
         const id = tabId ?? (await getActiveTab()).id!;
         await cx.tabs.remove(id);
-        return { closed: true };
+        return { closed: true, tabId: id };
       }
       case RpcMethod.Eval: {
         const { code, tabId, frameId } = params as RpcContracts[typeof RpcMethod.Eval]["params"];
@@ -800,7 +800,7 @@ export default defineBackground(() => {
           // from a dead end into a next call is the list of ids that are valid now.
           const live = await liveFrames(tab.id!);
           if (!live)
-            throw new Error(`eval: tab ${tab.id} no longer exists. Call list_tabs to pick another tab, or new_tab to open one.`);
+            throw new Error(`eval: tab ${tab.id} no longer exists. Call list_windows to pick another tab, or new_tab to open one.`);
           const want = frameId ?? 0;
           throw new Error(
             `eval: frame ${want} of tab ${tab.id} returned no result. Frames live now:\n${live.listing}\n` +
@@ -889,7 +889,7 @@ export default defineBackground(() => {
               if (!execErr) {
                 const live = await liveFrames(id);
                 if (!live)
-                  throw new Error(`waitSignal: tab ${id} no longer exists. Call list_tabs to pick another tab, or new_tab to open one.`);
+                  throw new Error(`waitSignal: tab ${id} no longer exists. Call list_windows to pick another tab, or new_tab to open one.`);
                 throw new Error(
                   `waitSignal: frame ${frameId} of tab ${id} returned no result. Frames live now:\n${live.listing}\n` +
                     (live.ids.includes(frameId)
@@ -1021,7 +1021,7 @@ export default defineBackground(() => {
             live
               ? `page_state: the top frame of tab ${tab.id} returned nothing. Frames live now:\n${live.listing}\n` +
                 `The document was replaced while this read was in flight — every existing [ref] is dead. Repeat this call; if it fails again, snapshot instead (it pierces frames, page_state does not).`
-              : `page_state: tab ${tab.id} no longer exists. Call list_tabs to pick another tab, or new_tab to open one.`,
+              : `page_state: tab ${tab.id} no longer exists. Call list_windows to pick another tab, or new_tab to open one.`,
           );
         }
         // Stamp tab context from the SW side (chrome.tabs is SW-only). Re-read so
@@ -1067,7 +1067,7 @@ export default defineBackground(() => {
       case RpcMethod.ReadNetwork: {
         const { tabId, limit } = params as RpcContracts[typeof RpcMethod.ReadNetwork]["params"];
         const t = await resolveTab(tabId);
-        return { requests: netLog.get(t.id!).slice(-(limit ?? 20)) };
+        return { tabId: t.id!, requests: netLog.get(t.id!).slice(-(limit ?? 20)) };
       }
       case RpcMethod.SetNetworkCapture: {
         const { tabId, enabled } = params as RpcContracts[typeof RpcMethod.SetNetworkCapture]["params"];

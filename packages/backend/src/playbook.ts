@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { normalizeBookCode, normalizeParams as normalizeSharedParams, splitBookCode, validateParams as validateSharedParams, resolveParamDefaults as resolveSharedDefaults } from "@bcp/shared";
 import type { DefaultContext, ParamMap, ParamSpec, PlanStep, Playbook } from "@bcp/shared";
@@ -84,12 +84,18 @@ function fillValue(value: unknown, values: ParamMap): unknown {
  * Exact string match only (no substring replace), so a value that happens to
  * appear inside a longer unrelated string isn't corrupted. */
 export function extractSlots<T extends Record<string, unknown>>(params: T, values: Record<string, string>): T {
+  // Recursive, mirroring fillSlots: replay fills {{slot}}s at any depth (verify
+  // nests them, e.g. elementValue.equals / networkOk.urlIncludes), so recording
+  // must turn run-1 literals back into slots at any depth too — otherwise a
+  // replay with new data checks the first run's value and fails.
   const bySlotValue = new Map(Object.entries(values).map(([k, v]) => [v, k]));
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(params)) {
-    out[k] = typeof v === "string" && bySlotValue.has(v) ? `{{${bySlotValue.get(v)}}}` : v;
-  }
-  return out as T;
+  const walk = (v: unknown): unknown => {
+    if (typeof v === "string") return bySlotValue.has(v) ? `{{${bySlotValue.get(v)}}}` : v;
+    if (Array.isArray(v)) return v.map(walk);
+    if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)]));
+    return v;
+  };
+  return walk(params) as T;
 }
 
 export async function loadPlaybook(name: string): Promise<Playbook> {
@@ -150,16 +156,31 @@ export async function listPlaybooks(): Promise<{ playbooks: PlaybookSummary[]; u
   return { playbooks, unreadable };
 }
 
-export async function savePlaybook(pb: Playbook): Promise<string> {
+/** A playbook name is a file name under PLAYBOOKS_DIR — nothing that could leave it. */
+const PLAYBOOK_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+export async function savePlaybook(pb: Playbook, opts: { overwrite?: boolean } = {}): Promise<string> {
+  if (!PLAYBOOK_NAME.test(pb.name) || pb.name.includes(".."))
+    throw new Error(`playbook name ${JSON.stringify(pb.name)} must be letters, digits, ".", "_" or "-" (it becomes the file name)`);
   await mkdir(PLAYBOOKS_DIR, { recursive: true });
   const path = join(PLAYBOOKS_DIR, `${pb.name}.json`);
+  if (!opts.overwrite && (await stat(path).then(() => true, () => false)))
+    throw new Error(`a playbook named "${pb.name}" already exists (${path}) — pick another name, or pass overwrite:true to replace it`);
   // 落盘成行数组，否则 record_stop 录出来的书是一整行，人工排好的版一录就打回原形。
   // 深拷贝后再切：splitBookCode 是就地改的，直接切会把调用方手上的 playbook 对象
   // 的 code 变成数组，而它后面还要按 string 用（browser-mcp 的 record_stop 就把同一个
   // 对象 JSON.stringify 出来回显给用户）。
   const onDisk = JSON.parse(JSON.stringify(pb)) as Playbook;
   splitBookCode(onDisk);
-  await writeFile(path, JSON.stringify(onDisk, null, 2) + "\n", "utf8");
+  // "wx" makes the no-overwrite guarantee atomic: a concurrent save of the same
+  // name that slipped past the stat above fails here instead of replacing it.
+  try {
+    await writeFile(path, JSON.stringify(onDisk, null, 2) + "\n", { encoding: "utf8", flag: opts.overwrite ? "w" : "wx" });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "EEXIST")
+      throw new Error(`a playbook named "${pb.name}" already exists (${path}) — pick another name, or pass overwrite:true to replace it`);
+    throw e;
+  }
   return path;
 }
 

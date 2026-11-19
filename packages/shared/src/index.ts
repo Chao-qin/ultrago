@@ -103,6 +103,7 @@ export type JsonValue =
 export type ClientRole = "extension";
 
 import { RpcMethod, LocalMethod } from "./methods.js";
+import { EVAL_TIMEOUT_MS } from "./limits.js";
 import type { BookParamSchema } from "./generated/schema.js";
 import type { Delivery } from "./deliveries.js";
 import type { BrowserKind } from "./browser-lifecycle.js";
@@ -166,37 +167,19 @@ export interface Locator {
   nth?: number;
 }
 
+/** pick_option: open a custom dropdown via its trigger, then choose the option
+ *  whose visible text matches. The trigger is located like any element. */
+export interface PickOptionParams extends Locator {
+  /** Visible text of the option to choose (exact match preferred, then substring). */
+  option: string;
+  tabId?: number;
+}
+
 /** Hard cap on one uploaded file, enforced everywhere bytes enter the system
  * (backend URL/localPath resolution, console attachment uploads). */
 export const UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
 
-/** Hard cap on ONE `browser.eval`, enforced page-side inside the injected
- * function. It is deliberately BELOW the RPC transport ceiling: whichever
- * timer fires first owns the error, and a transport-first timeout would
- * abandon the injected async code still running in the page with nobody left
- * to collect it. Deriving the transport ceiling from this constant (see
- * ws-server's RPC_TIMEOUT) keeps that ordering true by construction instead of
- * leaving it to whatever BCP_RPC_TIMEOUT_MS happens to be set to.
- *
- * eval is for COMPUTING a value, not for WAITING on one — a wait longer than
- * this belongs in a book signal gate (`browser.waitSignal`), which carries its
- * own deadline. `scripts/check-books.mjs` reads this constant and rejects any
- * book that tries to out-wait it.
- *
- * Raised 15s → 60s: the "don't wait here" rule still holds, but some steps do
- * BOUNDED WORK rather than waiting — e.g. matching 17 spec values means 17
- * sequential dropdown interactions, which a signal cannot perform on the step's
- * behalf (signals gate; they don't act). At 15s that work had to be split
- * across idempotent retries. The cost of the higher ceiling is that a runaway
- * eval now occupies its tab for a minute before the page-side timer reclaims
- * it. */
-/* 60s → 90s（2026-09-07）：抖店规格图匹配一件商品实测 21 行 × 两遍，每行是一次
- * 独立的下拉交互（开面板 → 选值 → 收面板），signal 替不了它——门只判、不动手。
- * 48s 的预算实测刚好在临界点上：run f3c9434c 挤进去了，run b50a7db3 只多花了几秒
- * 关一次残留编辑器就翻车，21 行 0 匹配还报"配不上规格值"，症状离真因很远。
- * 提高上限不是给"等待"更多时间（那条规矩没变），是给【有界工作】的行数留余量。
- * 代价照旧：跑飞的 eval 会多占用那个 tab 半分钟。 */
-export const EVAL_TIMEOUT_MS = 90_000;
+export { EVAL_TIMEOUT_MS, WAIT_FOR_DEFAULT_MS, WAIT_FOR_MAX_MS, NETWORK_LOG_PER_TAB, READ_DUMP_TTL_MS } from "./limits.js";
 
 /** The deadline handed to evaluated code as `bcpDeadline` (an absolute epoch
  * ms, computed at injection time). Deliberately below EVAL_TIMEOUT_MS: a loop
@@ -246,7 +229,8 @@ export interface RpcContracts {
   };
   [RpcMethod.CloseTab]: {
     params: { tabId?: number };
-    result: { closed: true };
+    /** `tabId` = the tab actually closed, so a defaulted close can say which. */
+    result: { closed: true; tabId: number };
   };
   [RpcMethod.NewWindow]: {
     /** focused defaults to false so the task window doesn't steal foreground.
@@ -281,7 +265,8 @@ export interface RpcContracts {
   };
   [RpcMethod.CloseWindow]: {
     params: { windowId?: number };
-    result: { closed: true };
+    /** `windowId` = the window actually closed. */
+    result: { closed: true; windowId: number };
   };
   [RpcMethod.SetWindowState]: {
     /** Toggle a task window's state mid-run, e.g. minimize it once its
@@ -312,7 +297,7 @@ export interface RpcContracts {
   [RpcMethod.Snapshot]: {
     /** deltaKey scopes `changed` to the observer exactly as page_state's does; the backend fills it for the
      *  agent's own reads, and a backend-internal read leaves it out so it never moves the agent's baseline. */
-    params: TabTarget & { deltaKey?: string };
+    params: TabTarget & { deltaKey?: string; resetDelta?: boolean };
     /** Compact interactable-element tree with stable refs for this snapshot.
      * `moreBelow` flags that the page can still scroll down (content below the
      * fold / lazy-loaded) so the agent knows to scroll rather than assume it saw all. */
@@ -485,7 +470,7 @@ export interface RpcContracts {
      * Bytes are fetched backend-side and passed as base64. Playbook actions may
      * instead pass `attachments` plus a stable CSS locator; the backend expands
      * those sources into this low-level shape before dispatch. */
-    params: TabTarget & Pick<Locator, "ref" | "css" | "name" | "role" | "near" | "nth" | "exact"> & {
+    params: TabTarget & Pick<Locator, "ref" | "text" | "css" | "name" | "role" | "near" | "nth" | "exact"> & {
       filename?: string; mimeType?: string; dataBase64?: string; dataBase64s?: string[]; attachments?: UploadSource[]; batchUpload?: boolean;
       /** Upload `attachments` this many at a time instead of all at once. */
       batchSize?: number;
@@ -494,8 +479,8 @@ export interface RpcContracts {
   };
   [RpcMethod.Hover]: {
     /** Move the synthetic pointer over an element to reveal hover-only UI
-     * (tooltips, mouseover menus). No click. */
-    params: TabTarget & { ref: string };
+     * (tooltips, mouseover menus). No click. Located like click. */
+    params: TabTarget & Locator;
     result: { ok: true; delta?: ActionDelta };
   };
   [RpcMethod.ContextMenu]: {
@@ -503,13 +488,13 @@ export interface RpcContracts {
      *  extension API can — but a page with a CUSTOM context menu listens for
      *  exactly this event, and its preventDefault is the proof it handled it
      *  (surfaced as `defaultPrevented`). */
-    params: TabTarget & Omit<Locator, "text"> & { ms?: number };
+    params: TabTarget & Locator & { ms?: number };
     result: { ok: true; delta?: ActionDelta };
   };
   [RpcMethod.DblClick]: {
     /** Double-click. The second click carries detail:2 and dblclick follows it;
      *  two independent detail:1 clicks never fire a dblclick handler. */
-    params: TabTarget & Omit<Locator, "x" | "y"> & { ms?: number; confirm?: boolean };
+    params: TabTarget & Locator & { ms?: number; confirm?: boolean };
     result: { ok: true; delta?: ActionDelta };
   };
   [RpcMethod.Paste]: {
@@ -529,10 +514,12 @@ export interface RpcContracts {
     result: { ok: true; matched: string; candidates: number; delta?: ActionDelta };
   };
   [RpcMethod.ReadNetwork]: {
-    /** Recent XHR/fetch requests for the tab (metadata only — no bodies without
-     * CDP), captured since the service worker last woke. */
+    /** Recent XHR/fetch requests for the tab (metadata only — bodies arrive
+     * separately as `network_body` events while capture is on), captured since
+     * the service worker last woke. `tabId` is the tab actually read, so the
+     * backend can pair those events with these requests. */
     params: TabTarget & { limit?: number };
-    result: { requests: NetworkRequest[] };
+    result: { tabId: number; requests: NetworkRequest[] };
   };
   [RpcMethod.SetNetworkCapture]: {
     /** Toggle MAIN-world fetch/XHR response-BODY capture for a tab. Off by
@@ -906,7 +893,7 @@ export interface StepVerify {
    * runner runs it ITSELF, so this is runner-verified (stronger than `assert`),
    * with arbitrary expressiveness for what the structured predicates can't say
    * (a computed value, JS state, a canvas value via a page API). READ-only — do
-   * NOT mutate (that would forge the very evidence). Requires BCP_EVAL=on; a
+   * NOT mutate (that would forge the very evidence). Refused when the backend runs with BCP_EVAL=off; a
    * strict page CSP can block it. `equals` → String(value) === equals; omit
    * `equals` → the value must be truthy. */
   evalCheck?: { code: string; equals?: string };

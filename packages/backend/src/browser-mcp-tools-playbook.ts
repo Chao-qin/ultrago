@@ -12,13 +12,14 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { LocalMethod, MCP_TOOL_INSTRUCTIONS, RpcMethod, validateBookV2, type BrowserTarget, type ParamMap, type Playbook, type PlanStep } from "@bcp/shared";
+import { LocalMethod, MCP_TOOL_INSTRUCTIONS, RpcMethod, validateBookV2, type BrowserTarget, type ParamMap, type PickOptionParams, type Playbook, type PlanStep } from "@bcp/shared";
 import { config, EVAL_DISABLED, LOCAL_EVAL_DISABLED } from "./config.js";
 import { applyParamDefaults, instantiateSteps, listPlaybooks, loadPlaybook, savePlaybook, validatePlaybookParams } from "./playbook.js";
 import { materializePlaybookUpload } from "./playbook-upload.js";
 import { keepFailedTabs, runAutoPlayback, type RunFinishInfo } from "./playback.js";
 import { RunBrowserContext } from "./run-browser-context.js";
-import { runLocalEval, writeLocalFile } from "./local-actions.js";
+import { runLocalEval, writePreviousStepValue } from "./local-actions.js";
+import { pickOption, pickOptionDeltaKey } from "./pick-option.js";
 import { extractArtifacts, extractOutputs, instantiateDeliveries } from "./delivery-executor.js";
 import type { DeliverySink } from "./console-delivery-client.js";
 import type { EventStore, RunFinishedEvent } from "./event-store.js";
@@ -26,7 +27,7 @@ import type { PlanRunner } from "./orchestrator.js";
 import { RECORDABLE_READS } from "./recordable-methods.js";
 import type { BrowserCall } from "./browser-mcp-types.js";
 import type { Claim } from "./browser-mcp-tools-tabs.js";
-import { describeVerify, fail, text } from "./browser-mcp-render.js";
+import { describeAction, describeVerify, fail, text } from "./browser-mcp-render.js";
 import { looseBool, tabId } from "./browser-mcp-shapes.js";
 
 export interface PlaybookToolDeps {
@@ -50,12 +51,17 @@ export function registerPlaybookTools({
   resolvedTarget, claimFor, setClaimed, getClaimed,
   playbackContexts, playbackParams,
 }: PlaybookToolDeps): void {
+  /** The mode each run started in, so a resume continues in it by default. */
+  const playbackModes = new Map<string, "assisted" | "auto">();
   server.registerTool(
     "local_eval",
     {
       description:
-        "Run JS in the BACKEND process (NOT the browser page — for that, use the eval tool) against `results`, this plan's collected step values so far (every prior step that read/mutated something, in order — see plan()). Returns the code's value. Use to turn browser reads you've already done into an artifact, e.g. build a markdown report string from an earlier eval/read_content step's data, then hand it to write_file. Gated by the backend-JS policy — on by default in the desktop client (the user can turn it off), off in a dev backend unless BCP_LOCAL_EVAL=on — since this runs in the backend's own process (bigger blast radius than page eval, which is at least confined to a browser tab). If this plan is recording (plan(..., {record})), this call is captured as that step's action exactly like a click/type would be — record_stop saves it, and run_playbook(mode:\"auto\") replays it with zero agent involvement later. Call advance({planId}) afterward either way.",
-      inputSchema: { planId: z.string(), code: z.string() },
+        "Run JS in the BACKEND process (NOT the browser page — for that, use the eval tool) against `results`: this plan's step values so far, one entry {index, goal, method, value} per finished step that performed exactly ONE action (a step with none or several has no entry). An eval step's `value` is the eval reply, so its data sits at `.value.value`. A bare expression is returned implicitly (like eval); multi-statement code needs an explicit `return`. Use to turn browser reads you've already done into an artifact, e.g. build a markdown report string, then write it with write_file in the NEXT step. On by default; a backend started with BCP_LOCAL_EVAL=off (or the desktop client's 「允许本机脚本」 switched off) refuses it — it runs in the backend's own process, a bigger blast radius than page eval. If this plan is recording (plan(..., {record})), this call is captured as that step's action — record_stop saves it, and run_playbook(mode:\"auto\") replays it later. Call advance({planId}) afterward either way.",
+      inputSchema: {
+        planId: z.string().describe("The active plan's id"),
+        code: z.string().describe("JavaScript run against `results`; a bare expression is returned, otherwise use `return`"),
+      },
     },
     async ({ planId, code }) => {
       try {
@@ -75,14 +81,16 @@ export function registerPlaybookTools({
     "write_file",
     {
       description:
-        "Write the immediately preceding step's value (typically a local_eval's markdown/text output) to reports/<path> — a path that escapes reports/ is refused. If this plan is recording, this call is captured as that step's action like any other — record_stop saves it, run_playbook(mode:\"auto\") replays it later with zero agent involvement. Call advance({planId}) afterward either way.",
-      inputSchema: { planId: z.string(), path: z.string() },
+        "Write the value of the step RIGHT BEFORE this one (typically a local_eval's markdown/text output; a non-string is written as JSON) to reports/<path> under the backend's working directory — a path that escapes reports/ is refused, and so is a previous step that produced no single value. If this plan is recording, this call is captured as that step's action — record_stop saves it, run_playbook(mode:\"auto\") replays it later. Call advance({planId}) afterward either way.",
+      inputSchema: {
+        planId: z.string().describe("The active plan's id"),
+        path: z.string().describe("File path relative to reports/ (in the backend's working directory)"),
+      },
     },
     async ({ planId, path }) => {
       try {
         const priorResults = runner.getResults(planId); // throws a clear error if planId is unknown
-        const prev = priorResults.at(-1)?.value;
-        const abs = await writeLocalFile(path, typeof prev === "string" ? prev : JSON.stringify(prev));
+        const abs = await writePreviousStepValue(path, priorResults, runner.status(planId).index);
         runner.noteAction({ method: LocalMethod.WriteFile, params: { path } }, { path: abs });
         return text(`Wrote ${abs}\n\nCall advance({planId:"${planId}"}) to confirm this step.`);
       } catch (e) {
@@ -117,13 +125,13 @@ export function registerPlaybookTools({
     "run_playbook",
     {
       description:
-        'Load a saved playbook and run it. mode:"assisted" (default) registers it as a normal plan — YOU still perform each step\'s action yourself (the step\'s `action` field names exactly what to do), advance() gates as usual. mode:"auto" runs it with ZERO agent involvement until it either completes or hits a step that needs you: a risk:"confirm" step (STOPS BEFORE acting — every run, no exceptions), an assert/visualAssert judgment, a step with no recorded action, or an exhausted retry. On a stop, the response says exactly what to do; after handling it, call run_playbook again with resumePlanId set to continue the SAME run instead of starting over.',
+        'Load a saved playbook and run it. mode:"assisted" (default) registers it as a normal plan — YOU still perform each step\'s action yourself (the reply names the tool and arguments for each step), advance() gates as usual. mode:"auto" runs it with ZERO agent involvement until it completes, PAUSES at a step that needs you — a risk:"confirm" step (before acting, every run, no exceptions), an assert/visualAssert judgment (a screenshot is attached for a visual one), or a step with no recorded action — or FAILS when a step\'s verify does not hold within its retry budget. After a pause, do what the reply says, then call run_playbook again with resumePlanId to continue the SAME run (it resumes in the mode the run started in). A failed run is over: its tabs are closed and it cannot be resumed — fix the cause and start it again.',
       inputSchema: {
-        name: z.string(),
+        name: z.string().describe("Playbook name, as list_playbooks shows it"),
         params: z.record(z.string(), z.unknown()).optional().describe("Concrete values for this run's {{slot}} placeholders; omit when resuming with resumePlanId"),
-        paramsFile: z.string().optional().describe("Path to a JSON file holding the same object as `params`. For a book whose input is large (a product with 70+ SKUs runs past 12KB), inlining it into the tool call is what actually breaks — the JSON gets truncated in transit and the run never starts. Mutually exclusive with `params`."),
-        mode: z.enum(["assisted", "auto"]).optional().describe('Default "assisted". "auto" = hard-script playback, no agent needed except at risk/judge/no-action checkpoints.'),
-        resumePlanId: z.string().optional().describe("Resume an existing paused auto-mode plan instead of loading the playbook again — pass the planId a previous run_playbook(mode:\"auto\") call returned in its pause message."),
+        paramsFile: z.string().optional().describe("Path (absolute, or relative to the backend's working directory) to a JSON file holding the same object as `params`. For a book whose input is large (a product with 70+ SKUs runs past 12KB), inlining it into the tool call is what actually breaks — the JSON gets truncated in transit and the run never starts. Mutually exclusive with `params`."),
+        mode: z.enum(["assisted", "auto"]).optional().describe('Default "assisted" for a new run; a resume defaults to the mode the run started in. "auto" = hard-script playback, no agent needed except at risk/judge/no-action checkpoints.'),
+        resumePlanId: z.string().optional().describe("Continue a paused run instead of loading the playbook again — the planId from the pause message."),
       },
     },
     async ({ name, params, paramsFile, mode, resumePlanId }, extra) => {
@@ -175,12 +183,16 @@ export function registerPlaybookTools({
           if (created.planId !== planId) throw new Error(`backend created unexpected planId ${created.planId}`);
           playbackParams.set(planId, values);
         }
-        if ((mode ?? "assisted") === "assisted") {
+        const runMode = mode ?? (resumePlanId ? playbackModes.get(resumePlanId) : undefined) ?? "assisted";
+        // Only auto runs pause and resume; an assisted run defaults back to assisted anyway.
+        if (runMode === "auto") playbackModes.set(planId, runMode);
+        else playbackModes.delete(planId);
+        if (runMode === "assisted") {
           const s = runner.status(planId);
           if (s.done) return text(`Plan ${planId} is already complete — nothing left to do.`);
           return text(
             `Plan ${planId}${resumePlanId ? "" : ` loaded from playbook "${name}"`} — step ${s.index + 1}/${s.total}: ${s.current!.goal}\n` +
-              `  action: ${s.current!.action ? `${s.current!.action.method} ${JSON.stringify(s.current!.action.params)}` : "(check-only)"}\n` +
+              `  action: ${describeAction(s.current!.action)}\n` +
               `  done when: ${describeVerify(s.current!.verify)}\n\n` +
               `Perform it, then advance({planId:"${planId}"}).`,
           );
@@ -320,12 +332,16 @@ export function registerPlaybookTools({
             return value;
           }
           if (method === LocalMethod.WriteFile) {
-            const prev = priorResults.at(-1)?.value;
             const wf = p as { path: string; overwrite?: "overwrite" | "error" | "rename" };
-            const abs = await writeLocalFile(wf.path, typeof prev === "string" ? prev : JSON.stringify(prev), { overwrite: wf.overwrite });
+            const abs = await writePreviousStepValue(wf.path, priorResults, runner.status(planId).index, { overwrite: wf.overwrite });
             const value = { path: abs };
             runner.noteAction({ method, params: p }, value);
             return value;
+          }
+          if (method === LocalMethod.PickOption) {
+            return runner.asOneAction({ method, params: p }, () =>
+              pickOption((m, q) => call(m, q as never), p as unknown as PickOptionParams, pickOptionDeltaKey(`run:${planId}`)),
+            );
           }
           if (method === RpcMethod.CloseTab) {
             // Mirror of the claim below (and of what the close_tab TOOL does):
@@ -357,12 +373,14 @@ export function registerPlaybookTools({
         } catch (e) {
           playbackContexts.delete(planId);
           playbackParams.delete(planId);
+          playbackModes.delete(planId);
           await closeLeakedClaim();
           throw e;
         }
         if (r.kind === "complete" || r.kind === "escalate") {
           playbackContexts.delete(planId);
           playbackParams.delete(planId);
+          playbackModes.delete(planId);
         }
         // Persist whatever verified steps learned, whatever the run's terminal
         // kind — complete, escalate, or a pause (check-only / confirm / judge)
@@ -390,20 +408,33 @@ export function registerPlaybookTools({
         if (r.kind === "needsConfirm")
           return text(
             `⏸ Playbook paused at step ${r.index + 1} ("${r.step.goal}") — marked risk:"confirm" (irreversible). This needs YOUR explicit go-ahead before it executes, every run. ` +
-              `To proceed: perform ${JSON.stringify(r.step.action)} yourself with confirm:true, then advance({planId:"${planId}"}), then call run_playbook again with resumePlanId:"${planId}" to resume the rest.`,
+              `To proceed: perform ${describeAction(r.step.action)} yourself with confirm:true, then advance({planId:"${planId}"}), then call run_playbook again with resumePlanId:"${planId}" to resume the rest.`,
           );
-        if (r.kind === "needsJudge")
-          return text(
-            `⏸ Playbook paused at step ${r.index + 1} — needs your judgment: "${r.assert}". Judge it, call advance({planId:"${planId}", confirm:true|false}), then re-call run_playbook with resumePlanId:"${planId}" to resume.`,
-          );
+        if (r.kind === "needsJudge") {
+          const prompt =
+            `⏸ Playbook paused at step ${r.index + 1} — needs your judgment: "${r.assert}".${r.dataUrl ? " A screenshot is attached — look at it." : ""} ` +
+            `Judge it, call advance({planId:"${planId}", confirm:true|false}), then re-call run_playbook with resumePlanId:"${planId}" to resume.`;
+          const b64 = r.dataUrl?.replace(/^data:image\/\w+;base64,/, "");
+          return b64
+            ? { content: [{ type: "image" as const, data: b64, mimeType: "image/png" }, { type: "text" as const, text: prompt }] }
+            : text(prompt);
+        }
         if (r.kind === "noAction")
           return text(
             `⏸ Playbook paused at step ${r.index + 1} ("${r.step.goal}") — this step has no recorded action (check-only or an ambiguous recording), auto mode can't perform it. Do it yourself, advance({planId:"${planId}"}), then re-call run_playbook with resumePlanId:"${planId}" to resume.`,
           );
-        // r.kind === "escalate": terminal failure (onFail budget exhausted), no
-        // resume expected — same leaked-claim risk as the catch block above,
-        // just via advance() returning a result instead of throwing.
+        // r.kind === "escalate": terminal failure (onFail budget exhausted). The
+        // engine already closed the run's tabs and reported it finished, so end
+        // the plan too — left active it kept BCP_FORCE_PLAN's gate open and
+        // invited a resume that could only fail. Same leaked-claim risk as the
+        // catch block above, just via advance() returning a result.
         await closeLeakedClaim();
+        playbackModes.delete(planId);
+        try {
+          runner.abort(planId);
+        } catch {
+          /* already gone (cancelled meanwhile) */
+        }
         // 报「在哪一步失败」不够 —— 失败的那一步常常只是【下游受害者】。实测面膜那次：
         // 报的是 step 21(上传规格图)，而真因是 step 19 智能识别连续失败，规格区压根
         // 没生成。用户照着 step 21 去查，方向就错了两步。
@@ -440,7 +471,7 @@ export function registerPlaybookTools({
         const goalBrief = (r.step?.goal ?? "").slice(0, 60);
         return text(
           `⚠ Playbook FAILED at step ${r.index + 1}${goalBrief ? ` (${goalBrief}…)` : ""}: ` +
-            `${r.failed.join("; ")}. Auto-recovery exhausted.${ownReason}${upstreamText}`,
+            `${r.failed.join("; ")}. Retries exhausted — the run has ended and its tabs were closed; fix the cause, then start the playbook again (resumePlanId cannot continue it).${ownReason}${upstreamText}`,
         );
       } catch (e) {
         return fail(e);

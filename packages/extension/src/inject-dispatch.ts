@@ -263,7 +263,7 @@ export function createInjectDispatch(deps: InjectDeps) {
       // present one means the document was swapped mid-call.
       const live = await liveFrames(tabId);
       if (!live)
-        throw new Error(`${op}: tab ${tabId} no longer exists. Call list_tabs to pick another tab, or new_tab to open one.`);
+        throw new Error(`${op}: tab ${tabId} no longer exists. Call list_windows to pick another tab, or new_tab to open one.`);
       const gone = !live.ids.includes(frameId);
       throw new Error(
         `${op}: frame ${frameId} of tab ${tabId} returned no result. Frames live now:\n${live.listing}\n` +

@@ -166,3 +166,28 @@ test("verify.textAbsent: 零宽形态下「本该消失的文本」不能蒙混�
   const result = await runner.advance(planId);
   assert.notEqual(result.kind, "complete", "文本还在页面上，textAbsent 必须失败");
 });
+
+
+test("asOneAction：组合动作内部的多次调用只记成这一步的一个动作", async () => {
+  const runner = new PlanRunner({ ...evidence, pageState: async () => settledPage });
+  const { planId } = await runner.create("g", [{ goal: "pick", verify: { settled: true } }, { goal: "next", verify: { settled: true } }]);
+  assert.equal(runner.inComposite, false);
+  const value = await runner.asOneAction({ method: "local.pickOption", params: { option: "北京" } }, async () => {
+    assert.equal(runner.inComposite, true, "控制台通道靠它跳过内部调用");
+    runner.noteAction({ method: "browser.click", params: { ref: "e0" } }, { ok: true });
+    runner.noteAction({ method: "browser.click", params: { ref: "e7" } }, { ok: true });
+    return { picked: "北京" };
+  });
+  assert.deepEqual(value, { picked: "北京" });
+  assert.equal(runner.inComposite, false);
+  await runner.advance(planId);
+  assert.deepEqual(runner.getResults(planId).map((r) => r.method), ["local.pickOption"]);
+});
+
+test("同时声明 visualAssert 和 assert 时，两条都交给 agent 判断", async () => {
+  const runner = new PlanRunner({ ...evidence, pageState: async () => settledPage, screenshot: async () => ({ dataUrl: "data:image/png;base64,AA" }) });
+  const { planId } = await runner.create("g", [{ goal: "s", verify: { settled: true, visualAssert: "图片正常", assert: "标题已更新" } }]);
+  const r = await runner.advance(planId);
+  assert.equal(r.kind, "judgeVisual");
+  assert.match((r as { claim: string }).claim, /图片正常.*标题已更新/);
+});

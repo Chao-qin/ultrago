@@ -1,4 +1,4 @@
-import { RpcMethod } from "@bcp/shared";
+import { LocalMethod, RpcMethod } from "@bcp/shared";
 import { TAB_SCOPED } from "./recordable-methods.js";
 
 /**
@@ -24,7 +24,8 @@ export class RunBrowserContext {
    * the named page's binding; otherwise (legacy plans) the active tab. A page
    * with no binding is a hard error — never fall back to the user's active tab. */
   route(method: string, params: Record<string, unknown>, pageName?: string): Record<string, unknown> {
-    if (!TAB_SCOPED.has(method as RpcMethod) || (params as { tabId?: number }).tabId != null) return params;
+    const tabScoped = TAB_SCOPED.has(method as RpcMethod) || method === LocalMethod.PickOption;
+    if (!tabScoped || (params as { tabId?: number }).tabId != null) return params;
     if (pageName !== undefined) {
       const binding = this.bindings.get(pageName);
       if (!binding) throw new Error(`run has no binding for page "${pageName}"`);

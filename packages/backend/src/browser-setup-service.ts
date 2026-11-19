@@ -144,7 +144,16 @@ export class BrowserSetupService {
    */
   async setup(request: BrowserSetupRequest): Promise<BrowserSetupResult> {
     const kind = request.kind;
-    const instanceId = request.instanceId ?? randomUUID();
+    // No id given: reuse the instance of this kind that is connected, else the
+    // one this service already set up in that mode. A fresh id can only match
+    // an extension loaded from the artifact built for it, so minting one while
+    // the user's extension is connected under its own id waited for an
+    // instance that would never arrive.
+    const mode = request.mode ?? "user";
+    const instanceId = request.instanceId
+      ?? this.ws.listBrowsers().find((b) => b.kind === kind && b.ready && this.profileModeOf(b) === mode)?.instanceId
+      ?? [...this.instances.values()].find((st) => st.target.kind === kind && st.mode === mode)?.target.instanceId
+      ?? randomUUID();
     if (!isValidInstanceId(instanceId)) {
       throw this.err("profile_invalid", `invalid instanceId ${JSON.stringify(instanceId)}`, false);
     }
@@ -153,7 +162,7 @@ export class BrowserSetupService {
     const existing = this.operations.get(instanceId);
     if (existing) return existing;
 
-    const op = this.runSetup(target, request.mode ?? "user", waitMs).finally(() => {
+    const op = this.runSetup(target, mode, waitMs).finally(() => {
       this.operations.delete(instanceId);
     });
     this.operations.set(instanceId, op);

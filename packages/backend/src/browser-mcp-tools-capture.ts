@@ -12,11 +12,12 @@ import { resolve, dirname, relative, isAbsolute, sep, join, basename } from "nod
 import { tmpdir } from "node:os";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { MCP_TOOL_INSTRUCTIONS, RpcMethod, type PageState, type RpcContracts, type SnapshotElement, type TabInfo } from "@bcp/shared";
+import { RpcMethod, type PageState, type RpcContracts, type SnapshotElement, type TabInfo } from "@bcp/shared";
 import type { BrowserCall, ReadSnapshot } from "./browser-mcp-types.js";
 import { fail, renderDelta, renderPageState, renderReadDump, renderTabsByWindow, text } from "./browser-mcp-render.js";
 import { PageReadDumpStore } from "./browser-read-dump.js";
 import { looseBool, tabId } from "./browser-mcp-shapes.js";
+import { registerRpcTool } from "./browser-mcp-tool-spec.js";
 
 /** Screenshots are confined to these base dirs so a caller-supplied path can't
  * write a .png to arbitrary host locations (path traversal): the temp dir, plus
@@ -104,16 +105,15 @@ export function registerCaptureTools({ server, call, deltaKey, drainEvents, capt
     "analyze_page",
     {
       description:
-        "One-shot comprehensive page analysis = the full bundle: open tabs + page_state STATE digest (readiness/focus/forms/scroll/dialogs/changed) + accessibility snapshot (elements with [ref]s) + a temporary-file manifest for visible text + a PNG screenshot. Read the manifest/chunks with your local file reader; the page body is intentionally not copied into this MCP reply. Use on an unfamiliar or visual page when you want everything at once. For the cheap per-beat pulse use page_state (no screenshot); for just [ref]s use snapshot.",
+        "One-shot comprehensive page analysis = the full bundle: open tabs + page_state STATE digest (readiness/focus/forms/scroll/dialogs/changed) + accessibility snapshot (elements with [ref]s) + a manifest of the visible text dumped to temporary files on the backend host (exactly as read_content does — open the chunks with your file reader, or with read_content_dump when it can't reach that host; they are deleted before your next browser operation) + a PNG screenshot. Use on an unfamiliar or visual page when you want everything at once. For the cheap per-beat pulse use page_state (no screenshot); for just [ref]s use snapshot.",
       inputSchema: {
         tabId,
         saveScreenshot: looseBool.optional().describe("If true, write the screenshot to a file on the backend host instead of returning it inline (default false)"),
         screenshotPath: z.string().optional().describe("Path to save the PNG to when saveScreenshot is true; must end in .png"),
-        maxChars: z.coerce.number().int().positive().optional().describe("Maximum characters per temporary dump file; omit for adaptive chunking"),
-        offset: z.coerce.number().int().nonnegative().optional().describe("Zero-based character offset; use nextOffset from a previous read to continue"),
+        maxChars: z.coerce.number().int().positive().optional().describe("Maximum characters per temporary dump chunk file; omit for adaptive chunking"),
       },
     },
-    async ({ tabId, saveScreenshot, screenshotPath, maxChars, offset }) => {
+    async ({ tabId, saveScreenshot, screenshotPath, maxChars }) => {
       try {
         // Screenshot is the one leg that can legitimately be refused (manual
         // mode won't re-foreground a background tab). Don't let that sink the
@@ -121,7 +121,7 @@ export function registerCaptureTools({ server, call, deltaKey, drainEvents, capt
         const [{ tabs }, snapshot, content, stateOrErr, shotOrErr] = await Promise.all([
           call(RpcMethod.ListTabs, {}),
           readSnapshot(tabId, {}, "analyze_page"),
-          call(RpcMethod.ReadContent, { maxChars, offset, full: true, tabId }),
+          call(RpcMethod.ReadContent, { maxChars, full: true, tabId }),
           // analyze_page composes page_state for its STATE layer (DRY) rather
           // than re-deriving readiness/focus/forms/scroll separately.
           call(RpcMethod.PageState, { tabId, verbosity: "detail", deltaKey }).then(
@@ -167,7 +167,6 @@ export function registerCaptureTools({ server, call, deltaKey, drainEvents, capt
               totalChars: content.totalChars,
               overview: content.overview,
               maxChars,
-              requestedOffset: offset,
             })
           : null;
         const visibleText = dump
@@ -215,12 +214,10 @@ export function registerCaptureTools({ server, call, deltaKey, drainEvents, capt
     },
   );
 
-  server.registerTool(
-    "screenshot",
-    {
-      description: MCP_TOOL_INSTRUCTIONS[RpcMethod.Screenshot].description,
-      inputSchema: { tabId, savePath: z.string().optional().describe(MCP_TOOL_INSTRUCTIONS[RpcMethod.Screenshot].params["savePath"]) },
-    },
+  registerRpcTool(
+    server,
+    RpcMethod.Screenshot,
+    { tabId, savePath: z.string().optional() },
     async ({ tabId, savePath }) => {
       try {
         const shot = await captureWithLease(tabId);

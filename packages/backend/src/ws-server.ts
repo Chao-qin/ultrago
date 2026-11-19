@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { WebSocketServer, WebSocket } from "ws";
 import {
   EVAL_TIMEOUT_MS,
+  WAIT_FOR_MAX_MS,
   PROTOCOL_VERSION,
   RpcMethod,
   browserLabel,
@@ -349,7 +350,8 @@ export class WsServer {
   private static readonly RPC_TIMEOUT: Partial<Record<RpcMethod, number>> = {
     [RpcMethod.Navigate]: 45_000,
     [RpcMethod.Upload]: 60_000,
-    [RpcMethod.WaitFor]: 65_000,
+    // The tool rejects anything above WAIT_FOR_MAX_MS; the margin covers dispatch.
+    [RpcMethod.WaitFor]: WAIT_FOR_MAX_MS + 5_000,
     // Book signal waits carry their own deadline (signal/gate timeoutMs); the
     // transport ceiling must not cut it short. 3min covers the longest
     // declared signal a book may reasonably use; the wait itself still ends at

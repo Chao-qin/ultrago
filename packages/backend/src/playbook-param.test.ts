@@ -233,3 +233,14 @@ test("发布书：一张主图都没有仍然当场炸，不许静默发一个�
   assert.throws(() => instantiateSteps(playbook.steps, { product, mode: "draft" }),
     /unresolved playbook slot: product\.images\.main\.0/);
 });
+
+
+test("录制时 verify 里嵌套的本次取值也换成 {{slot}}，回放换数据才验得过", async () => {
+  const { extractSlots } = await import("./playbook.js");
+  const verify = { elementValue: { name: "标题", equals: "夏季连衣裙" }, networkOk: { urlIncludes: "/item/夏季连衣裙" }, textPresent: "夏季连衣裙" };
+  assert.deepEqual(extractSlots(verify, { title: "夏季连衣裙" }), {
+    elementValue: { name: "标题", equals: "{{title}}" },
+    networkOk: { urlIncludes: "/item/夏季连衣裙" },
+    textPresent: "{{title}}",
+  });
+});

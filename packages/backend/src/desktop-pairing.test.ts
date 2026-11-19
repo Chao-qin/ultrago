@@ -59,7 +59,7 @@ test('actual MCP requests follow the explicitly pinned desktop profile and never
       if (message.type === 'welcome') socket.send(JSON.stringify({ type: 'ready', instanceId, sessionId: message.sessionId }));
       if (message.type === 'rpc_request') {
         calls.push(instanceId);
-        socket.send(JSON.stringify({ type: 'rpc_response', id: message.id, ok: true, result: { tabs: [] } }));
+        socket.send(JSON.stringify({ type: 'rpc_response', id: message.id, ok: true, result: { tabs: [], windows: [] } }));
       }
     });
     await new Promise<void>((done, fail) => { socket.once('open', done); socket.once('error', fail); });
@@ -84,7 +84,7 @@ test('actual MCP requests follow the explicitly pinned desktop profile and never
     });
     const [transport, remote] = InMemoryTransport.createLinkedPair();
     await Promise.all([mcp.connect(remote), client.connect(transport)]);
-    const first = await client.callTool({ name: 'list_tabs', arguments: {} });
+    const first = await client.callTool({ name: 'list_windows', arguments: {} });
     assert.notEqual(first.isError, true);
     assert.deepEqual(calls, ['profile-b']);
     const selected = await client.callTool({ name: 'use_browser', arguments: { kind: 'chrome' } });
@@ -92,7 +92,7 @@ test('actual MCP requests follow the explicitly pinned desktop profile and never
     await new Promise<void>((done) => { b.socket.once('close', () => done()); b.socket.close(); });
     await new Promise((done) => setImmediate(done));
     assert.equal(server.current()?.instanceId, 'profile-b');
-    const result = await client.callTool({ name: 'list_tabs', arguments: {} });
+    const result = await client.callTool({ name: 'list_windows', arguments: {} });
     assert.equal(result.isError, true);
     const reselected = await client.callTool({ name: 'use_browser', arguments: { kind: 'chrome' } });
     assert.equal(reselected.isError, true);

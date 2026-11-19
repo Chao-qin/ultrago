@@ -358,7 +358,10 @@ export function createBrowserMcpServer(
   };
   registerDomTools({ server, call, deltaKey, drainEvents, readDumps, readSnapshot });
   registerCaptureTools({ server, call, deltaKey, drainEvents, captureWithLease, readDumps, readSnapshot });
-  registerIoTools({ server, call, events, evLine, resolvedTarget, getLastSeenSeq: () => lastSeenSeq });
+  registerIoTools({
+    server, call, events, evLine, resolvedTarget, getLastSeenSeq: () => lastSeenSeq, deltaKey,
+    recordAsOne: (action, run) => (planRunner ? planRunner.asOneAction(action, run) : run()),
+  });
 
   registerBatchTools({ server, call, drainEvents });
 

@@ -1,4 +1,4 @@
-import type { RpcContracts, RpcMethod, LocalMethod } from "./index.js";
+import type { RpcContracts, RpcMethod, LocalMethod, PickOptionParams } from "./index.js";
 
 /** A playbook step's action, discriminated by `method`. Writing
  * `method: "browser.click"` narrows `params` to Click's contract at compile
@@ -30,6 +30,8 @@ export type PlaybookAction =
           ? { code: string }
           : K extends typeof LocalMethod.WriteFile
             ? { path: string }
-            : never;
+            : K extends typeof LocalMethod.PickOption
+              ? PickOptionParams
+              : never;
       };
     }[LocalMethod];

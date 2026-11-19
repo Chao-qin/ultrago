@@ -88,9 +88,11 @@ console.log("全仓 lint · eval 等待预算");
 // exactly the drift this lint exists to catch. Missing → exit 2, not a pass.
 const SHARED_INDEX = resolve(ROOT, "packages/shared/src/index.ts");
 const SHARED_SRC = readFileSync(SHARED_INDEX, "utf8");
-const capMatch = SHARED_SRC.match(/export const EVAL_TIMEOUT_MS = ([\d_]+)/);
+// EVAL_TIMEOUT_MS lives in limits.ts (a leaf module the agent-facing tool docs also read).
+const SHARED_LIMITS = resolve(ROOT, "packages/shared/src/limits.ts");
+const capMatch = readFileSync(SHARED_LIMITS, "utf8").match(/export const EVAL_TIMEOUT_MS = ([\d_]+)/);
 if (!capMatch) {
-  console.error(`\n在 ${SHARED_INDEX} 里找不到 EVAL_TIMEOUT_MS —— 这条 lint 失去了基准，拒绝静默通过。`);
+  console.error(`\n在 ${SHARED_LIMITS} 里找不到 EVAL_TIMEOUT_MS —— 这条 lint 失去了基准，拒绝静默通过。`);
   process.exit(2);
 }
 const EVAL_CAP_MS = Number(capMatch[1].replaceAll("_", ""));

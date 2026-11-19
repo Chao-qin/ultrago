@@ -41,10 +41,12 @@ export function isValidInstanceId(id: string): boolean {
   return INSTANCE_ID_RE.test(id);
 }
 
-/** Human-facing display label for a target. DISPLAY ONLY — never a routing
- * key (a browser label is not an instance identity). */
+/** How a target is named in tool replies and errors: kind plus the FULL
+ * instanceId. Agents copy ids out of these replies into use_browser /
+ * set_browser_mode / stop_browser, which match the id exactly — a shortened
+ * id there is an id that does not work. */
 export function browserLabel(target: BrowserTarget): string {
-  return `${target.kind}:${target.instanceId.slice(0, 8)}`;
+  return `${target.kind}:${target.instanceId}`;
 }
 
 /* ------------------------------------------------------------------ *

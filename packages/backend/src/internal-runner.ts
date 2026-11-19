@@ -28,6 +28,7 @@ import {
   type Delivery,
   type PageState,
   type ParamMap,
+  type PickOptionParams,
   type PlanStep,
   type Playbook,
   type ResolvedDelivery,
@@ -35,13 +36,14 @@ import {
 import { config, EVAL_DISABLED, LOCAL_EVAL_DISABLED } from "./config.js";
 import { isTrustedDesktopBook } from './desktop-books.js';
 import { desktopHttpGuard, runtimePort } from '@bcp/shared';
-import { PlanRunner, type EvidenceReader } from "./orchestrator.js";
+import { PlanRunner, type EvidenceReader, type PlaybackStepResult } from "./orchestrator.js";
 import { applyParamDefaults, instantiateSteps, loadPlaybook, savePlaybook, validatePlaybookParams } from "./playbook.js";
 import { resolveUploadSources } from "./upload-source.js";
+import { pickOption, pickOptionDeltaKey } from "./pick-option.js";
 import { materializePlaybookUpload } from "./playbook-upload.js";
 import { runAutoPlayback, type AutoPlaybackResult, type RunFinishInfo } from "./playback.js";
 import { RunBrowserContext } from "./run-browser-context.js";
-import { runLocalEval, writeLocalFile } from "./local-actions.js";
+import { runLocalEval, writePreviousStepValue } from "./local-actions.js";
 import { MUTATING, RECORDABLE_READS } from "./recordable-methods.js";
 import { extractArtifacts, extractOutputs, instantiateDeliveries } from "./delivery-executor.js";
 import type { DeliverySink } from "./console-delivery-client.js";
@@ -421,6 +423,9 @@ export class InternalRunner {
     const original = runner.noteAction.bind(runner);
     runner.noteAction = (action, value) => {
       original(action, value);
+      // A composite (pick_option) is ONE console result: asOneAction notes it
+      // once its inner clicks are done, so skip those inner notes here too.
+      if (runner.inComposite) return;
       const s = runs.get(run.planId);
       if (!s) return;
       s.results.push({
@@ -453,12 +458,22 @@ export class InternalRunner {
       return value;
     }
     if (method === LocalMethod.WriteFile) {
-      const prev = priorResults.at(-1)?.value;
       const wf = params as { path: string; overwrite?: "overwrite" | "error" | "rename" };
-      const abs = await writeLocalFile(wf.path, typeof prev === "string" ? prev : JSON.stringify(prev), { overwrite: wf.overwrite });
+      const stepIndex = this.runners.get(planId)?.status(planId).index ?? priorResults.length;
+      const abs = await writePreviousStepValue(wf.path, priorResults as PlaybackStepResult[], stepIndex, { overwrite: wf.overwrite });
       const value = { path: abs };
       this.runners.get(planId)?.noteAction({ method: method as LocalMethod, params: params as Record<string, unknown> }, value);
       return value;
+    }
+
+    if (method === LocalMethod.PickOption) {
+      // One step action made of several RPCs: the inner calls go through this
+      // same call() (dispatcher, step history, run tab) but the runner records
+      // only the composite, so the step stays replayable.
+      const runner = this.runners.get(planId);
+      const inner = (m: RpcMethod, p: Record<string, unknown>) => this.call(planId, m, p, priorResults, opts);
+      const pick = () => pickOption(inner, params as unknown as PickOptionParams, pickOptionDeltaKey(`run:${planId}`));
+      return runner ? runner.asOneAction({ method: LocalMethod.PickOption, params }, pick) : pick();
     }
 
     // Browser RPC — routed through the dispatcher (readiness gate + fixed run
