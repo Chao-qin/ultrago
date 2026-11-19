@@ -23,7 +23,7 @@ Open-source MCP browser automation for AI agents, powered by a browser extension
                           ▼
  Console Web (React)  ┌──────────────────────────────────────────────┐
    http://…:8790 ────►│  @bcp/backend（单个 Node 进程）              │◄── @bcp/weclaw
-   NestJS + Prisma    │   · MCP 工具层：55 个浏览器工具              │    微信 sidecar
+   NestJS + Prisma    │   · MCP 工具层：51 个浏览器工具              │    微信 sidecar
    + SQLite           │   · InternalRunner   :8789 /internal         │    :18011
    剧本 / 排期 /      │   · PlanRunner + book 回放引擎               │
    流程编排 / 契约    │   · BrowserSetupService（浏览器生命周期）    │◄── @bcp/llm
@@ -210,23 +210,25 @@ pnpm restart
 
 ---
 
-## 浏览器工具（55 个）
+## 浏览器工具（51 个）
 
 工具都注册在 backend 的 MCP 端点上，按域分组：
 
 | 组 | 工具 |
 | --- | --- |
-| 标签页 / 窗口 | `navigate` `new_tab` `close_tab` `new_window` `close_window` `list_tabs` `list_windows` |
+| 标签页 / 窗口 | `navigate` `new_tab` `close_tab` `new_window` `close_window` `list_windows` |
 | 感知 | `snapshot` `page_state` `read_content` `analyze_page` `screenshot` |
-| 动作 | `click` `type_text` `press_key` `scroll` `select_option` `pick_option` `drag` `hover` `click_text` `right_click` `double_click` `paste_text` `upload_file` `download` |
-| 等待 / 导航 | `wait_for` `wait_signal` `go_back` `go_forward` `reload` `switch_tab` |
+| 动作 | `click` `type_text` `press_key` `scroll` `select_option` `pick_option` `drag` `hover` `right_click` `double_click` `paste_text` `upload_file` `download` |
+| 等待 / 导航 | `wait_for` `go_back` `go_forward` `reload` `switch_tab` |
 | 网络 / 事件 | `read_network` `set_network_capture` `read_events` `wait_for_event` |
 | 计划 / 录制 | `plan` `advance` `plan_status` `plan_abort` `record_stop` |
 | 剧本 | `list_playbooks` `run_playbook` `local_eval` `write_file` |
-| 多浏览器 / 生命周期 | `list_browsers` `use_browser` `claim_tab` `set_browser_mode` `browser_state` `browser_status` `launch_browser` `stop_browser` |
+| 多浏览器 / 生命周期 | `browser_state` `use_browser` `claim_tab` `set_browser_mode` `launch_browser` `stop_browser` |
 | 兜底 | `eval` `batch` |
 
 WeClaw sidecar 在线时，`wec_status` / `wec_send_text` / `wec_send_image` 出现在同一个端点上。
+
+所有按元素操作的工具（`click` `double_click` `right_click` `hover` `type_text` `paste_text` `upload_file` `pick_option` 及 `batch` 的步骤）共用同一套定位参数：`ref`，或描述（`text` / `role` / `name` / `css`，可加 `near` / `exact` / `nth`），或坐标 `x,y`。
 
 不可逆 / 对外动作（提交、支付、发布、删除、发送）要求 `confirm:true`，且必须是用户任务里明确要的；
 意图不清就停下来报告，不替用户确认。
@@ -250,7 +252,7 @@ WeClaw sidecar 在线时，`wec_status` / `wec_send_text` / `wec_send_image` 出
 
 `plan` 注册一个有序计划，每步自带 `verify`（结构化断言：url 含 X、文本存在 / 不存在、某个可交互元素的
 名字 / 勾选 / 可用 / 取值、自本步开始以来某 URL 的 2xx、无页面错误、页面已静默、对话框已开、表单可提交，
-以及需要 `BCP_EVAL=on` 的 `evalCheck`）与 `onFail`（retry / rescan / escalate）。
+以及 `evalCheck`）与 `onFail`（retry / rescan / escalate，默认 escalate）。
 `advance` **自己重新读页面**判定，验不过就不放行。它只判不做，动作仍由 agent 执行。
 
 默认这道门是自愿的；`BCP_FORCE_PLAN=on` 会把它变成硬要求——没有活跃计划就拒绝一切改动性动作。
@@ -264,11 +266,12 @@ WeClaw sidecar 在线时，`wec_status` / `wec_send_text` / `wec_send_image` 出
 
 - `mode:"assisted"`（默认）：仍由 agent 逐步执行，但动作直接读步骤的 `action` 字段，不用重新推导。
 - `mode:"auto"`：零 agent 介入地跑完，只在 `risk:"confirm"` 步骤（每次都停，无法预授权）、
-  `assert` / `visualAssert` 判断、没有录到动作的步骤、重试耗尽时停下。停下后按提示处理，
-  再用 `resumePlanId` 续跑同一次运行。
+  `assert` / `visualAssert` 判断、没有录到动作的步骤处暂停。暂停后按提示处理，
+  再用 `resumePlanId` 续跑同一次运行（默认沿用开始时的模式）。某一步重试耗尽则本次运行结束、
+  标签页关闭，不能续跑，修好原因后重新开始。
 
-剧本里也能放**后端侧**步骤：`local_eval`（在 backend 进程里跑 JS，读本次运行的前序结果，需 `BCP_LOCAL_EVAL=on`）
-和 `write_file`（把上一步的值写进 `reports/`），它们和点击、输入一样会被录进剧本、在 auto 回放里执行。
+剧本里也能放**后端侧**步骤：`local_eval`（在 backend 进程里跑 JS，读本次运行的前序结果）
+和紧随其后的 `write_file`（把上一步的值写进 `reports/`），它们和点击、输入一样会被录进剧本、在 auto 回放里执行。
 
 现有剧本（`resource/playbooks/`，10 本）：
 
@@ -364,8 +367,8 @@ Schema Records（按契约落地的数据）· Database（内嵌 Prisma Studio�
 | `BCP_TOKEN` | `bcp-dev-token` | 握手共享密钥，必须与侧边栏设置一致 |
 | `BCP_RPC_TIMEOUT_MS` | `30000` | 单个浏览器动作的超时 |
 | `BCP_ALLOWED_DOMAINS` / `BCP_BLOCKED_DOMAINS` | 空 | 导航白 / 黑名单（逗号分隔）；`javascript:` `data:` `file:` 等协议一律拒绝 |
-| `BCP_EVAL` | 关（桌面客户端默认开） | 设 `on` 打开页面内任意 JS 的 `eval` 工具（MAIN world）。桌面客户端在准备页的“允许页面脚本”中开关，运行中切换立即生效 |
-| `BCP_LOCAL_EVAL` | 关（桌面客户端默认开） | 设 `on` 打开 `local.eval` 步骤和 `local_eval` 工具（在 **backend 进程**里跑 JS，影响面比页面 eval 更大）。桌面客户端在准备页的“允许本机脚本”中开关，运行中切换立即生效 |
+| `BCP_EVAL` | 开 | 页面内任意 JS 的 `eval` 工具（MAIN world）与 `evalCheck`；设 `off` 关闭。桌面客户端在准备页的“允许页面脚本”中开关，运行中切换立即生效 |
+| `BCP_LOCAL_EVAL` | 开 | `local.eval` 步骤和 `local_eval` 工具（在 **backend 进程**里跑 JS，影响面比页面 eval 更大）；设 `off` 关闭。桌面客户端在准备页的“允许本机脚本”中开关，运行中切换立即生效 |
 | `BCP_FORCE_PLAN` | 关 | 设 `on` 后，没有活跃计划就拒绝一切改动性动作 |
 | `BCP_SCREENSHOT_DIR` | 空 | 截图 `savePath` 允许写入的额外目录；系统临时目录始终允许。桌面客户端在准备页选择 |
 | `BCP_INTERNAL_PORT` / `BCP_INTERNAL_TOKEN` | `8789` / `bcp-internal-dev-token` | Console 用的 loopback 内部接口 |
@@ -373,7 +376,7 @@ Schema Records（按契约落地的数据）· Database（内嵌 Prisma Studio�
 | `BCP_WECLAW_DISABLE` | 关 | 设 `1` 跳过 WeClaw sidecar |
 | `BCP_EVENT_WEBHOOK` | 空 | 填一个地址后，验证码出现 / 解除、浏览器掉线会**主动 POST** 给它（详见下方"实时事件推送"）|
 
-开关取值 `on` / `1` / `true` / `yes`（不分大小写）都算开启。两个 eval 开关在开发环境**都默认关闭**；`resource/playbooks/` 下靠 `browser.eval` / `local.eval` 读结构化数据的剧本
+开关取值 `on` / `1` / `true` / `yes`（不分大小写）都算开启；两个 eval 开关默认开启，写 `off` / `0` / `false` / `no` 才关闭。关闭后，`resource/playbooks/` 下靠 `browser.eval` / `local.eval` 读结构化数据的剧本
 在关闭状态会 fail-closed 而不是静默降级。
 
 ### 实时事件推送（`BCP_EVENT_WEBHOOK`）

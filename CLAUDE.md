@@ -8,7 +8,7 @@
 
 MCP server(Node 后端)暴露 `browser_*` 工具 → WS-RPC → 浏览器扩展后台(Chrome MV3 SW / Firefox MV2 事件页) → 按需 `chrome.scripting.executeScript` 注入自包含函数 `bcpDomRuntime`(ISOLATED world)执行 DOM 操作。**无内置 agent**,任何 MCP 客户端驱动它。**多浏览器可并发在线**(hello 带 browser 标签,后端按标签分会话),工具只打当前目标浏览器,`use_browser` 切目标(会话级,不互相波及);目标粘性,不因别的浏览器(重)连而漂移。
 
-**状态感知分层(2026-08 加):** 页面级 = `page_state`(单次注入拿就绪/焦点/表单/滚动/对话框/changed,`analyze_page` 组合它+树+文本+截图);编排级 = `list_windows`(窗口拓扑+OS 前台)/`browser_state`(浏览器×窗口×tab×mode×跨会话 claim 一次看全)/`list_browsers`(浏览器+mode+peers claim)。**跨会话协调**:claim 走 WsServer 进程级共享注册表(agent 间互见,`setClaimed` 本地+共享双写)。**hook**:拓扑事件(browser_online/offline·mode_changed·claim_changed·target_changed·window_opened/closed)经 EventStore 广播,piggyback + `wait_for_event` 可等,bypass 单浏览器过滤。层级教训见 `.agent/learn.md` 2026-08-12。
+**状态感知分层(2026-08 加):** 页面级 = `page_state`(单次注入拿就绪/焦点/表单/滚动/对话框/changed,`analyze_page` 组合它+树+文本+截图);编排级 = `list_windows`(窗口拓扑+OS 前台)/`browser_state`(浏览器×窗口×tab×mode×跨会话 claim×就绪状态,唯一的浏览器总览;`list_browsers`/`browser_status` 已并入)。**跨会话协调**:claim 走 WsServer 进程级共享注册表(agent 间互见,`setClaimed` 本地+共享双写)。**hook**:拓扑事件(browser_online/offline·mode_changed·claim_changed·target_changed·window_opened/closed)经 EventStore 广播,piggyback + `wait_for_event` 可等,bypass 单浏览器过滤。层级教训见 `.agent/learn.md` 2026-08-12。
 
 ## 三条不可动摇的约束(决定了一切设计)
 
@@ -31,7 +31,7 @@ MCP server(Node 后端)暴露 `browser_*` 工具 → WS-RPC → 浏览器扩展�
 - **自建 UI 是主流,别只认原生标签**:React `onClick`/Vue `@click` 是**事件委托**(根节点 addEventListener),DOM 上没有 `onclick` 属性。靠 `cursor:pointer` 启发式捞回手写 `<div>` 按钮;因 cursor **继承**给子孙,取"父不是 pointer"的**最外层**元素才是真正可点击体。
 - **元素带视觉层坐标**:DOM 树只有嵌套没有几何(portal 到 body 的 modal 树深度 1 却盖满全屏),故每个元素带 `@dialog:<名>` / `@fixed-top|bottom|left` / 裸 `@fixed`;无标记 = 普通流内容。判层走**祖先包含**(控件通常在 fixed 容器内,自己是 static),不看元素自身 position;爬升用 composed tree(`assignedSlot ?? parentElement ?? host`)——`contains`/`parentElement` 都不跨 shadow 边界,slot 分发的子节点视觉父级是 slot 所在位置而非 light DOM 父级。**感知层不做遮挡检测**:"现在能不能点"只在动作时对单个目标回答(`realClick` 的 `waitActionable` + hit-test **重试**——命中无关元素即判被遮挡,退避重试并轮换滚动对齐,超时才抛 `click intercepted`;此前是静默把事件改派回目标,那会让被盖住的点击报告成功),Playwright 同样把 Receives-Events 放在 `_checkFrameIsHitTarget`、不铺进快照;逐元素 hit-test 比 rect/style 贵一个量级,且 `@dialog:<名>` 已经足够让 agent 判断该操作哪一组。
 - **不按可见性过滤**:隐藏/禁用元素也收录,标 `[hidden]`/`[disabled]`——所以藏在样式按钮后的 `[hidden]` file input 也能被 `upload_file` 命中。别指望 `[hidden]`/`[disabled]` 元素有正常响应(唯一例外就是那个文件输入框)。
-- **ref 只对最新一次 snapshot 有效**:导航 / DOM 变化后必须重新 snapshot;旧 ref 会报 stale。
+- **ref 跟着元素活**:元素还在 ref 就一直有效,重新 snapshot 不改号;元素被移除(虚拟列表回收、portal 重挂载)才失效并报 stale。会变动的内容用描述定位(text/role/name/css),动作时才解析。
 - **快照穿透 open shadow root + 同源 iframe**:逐帧注入,子帧 ref 前缀 frameId(`42_e3`);closed shadow / 跨源 iframe 够不到(无 CDP)。
 - **snapshot(便宜)vs analyze_page(全但贵)**:analyze_page = snapshot + 可见文本 + tabs + **截图**,内部 4 个 RPC 并行。默认 snapshot 打紧循环;**新/不熟/视觉/含糊页**、以及**连续 2–3 次动作无反应**时升级到 analyze_page 看全貌。截图 token 很贵,别每步截。
 
@@ -44,8 +44,8 @@ MCP server(Node 后端)暴露 `browser_*` 工具 → WS-RPC → 浏览器扩展�
 - **`upload_file` 吃公网 URL 或本地文件路径**(二选一):`url` 走服务端 fetch(SSRF guard + 同源 Referer/UA 防盗链)、`localPath` 读本机文件;均 ≤25MB,底层复用 RPC `dataBase64` 通道注入 `input.files`。**原生文件对话框驱动不了**;要求 trusted user gesture 的上传控件会拒绝注入——**无 `drag` 兜底**(`drag` 的 DataTransfer 为空、不携带文件),只能回报用户手动传。
 - **瞬态 UI(modal/drawer/popup/menu)**:打开即改 DOM,且常 **portal 到根节点**(不在触发器里嵌套)→ 视所有旧 ref 失效,重 snapshot,按 role/name 在整棵新列表里找;`press_key` Escape 关。
 - **嵌套滚动**:modal/drawer/list 各有自己的 `(scrollable)` 容器 → `scroll` 传那个 ref,不是 window。**懒加载/无限滚动**:`scroll` → 重 snapshot → 重复,别用"没滚就说找不到"。
-- **`click_text` 是没 ref 时的兜底**:点最内层匹配可见文本的元素(冒泡到委托 handler);有 ref 优先用 ref。
-- **不可逆动作要 confirm**:`realClick`/`realType` 对"提交/删除/支付/发送/下单…"风险词要求 `confirm:true`,`click_text` 同样过这道门。意图不明就停下报告,别替用户确认。
+- **没 ref 时用 `click({text})`**:点最内层匹配可见文本的元素(冒泡到委托 handler),多个匹配时报错列出、用 `nth`/`near` 选;原 `click_text` 工具已并入(RPC 保留给旧剧本)。
+- **不可逆动作要 confirm**:`realClick`/`realType` 对"提交/删除/支付/发送/下单…"风险词要求 `confirm:true`,按描述 / 坐标定位的点击同样过这道门。意图不明就停下报告,别替用户确认。
 
 ## 心得 · 验证(verify)
 
@@ -59,7 +59,7 @@ MCP server(Node 后端)暴露 `browser_*` 工具 → WS-RPC → 浏览器扩展�
 - **RPC 至少一次投递**:断线重连会 resend 在途 RPC → service worker 按 id 去重(`runRpcOnce`),否则丢了响应的 click/navigate 会**执行两次**(learn 2026-07-21)。
 - **心跳别太急**:容忍 3 次漏 pong(~45s 宽限,盖过 SW 30s 复活窗口);SW 每 20s 自发 pong 在挂起线前续命;RpcBridge 进程级持久,断线不 rejectAll、重连 resend。
 - **请求/响应类通道断线**:要么重连重发、要么如实报错,**禁止静默丢弃**后让上层空等超时。
-- **`eval` 开发环境默认关**(`BCP_EVAL` 取 on/1/true/yes 才开):任意页 JS blast radius 大,当最后手段。桌面客户端由用户决定、默认开(准备页「允许页面脚本」;`BCP_LOCAL_EVAL` 同理为「允许本机脚本」),经 `/internal/browsers/policy` 在运行中切换——桌面后端的 env 由客户端生成,助手 MCP 配置里的 `env` 到不了它。
+- **`eval` 默认开**(`BCP_EVAL=off` 才关;`BCP_LOCAL_EVAL` 同理):任意页 JS blast radius 大,当最后手段。桌面客户端由用户决定、默认开(准备页「允许页面脚本」;`BCP_LOCAL_EVAL` 同理为「允许本机脚本」),经 `/internal/browsers/policy` 在运行中切换——桌面后端的 env 由客户端生成,助手 MCP 配置里的 `env` 到不了它。
 
 ## SSOT 指针(改哪读哪)
 
@@ -82,7 +82,7 @@ MCP server(Node 后端)暴露 `browser_*` 工具 → WS-RPC → 浏览器扩展�
   - `pnpm check:dom` 把**真实的** `bcpDomRuntime` 用 esbuild 打包 + `toString()` 注入真实 Chromium 执行——注入函数"自包含"这条约束(本为 `executeScript` 序列化而设)恰好让真代码路径可测,跑的不是逻辑复制品。jsdom 不行:被测的是浏览器自身行为(value sanitization / 布局 / hit-test)。脚本零新依赖(自行探测机器上已有的 esbuild 与 playwright-core),缺工具时 **exit 2** 而非静默通过。
   - `pnpm check:books` 覆盖 **book 内联 JS**(`browser.eval` / `local.eval` 里那几千字符,塞在 JSON 字符串里,既无 typecheck 也无 lint)。同样直接执行**真实 book 里的真实代码**;输入是 `resource/playbooks/__fixtures__/<book>/*.sse.txt` —— 从真实站点抓下来的原始响应流(已脱敏 `inner_user_ip` / `sec_sender`)。纯 node,无浏览器无网络。缺 fixture 时 **exit 2**。
     - **第三方协议一律以抓到的原始流为准**,不接受"它应该长这样"的推测(2026-08-23 豆包改协议那次教训:靠逐字段试探跑了 5 轮还打到对方风控,直接 dump 原始流 10 分钟就够)。
-  - `pnpm --filter @bcp/backend test` 覆盖 **MCP 契约**:走 `InMemoryTransport` 像真客户端那样 `listTools`/`callTool`,不碰私有字段。钉住 55 个工具的存在、参数名与必填集(含 plan 的 step/verify 嵌套形状),以及会话状态——`use_browser` 的 target 要被别的工具读到、claim 的注入/释放/跨实例隔离/关掉即清理、两会话互不串扰。工具注册按域拆成多个文件后,这层是唯一能证明「55 个工具行为没变」的东西。
+  - `pnpm --filter @bcp/backend test` 覆盖 **MCP 契约**:走 `InMemoryTransport` 像真客户端那样 `listTools`/`callTool`,不碰私有字段。钉住 51 个工具的存在、参数名与必填集(含 plan 的 step/verify 嵌套形状),以及会话状态——`use_browser` 的 target 要被别的工具读到、claim 的注入/释放/跨实例隔离/关掉即清理、两会话互不串扰。工具注册按域拆成多个文件后,这层是唯一能证明「55 个工具行为没变」的东西。
   - `pnpm --filter @bcp/extension test` 覆盖两块从 background.ts 抽出来的纯逻辑(抽出的目的就是让它们不需要浏览器也能测,监听器与 MV3 同步注册留在原处):
     - **RPC 投递去重**(`src/rpc-dedup.ts`):同 id 重放、并发重放、**SW 回收后重放**(持久层短路,learn.md 2026-07-21 那个真实故障)、读不落盘、storage 抛错降级、LRU 淘汰。
     - **任务窗口编排**(`src/window-ops.ts`):restoreFocus 必须先快照再创建、把用户窗口提回前面、macOS 兜底按下新窗口、创建后重新 assert bounds(create 时坐标只是建议)、**state 两个方向都显式钉住**(拿到 minimized 会停渲染并重压定时器)、**无 tab 时抛错而不是交回 -1**(那个 sentinel 满足 tabId:number,于是一路无人质疑)。
