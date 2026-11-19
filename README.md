@@ -52,19 +52,40 @@ service worker 用扩展 API 执行 → 回 `rpc_response` → 结果连同 `↳
 
 ## 快速开始
 
-先安装 [uv](https://docs.astral.sh/uv/getting-started/installation/)，用于管理项目 Python 和图片处理依赖。
+### Windows：桌面客户端（推荐，不用装开发环境）
+
+1. 安装 `UltraGo-<版本>-win-x64-setup.exe`（自行构建见 [`packages/desktop/README.md`](packages/desktop/README.md)）。
+2. 打开客户端，点「准备工作台」：数据库、服务、内置模板全部自动完成。
+3. 「连接浏览器」：按提示加载扩展；点「在桌面创建快捷方式」，以后用桌面上的「Chrome（UltraGo）」打开 Chrome。
+4. 「接入 AI 助手」：选 Claude Desktop / Cursor / Codex 等，客户端直接写好 MCP 配置。
+
+### 从源码运行（macOS / Linux / 开发者）
+
+先装好 Node.js 22、pnpm 10 和 [uv](https://docs.astral.sh/uv/getting-started/installation/)。
 
 ```bash
-bash scripts/init.sh   # 初始化 Python、Node 依赖、.env、weclaw 软链及数据库
-pnpm start             # 构建后拉起整栈：backend + weclaw + console + LLM 网关
+pnpm run init                          # 依赖、Python 环境、.env、数据库
+pnpm start                             # 构建并启动 backend + console；首次启动自动补齐工作台数据
+pnpm --filter @bcp/extension build     # 然后在 chrome://extensions 加载 packages/extension/.output/chrome-mv3（见下方「装扩展」）
+claude mcp add --transport http ultrago http://127.0.0.1:8788/mcp
+pnpm doctor                            # 逐项检查，缺什么、怎么补都会写出来；pnpm doctor --fix 自动补能补的
 ```
+
+默认只启动浏览器自动化需要的部分，扩展用内置 token 直接连上，不用填任何配置。
+微信桥（`BCP_WECLAW_ENABLE=1`，需要 Go 1.25+ 和微信扫码）和本地模型（`BCP_LLM_ENABLE=1`）在 `.env` 里按需打开。
 
 ### 用你自己的 Chrome：必须带两个启动参数
 
 任务窗口通常开在后台，被你的前台窗口挡住。Chrome 默认把完全被遮挡的窗口当成后台：`document.hidden=true`、
 动画帧停摆 —— 弹窗 / 抽屉的离场动画卡在第一帧永远关不掉、截图读不回、React 输入不落地。
 扩展注入的 keep-awake 垫片只接管定时器，救不了这个，**只有启动参数能治**。
-`managed` 模式由 backend 拉起，已自动带上；`user` 模式（你自己的 Chrome）要自己加：
+这两个参数只在 Chrome **启动时**生效，所以：
+
+- `managed` 模式和 `launch_browser`（Chrome 没在运行时）会自动带上；
+- Windows 桌面客户端可以一键在桌面生成带参数的「Chrome（UltraGo）」快捷方式；
+- Chrome 已经在运行却没带参数时，`page_state` 会直接提示「Chrome 没在渲染这个窗口」，`pnpm doctor` 也会查出来。
+
+需要手动加时（你自己的 Chrome）：
 
 ```
 --disable-features=CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows
@@ -162,8 +183,8 @@ Python 会为阶段收尾额外预留 30 秒；失败检测仍然阻止发布，
 | 扩展 WS | `ws://localhost:8787` | 扩展握手用，token 默认 `bcp-dev-token` |
 | Console 管理后台 | `http://127.0.0.1:8790` | Web UI + REST API |
 | backend 内部 API | `http://127.0.0.1:8789` | 仅 loopback，Console 专用，不在 MCP 面上 |
-| WeClaw 微信 sidecar | `127.0.0.1:18011` | 可用 `BCP_WECLAW_DISABLE=1` 关掉 |
-| LLM 网关 | `http://127.0.0.1:11435/v1` | **OpenAI 协议**，多渠道（本地 / 云 / 自定义适配器），`BCP_LLM_ENABLE=0` 可关 |
+| WeClaw 微信 sidecar | `127.0.0.1:18011` | 默认关闭，`BCP_WECLAW_ENABLE=1` 打开 |
+| LLM 网关 | `http://127.0.0.1:11435/v1` | **OpenAI 协议**，多渠道（本地 / 云 / 自定义适配器）；默认关闭，`BCP_LLM_ENABLE=1` 打开 |
 
 **装扩展**：
 
@@ -190,7 +211,7 @@ claude mcp add --transport http ultrago http://127.0.0.1:8788/mcp
 
 ```bash
 pnpm dev              # 只跑 backend（tsx watch，不含 console / weclaw）
-pnpm start:no-weclaw  # 整栈但跳过 WeClaw：不需要 Go，不需要扫码
+pnpm start:no-weclaw  # 整栈但强制跳过 WeClaw（即使 .env 里打开了）
 pnpm kill             # 关掉 pnpm start 拉起的全部服务
 pnpm restart
 ```
@@ -364,7 +385,7 @@ Schema Records（按契约落地的数据）· Database（内嵌 Prisma Studio�
 | `BCP_PORT` | `8787` | 扩展 WS 端口 |
 | `BCP_HOST` | `127.0.0.1` | WS 绑定地址；设 `0.0.0.0` 让远程浏览器直连（此时务必设真 token） |
 | `BCP_MCP_PORT` | `8788` | MCP `/mcp` HTTP 端口（始终 loopback） |
-| `BCP_TOKEN` | `bcp-dev-token` | 握手共享密钥，必须与侧边栏设置一致 |
+| `BCP_TOKEN` | `bcp-dev-token`（留空即用它） | 握手共享密钥，必须与扩展侧边栏一致；扩展内置的也是这个值，所以单机留空即可。`BCP_HOST` 对外暴露前务必改成随机长串 |
 | `BCP_RPC_TIMEOUT_MS` | `30000` | 单个浏览器动作的超时 |
 | `BCP_ALLOWED_DOMAINS` / `BCP_BLOCKED_DOMAINS` | 空 | 导航白 / 黑名单（逗号分隔）；`javascript:` `data:` `file:` 等协议一律拒绝 |
 | `BCP_EVAL` | 开 | 页面内任意 JS 的 `eval` 工具（MAIN world）与 `evalCheck`；设 `off` 关闭。桌面客户端在准备页的“允许页面脚本”中开关，运行中切换立即生效 |
@@ -373,7 +394,7 @@ Schema Records（按契约落地的数据）· Database（内嵌 Prisma Studio�
 | `BCP_SCREENSHOT_DIR` | 空 | 截图 `savePath` 允许写入的额外目录；系统临时目录始终允许。桌面客户端在准备页选择 |
 | `BCP_INTERNAL_PORT` / `BCP_INTERNAL_TOKEN` | `8789` / `bcp-internal-dev-token` | Console 用的 loopback 内部接口 |
 | `BCP_BROWSER_ROOT` | `~/.bcp/browser` | managed 浏览器 profile 与扩展产物的根目录 |
-| `BCP_WECLAW_DISABLE` | 关 | 设 `1` 跳过 WeClaw sidecar |
+| `BCP_WECLAW_ENABLE` | 关 | 设 `1` 启动 WeClaw sidecar（需要 Go 1.25+，启动时要微信扫码）。`BCP_WECLAW_DISABLE=1` 仍可强制关闭 |
 | `BCP_EVENT_WEBHOOK` | 空 | 填一个地址后，验证码出现 / 解除、浏览器掉线会**主动 POST** 给它（详见下方"实时事件推送"）|
 
 开关取值 `on` / `1` / `true` / `yes`（不分大小写）都算开启；两个 eval 开关默认开启，写 `off` / `0` / `false` / `no` 才关闭。关闭后，`resource/playbooks/` 下靠 `browser.eval` / `local.eval` 读结构化数据的剧本
@@ -442,7 +463,7 @@ JPEG 质量 0.75 → 本地视觉模型复核 → 仅明确为真时推送。图
 | `DATABASE_URL` | `file:../../../resource/db/console.db` | Prisma 相对路径按 **schema 目录**解析 |
 | `BCP_INTERNAL_URL` | `http://127.0.0.1:8789` | Console 找 backend 内部接口的地址 |
 | `IMAGE_BED_TOKEN` / `_OWNER` / `_REPO` / `_BRANCH` / `_PATH_PREFIX` | 无 | GitHub 图床配置，改完重启 Console 生效 |
-| `BCP_LLM_ENABLE` | `1` | 设 `0` 完全跳过 LLM 网关与本地模型 |
+| `BCP_LLM_ENABLE` | `0` | 设 `1` 启动 LLM 网关与本地模型 |
 | `BCP_LLM_PROVIDER` | `auto` | `auto` 按机器档选，或显式 `ollama` / `lmstudio` |
 | `BCP_LLM_PORT` | `11435` | 网关对外的 OpenAI 端口（`/v1/chat/completions`、`/v1/completions`、`/v1/embeddings`、`/v1/models`） |
 | `BCP_LLM_HOST` | `127.0.0.1` | 网关监听地址。**改成别的就等于对外提供服务**，此时请先签发 API key（见下） |
@@ -460,7 +481,7 @@ JPEG 质量 0.75 → 本地视觉模型复核 → 仅明确为真时推送。图
 **WeClaw** 是可选 sidecar，由 backend 拉起并守护，把 `wec_*` 发送工具挂在同一个 `/mcp` 上。
 `pnpm start` 会从源码编译**带 `external_delivery` 补丁**的二进制，因此整栈机器需要 **Go 1.25+**（外加 git 与网络）——
 这跟操作系统无关，任何装了 Go 的机器都能编。`pnpm --filter @bcp/weclaw install:bin` 下的是上游预编译版，**不含**该特性；
-`BCP_WECLAW_DISABLE=1` 或 `pnpm start:no-weclaw` 则整个跳过（不编、不需要 Go、不用扫码）。
+默认不启用：不设 `BCP_WECLAW_ENABLE=1` 就整个跳过（不编、不需要 Go、不用扫码）。
 
 **@bcp/llm** 是一个小型 LLM 网关。对外只有一套 **OpenAI 协议**（`http://127.0.0.1:11435/v1`），背后是一张渠道表：
 
