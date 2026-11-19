@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module';
-import { readdir, stat, readFile } from 'node:fs/promises';
+import { access, constants, readdir, stat, readFile } from 'node:fs/promises';
 import { resolve, join, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
@@ -9,8 +9,12 @@ const builderRequire = createRequire(require.resolve('electron-builder'));
 const { listPackage, extractFile } = builderRequire('@electron/asar');
 const libraryRequire = createRequire(builderRequire.resolve('app-builder-lib'));
 const { NtExecutable, NtExecutableResource, Resource, Data } = libraryRequire('resedit');
+// A Windows unpacked folder (default) or a Mac UltraGo.app followed by its architecture (arm64 | x64).
 const root = resolve(process.argv[2] || 'release/win-unpacked');
-const resources = join(root, 'resources');
+const mac = root.endsWith('.app');
+const arch = process.argv[3] || 'x64';
+const engine = arch === 'arm64' ? 'darwin-arm64' : 'darwin';
+const resources = mac ? join(root, 'Contents/Resources') : join(root, 'resources');
 const files = listPackage(join(resources, 'app.asar'));
 const required = [
   '/src/main.mjs', '/src/shell-controls.mjs', '/src/shell-preload.cjs', '/ui/index.html', '/ui/app-icon.png', '/ui/shell.html',
@@ -26,29 +30,47 @@ const required = [
 for (const file of required) assert.ok(files.includes(file), `安装包缺少 ${file}`);
 const forbidden = /(^|\/)\.env[^/]*$|\/(\.opencode-home|\.cache|\.venv|\.git)\/|\/(channels|keys)\.json$|\/resource\/|\/reports\/|\.db(?:-|\.|$)|\/node_modules\/@bcp\/weclaw\/config\//;
 assert.deepEqual(files.filter((file) => forbidden.test(file)), [], '安装包包含开发数据或敏感配置');
-for (const file of [
-  'extension/manifest.json', 'native/bcp-native-host.exe', 'mcp-entry.cjs',
-  'prisma-engines/query_engine-windows.dll.node', 'prisma-engines/schema-engine-windows.exe',
-  'prisma/schema.prisma', 'console-web/index.html', 'templates/desktop-readonly-demo.json',
-  'branding/app-icon.png',
-  'templates/baidu-hot-search.json', 'templates/1688-offer-snatch.json', 'contracts/raw-1688-offer@2.json',
-  'runtime/python/python.exe', 'runtime/python/python311.dll',
-  'runtime/python/vcruntime140.dll', 'runtime/python/runtime-manifest.json',
-  'runtime/python/Lib/site-packages/PIL/__init__.py',
-  'runtime/python/Lib/site-packages/openpyxl/__init__.py',
-]) assert.ok((await stat(join(resources, file))).isFile(), `安装包缺少资源 ${file}`);
-const executables = (await readdir(root)).filter((name) => name.endsWith('.exe'));
-assert.deepEqual(executables, ['UltraGo Internal.exe']);
-const executable = NtExecutable.from(await readFile(join(root, executables[0])));
-const entries = NtExecutableResource.from(executable).entries;
-const group = Resource.IconGroupEntry.fromEntries(entries).find((item) => item.id === 1);
-assert.ok(group, '主程序缺少应用图标');
-const expected = Data.IconFile.from(await readFile(join(dirname(root), '.icon-ico/icon.ico')));
-const iconHash = (item) => createHash('sha256').update(Buffer.from(item.isIcon() ? item.generate() : item.bin)).digest('hex');
-assert.deepEqual(group.getIconItemsFromEntries(entries).map(iconHash), expected.icons.map((item) => iconHash(item.data)), '主程序中的图标与品牌 ICO 不一致');
-const version = Resource.VersionInfo.fromEntries(entries)[0];
-assert.ok(version);
-assert.equal(version.getStringValues(version.getAllLanguagesForStringValues()[0]).ProductName, 'UltraGo Internal');
+const shared = [
+  'extension/manifest.json', 'mcp-entry.cjs', 'prisma/schema.prisma', 'console-web/index.html', 'templates/desktop-readonly-demo.json',
+  'branding/app-icon.png', 'templates/baidu-hot-search.json', 'templates/1688-offer-snatch.json', 'contracts/raw-1688-offer@2.json',
+  'runtime/python/runtime-manifest.json',
+];
+const own = mac ? [
+  'native/bcp-native-host', `prisma-engines/libquery_engine-${engine}.dylib.node`, `prisma-engines/schema-engine-${engine}`,
+  'runtime/python/bin/python3', 'runtime/python/lib/python3.11/site-packages/PIL/__init__.py',
+  'runtime/python/lib/python3.11/site-packages/openpyxl/__init__.py',
+] : [
+  'native/bcp-native-host.exe', 'prisma-engines/query_engine-windows.dll.node', 'prisma-engines/schema-engine-windows.exe',
+  'runtime/python/python.exe', 'runtime/python/python311.dll', 'runtime/python/vcruntime140.dll',
+  'runtime/python/Lib/site-packages/PIL/__init__.py', 'runtime/python/Lib/site-packages/openpyxl/__init__.py',
+];
+// stat follows symlinks, so the Mac Python's bin/python3 → python3.11 link counts as the file it points to.
+for (const file of [...shared, ...own]) assert.ok((await stat(join(resources, file))).isFile(), `安装包缺少资源 ${file}`);
+if (mac) {
+  // Chrome and the assistants start these directly, so they must stay executable inside the bundle.
+  for (const file of ['../MacOS/UltraGo', 'native/bcp-native-host', 'runtime/python/bin/python3', `prisma-engines/schema-engine-${engine}`]) {
+    await access(join(resources, file), constants.X_OK).catch(() => assert.fail(`安装包内不可执行：${file}`));
+  }
+  const plist = await readFile(join(root, 'Contents/Info.plist'), 'utf8');
+  assert.match(plist, /<key>CFBundleIdentifier<\/key>\s*<string>com\.ultrago\.desktop<\/string>/, '应用标识不是 com.ultrago.desktop');
+  assert.match(plist, /<key>CFBundleExecutable<\/key>\s*<string>UltraGo<\/string>/, '连接宿主按 Contents/MacOS/UltraGo 启动客户端');
+  const manifest = JSON.parse(await readFile(join(resources, 'runtime/python/runtime-manifest.json'), 'utf8'));
+  assert.equal(manifest.platform, `macos-${arch}`, `随包 Python 不是 ${arch} 版本`);
+} else {
+  const executables = (await readdir(root)).filter((name) => name.endsWith('.exe'));
+  // The native host's MCP launcher starts the client by this name (native/mcp.go).
+  assert.deepEqual(executables, ['UltraGo.exe']);
+  const executable = NtExecutable.from(await readFile(join(root, executables[0])));
+  const entries = NtExecutableResource.from(executable).entries;
+  const group = Resource.IconGroupEntry.fromEntries(entries).find((item) => item.id === 1);
+  assert.ok(group, '主程序缺少应用图标');
+  const expected = Data.IconFile.from(await readFile(join(dirname(root), '.icon-ico/icon.ico')));
+  const iconHash = (item) => createHash('sha256').update(Buffer.from(item.isIcon() ? item.generate() : item.bin)).digest('hex');
+  assert.deepEqual(group.getIconItemsFromEntries(entries).map(iconHash), expected.icons.map((item) => iconHash(item.data)), '主程序中的图标与品牌 ICO 不一致');
+  const version = Resource.VersionInfo.fromEntries(entries)[0];
+  assert.ok(version);
+  assert.equal(version.getStringValues(version.getAllLanguagesForStringValues()[0]).ProductName, 'UltraGo');
+}
 const iconSource = await readFile(new URL('../ui/app-icon.png', import.meta.url));
 assert.deepEqual(await readFile(new URL('../build/app-icon.png', import.meta.url)), iconSource, '安装器与页面图标源不一致');
 assert.deepEqual(await readFile(join(resources, 'branding/app-icon.png')), iconSource, '窗口图标未更新');
@@ -66,7 +88,10 @@ assert.deepEqual(extractFile(join(resources, 'app.asar'), 'src/floating-position
 assert.deepEqual(extractFile(join(resources, 'app.asar'), 'src/native-registration.mjs'), await readFile(new URL('../src/native-registration.mjs', import.meta.url)), '包内自动连接注册逻辑未更新');
 for (const name of ['mcp-bridge.mjs', 'agent-connections.mjs']) assert.deepEqual(extractFile(join(resources, 'app.asar'), `src/${name}`), await readFile(new URL(`../src/${name}`, import.meta.url)), `包内 MCP 连接逻辑未更新：${name}`);
 assert.deepEqual(await readFile(join(resources, 'mcp-entry.cjs')), await readFile(new URL('../src/mcp-entry.cjs', import.meta.url)), '包外 Node 连接入口未更新');
-assert.deepEqual(await readFile(join(resources, 'native/bcp-native-host.exe')), await readFile(new URL('../native/bin/bcp-native-host.exe', import.meta.url)), '包内原生宿主与 MCP 启动器未更新');
+const host = mac ? ['native/bcp-native-host', `../native/bin/darwin-${arch}/bcp-native-host`] : ['native/bcp-native-host.exe', '../native/bin/bcp-native-host.exe'];
+assert.deepEqual(await readFile(join(resources, host[0])), await readFile(new URL(host[1], import.meta.url)), '包内原生宿主与 MCP 启动器未更新');
 for (const name of ['delivery-executor', 'delivery-ingest.service']) assert.deepEqual(extractFile(join(resources, 'app.asar'), `node_modules/@bcp/console/dist/runs/${name}.js`), await readFile(new URL(`../../console/dist/runs/${name}.js`, import.meta.url)), `包内工作台模块未更新：${name}`);
 assert.deepEqual(extractFile(join(resources, 'app.asar'), 'node_modules/@bcp/console/dist/flows/flow-runner.service.js'), await readFile(new URL('../../console/dist/flows/flow-runner.service.js', import.meta.url)), '包内脚本执行器不是当前编译版本');
-process.stdout.write(`Windows x64 包内容检查通过：${files.length} 个归档路径，运行资源齐全，主程序品牌图标和产品信息正确。\n`);
+process.stdout.write(mac
+  ? `macOS ${arch} 包内容检查通过：${files.length} 个归档路径，运行资源齐全且可执行，应用标识正确。\n`
+  : `Windows x64 包内容检查通过：${files.length} 个归档路径，运行资源齐全，主程序品牌图标和产品信息正确。\n`);

@@ -11,7 +11,8 @@ const { extractAll } = createRequire(require.resolve('electron-builder'))('@elec
 const webRequire = createRequire(new URL('../../console/web/package.json', import.meta.url));
 const { build } = createRequire(webRequire.resolve('vite'))('esbuild');
 const root = resolve(process.argv[2] || 'release/win-unpacked');
-const archive = join(root, 'resources/app.asar');
+const mac = root.endsWith('.app');
+const archive = join(root, mac ? 'Contents/Resources/app.asar' : 'resources/app.asar');
 const temporary = await mkdtemp(join(tmpdir(), 'bcp-packaged-runtime-'));
 try {
   extractAll(archive, temporary);
@@ -28,7 +29,8 @@ try {
     } }],
   });
   for (const input of Object.keys(result.metafile.inputs)) assert.ok(resolve(temporary, input).startsWith(temporary + sep), `模块借用了安装包外的文件：${input}`);
-  const runtime = process.platform === 'win32' ? join(root, 'UltraGo Internal.exe') : require('electron');
+  const runtime = mac && process.platform === 'darwin' ? join(root, 'Contents/MacOS/UltraGo')
+    : process.platform === 'win32' ? join(root, 'UltraGo.exe') : require('electron');
   const moduleUrl = (relative) => pathToFileURL(join(archive, 'node_modules', relative)).href;
   const probe = `
     import assert from 'node:assert/strict';

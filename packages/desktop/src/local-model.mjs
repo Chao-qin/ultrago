@@ -22,14 +22,23 @@ export function ollamaBaseUrl(env = process.env) {
   return `http://${DEFAULT_HOST}`;
 }
 
-/** The installer puts ollama.exe in %LOCALAPPDATA%\Programs\Ollama and adds it to the user PATH, which a client
- *  already running when Ollama was installed does not see; so the install folder is checked as well. */
-export async function findOllama({ env = process.env, platform = process.platform, find = findExecutable } = {}) {
+/**
+ * PATH alone misses Ollama in two common cases, so the install locations are checked as well. Windows: the
+ * installer puts ollama.exe in %LOCALAPPDATA%\Programs\Ollama and adds it to the user PATH, which a client already
+ * running at install time does not see. macOS: an app opened from Finder gets only the system PATH, without
+ * /usr/local/bin or Homebrew's /opt/homebrew/bin, and the CLI itself lives inside Ollama.app.
+ */
+const isFile = async (file) => { try { return (await stat(file)).isFile(); } catch { return false; } };
+
+export async function findOllama({ env = process.env, platform = process.platform, find = findExecutable, home = env.HOME, exists = isFile } = {}) {
   const found = await find('ollama', env, platform);
   if (found) return found;
-  if (platform !== 'win32' || !env.LOCALAPPDATA) return null;
-  const file = join(env.LOCALAPPDATA, 'Programs', 'Ollama', 'ollama.exe');
-  try { return (await stat(file)).isFile() ? file : null; } catch { return null; }
+  const candidates = platform === 'win32' ? [env.LOCALAPPDATA && join(env.LOCALAPPDATA, 'Programs', 'Ollama', 'ollama.exe')]
+    : platform === 'darwin' ? ['/usr/local/bin/ollama', '/opt/homebrew/bin/ollama', '/Applications/Ollama.app/Contents/Resources/ollama',
+      home && join(home, 'Applications', 'Ollama.app', 'Contents', 'Resources', 'ollama')]
+    : [];
+  for (const file of candidates.filter(Boolean)) if (await exists(file)) return file;
+  return null;
 }
 
 /** What is on this computer: Ollama installed or not, running or not, and whether the model is downloaded. */

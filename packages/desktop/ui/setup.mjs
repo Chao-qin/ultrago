@@ -94,7 +94,7 @@ function renderLocalModel(local) {
   $('ollama-state').textContent = !local.checked ? '正在检测…'
     : local.running ? `已安装并在运行${local.version && local.version !== 'unknown' ? `（版本 ${local.version}）` : ''}。`
     : local.installed ? '已安装，但还没有运行。点击启动，或从开始菜单打开 Ollama。'
-    : '这台电脑还没有 Ollama。下载安装（不需要管理员权限）后回到这里，会自动检测到。';
+    : '这台电脑还没有 Ollama。下载安装后回到这里，会自动检测到。';
   $('ollama-download').hidden = !local.checked || local.installed;
   $('ollama-start').hidden = !local.installed || local.running || !local.executable;
   const modelDone = !!local.hasModel;

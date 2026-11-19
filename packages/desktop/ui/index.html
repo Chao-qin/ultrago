@@ -22,7 +22,7 @@
       </section>
       <section id="browser" class="wizard-panel" aria-labelledby="browser-title" hidden>
         <div class="section-head"><div class="title-row"><h2 id="browser-title" tabindex="-1">连接 Chrome</h2><span id="browser-status" class="status">等待连接</span></div><p>安装扩展，再确认你要使用的浏览器。</p></div>
-        <details id="install-guide" open><summary>安装扩展</summary><ol class="install-steps"><li><span>打开 <code>chrome://extensions</code>，开启“开发者模式”。</span></li><li><span>点击“加载已解压的扩展程序”，选择扩展目录。</span><button data-action="extensionFolder" class="secondary">打开扩展目录</button></li><li><span>以后用桌面上的「Chrome（UltraGo）」打开 Chrome：后台任务窗口被其他窗口挡住时仍会继续渲染。先彻底退出 Chrome（任务栏里不剩 Chrome），再用它打开。</span><button id="chrome-shortcut" class="secondary">在桌面创建快捷方式</button><small id="chrome-shortcut-status" role="status"></small></li></ol><button data-action="chromeDownload" class="text">还没有 Chrome？下载安装 ↗</button></details>
+        <details id="install-guide" open><summary>安装扩展</summary><ol class="install-steps"><li><span>打开 <code>chrome://extensions</code>，开启“开发者模式”。</span></li><li><span>点击“加载已解压的扩展程序”，选择扩展目录。</span><button data-action="extensionFolder" class="secondary">打开扩展目录</button></li><li><span>以后用桌面上的「Chrome（UltraGo）」打开 Chrome：后台任务窗口被其他窗口挡住时仍会继续渲染。先彻底退出 Chrome（Windows：任务栏里不剩 Chrome；macOS：按 ⌘Q 退出），再用它打开。</span><button id="chrome-shortcut" class="secondary">在桌面创建快捷方式</button><small id="chrome-shortcut-status" role="status"></small></li></ol><button data-action="chromeDownload" class="text">还没有 Chrome？下载安装 ↗</button></details>
         <div class="connection-box"><label for="browser-select">选择浏览器</label><div class="actions"><select id="browser-select"><option value="">等待扩展连接…</option></select><button id="select-browser">确认连接</button><button data-action="state" class="secondary">刷新</button></div><small>只连接了一个 Chrome 时会自动确认；所选浏览器离线时不会切换到其他浏览器。</small></div>
         <div id="bridge-repair" class="inline-error" role="alert" hidden><p id="bridge-status"></p><button id="repair-bridge" data-action="repairBridge" class="secondary">修复连接组件</button></div>
       </section>
@@ -62,5 +62,5 @@
       </section>
       <footer class="wizard-footer"><button id="previous-step" class="secondary" hidden>← 上一步</button><p id="step-help" role="status"></p><button id="next-step" disabled>下一步 →</button><button data-action="workbench" id="workbench" hidden disabled>进入工作台 →</button></footer>
     </div>
-  </main><div class="app-foot">最小化或关闭窗口可收起到托盘 · Windows 内测版</div>
+  </main><div class="app-foot">最小化或关闭窗口后在托盘（macOS 为菜单栏）继续运行 · 内测版</div>
 </div><script type="module" src="setup.mjs"></script></body></html>

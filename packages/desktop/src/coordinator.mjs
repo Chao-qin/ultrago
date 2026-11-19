@@ -273,9 +273,9 @@ export class Coordinator extends EventEmitter {
           BCP_PYTHON_EXECUTABLE: this.paths.python,
           BCP_BROWSER_ROOT: join(this.paths.userData, 'browser'), BCP_EXTENSION_DIR: this.paths.extension,
           DATABASE_URL: `file:${this.paths.db}`, BCP_CONSOLE_WEB_DIR: this.paths.web,
-          ...(process.platform === 'win32' ? {
-            PRISMA_QUERY_ENGINE_LIBRARY: join(this.paths.engines, 'query_engine-windows.dll.node'),
-            PRISMA_SCHEMA_ENGINE_BINARY: join(this.paths.engines, 'schema-engine-windows.exe'),
+          ...(this.paths.engineFiles ? {
+            PRISMA_QUERY_ENGINE_LIBRARY: join(this.paths.engines, this.paths.engineFiles.query),
+            PRISMA_SCHEMA_ENGINE_BINARY: join(this.paths.engines, this.paths.engineFiles.schema),
           } : {}),
           BCP_PLAYBOOKS_DIR: join(this.paths.userData, 'resource/playbooks'),
           BCP_CONSOLE_URL: origin, BCP_INTERNAL_URL: `${origin}/__bcp/backend`,

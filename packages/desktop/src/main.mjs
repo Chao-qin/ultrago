@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, shell, session, utilityProcess, safeStorage, dialog } from 'electron';
-import { chromeShortcutSpec } from './chrome-shortcut.mjs';
+import { chromeShortcutSpec, macChromeLauncher, writeMacChromeLauncher } from './chrome-shortcut.mjs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fork as forkNode } from 'node:child_process';
@@ -31,9 +31,12 @@ else {
   let resumePending = false;
   // Windows login items are matched by their arguments; this one also marks a launch that starts in the tray.
   const LOGIN_ARGS = ['--launch-at-login'];
-  // openAtLogin ignores the Task Manager / Settings switch; executableWillLaunchAtLogin honours it.
-  const launchesAtLogin = () => { const item = app.getLoginItemSettings({ args: LOGIN_ARGS }); return item.openAtLogin && item.executableWillLaunchAtLogin; };
-  const launchedAtLogin = process.argv.includes(LOGIN_ARGS[0]);
+  // openAtLogin ignores the Task Manager / Settings switch; executableWillLaunchAtLogin honours it. That property and
+  // login arguments exist only on Windows: macOS reports the login item itself and whether this launch came from it.
+  const mac = process.platform === 'darwin';
+  const launchesAtLogin = () => { const item = app.getLoginItemSettings({ args: LOGIN_ARGS }); return item.openAtLogin && (mac || item.executableWillLaunchAtLogin); };
+  // On macOS this is read once the app is ready, below.
+  let launchedAtLogin = !mac && process.argv.includes(LOGIN_ARGS[0]);
   let hiddenSinceLogin = launchedAtLogin;
   const setupUrl = new URL('../ui/index.html', import.meta.url);
   const showSetup = () => { resumePending = false; return window.loadURL(setupUrl.href); };
@@ -56,6 +59,7 @@ else {
   app.on('activate', showWindow);
 
   app.whenReady().then(async () => {
+    if (mac) hiddenSinceLogin = launchedAtLogin = app.getLoginItemSettings().wasOpenedAtLogin === true;
     Menu.setApplicationMenu(null);
     const iconPath = app.isPackaged ? join(process.resourcesPath, 'branding/app-icon.png') : fileURLToPath(new URL('../ui/app-icon.png', import.meta.url));
     window = new BrowserWindow({
@@ -171,8 +175,14 @@ else {
         extensionFolder: () => shell.openPath(paths.extension),
         extensions: () => shell.openExternal('https://support.google.com/chrome_webstore/answer/2664769?hl=zh-Hans'),
         chromeDownload: () => shell.openExternal('https://www.google.com/chrome/'),
-        chromeShortcut: () => {
-          if (process.platform !== 'win32') throw new Error('只有 Windows 能在这里创建快捷方式；其他系统请按说明带参数启动 Chrome。');
+        chromeShortcut: async () => {
+          if (mac) {
+            const launcher = macChromeLauncher({ home: app.getPath('home'), desktopDir: app.getPath('desktop') });
+            if (!launcher) throw new Error('没有找到已安装的 Chrome，请先把 Chrome 安装到「应用程序」。');
+            await writeMacChromeLauncher(launcher);
+            return { shortcut: launcher.path };
+          }
+          if (process.platform !== 'win32') throw new Error('只有 Windows 和 macOS 能在这里创建快捷方式；其他系统请按说明带参数启动 Chrome。');
           const spec = chromeShortcutSpec({ env: process.env, desktopDir: app.getPath('desktop') });
           if (!spec) throw new Error('没有找到已安装的 Chrome，请先安装 Chrome。');
           if (!shell.writeShortcutLink(spec.path, 'create', spec.options)) throw new Error(`无法在桌面创建快捷方式：${spec.path}`);

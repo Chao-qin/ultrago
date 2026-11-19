@@ -41,7 +41,7 @@ try {
   process.stdout.write(`PASS Windows packaged Go launcher → Electron Node → MCP stdio handshake/listTools (${result.tools.length} tools), live assistant status; no browser action or database\n`);
   await client.close();
 
-  const program = windowsPath(fileURLToPath(new URL('../release/win-unpacked/UltraGo Internal.exe', import.meta.url)));
+  const program = windowsPath(fileURLToPath(new URL('../release/win-unpacked/UltraGo.exe', import.meta.url)));
   const script = windowsPath(fileURLToPath(new URL('./test-windows-reports.mjs', import.meta.url)));
   const output = join(directory, 'reports.out');
   const error = join(directory, 'reports.err');
