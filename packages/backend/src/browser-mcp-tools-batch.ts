@@ -30,7 +30,7 @@ const stepShape = z.discriminatedUnion("action", [
   z.object({ action: z.literal("click"), ...locatorShape, humanize: looseBool.optional(), confirm: looseBool.optional() }),
   z.object({
     action: z.literal("type_text"), ...fieldLocator,
-    text: z.string().describe("The value to type — NOT a locator. Replaces the field's current content"),
+    text: z.string().describe("The value to type — not a locator. Replaces the current content"),
     submit: looseBool.optional(), humanize: looseBool.optional(), confirm: looseBool.optional(),
   }),
   z.object({ action: z.literal("select_option"), ref: z.string(), values: z.array(z.string()) }),
@@ -45,9 +45,9 @@ export function registerBatchTools({ server, call, drainEvents }: BatchToolDeps)
     "batch",
     {
       description:
-        "Run several browser actions in ONE call to save agent round-trips — e.g. fill a form (type into 3 fields) then click submit, without a separate tool call per step. Steps run in order and STOP at the first error. Each step is { action, ...args } where args are exactly what the single tool (click / type_text / select_option / press_key / hover / scroll) takes, minus tabId (set once for the batch). Use for a known sequence; if a step changes the page unpredictably (a click opens a portal), prefer descriptions over refs or act separately.",
+        "Run a known sequence of actions in one call, e.g. fill three fields and click submit. Each step is {action, ...that tool's arguments}, with action one of click, type_text, select_option, press_key, hover or scroll; tabId is set once for the whole batch. Steps run in order and stop at the first error. If a step changes the page unpredictably (opens a dialog, navigates), target later steps by description, or act one step at a time.",
       inputSchema: {
-        steps: z.array(stepShape).min(1).describe("Ordered steps; each is { action, ...the single tool's args }"),
+        steps: z.array(stepShape).min(1).describe("Ordered steps, each {action, ...that tool's arguments}"),
         tabId,
       },
     },

@@ -57,10 +57,10 @@ export function registerPlaybookTools({
     "local_eval",
     {
       description:
-        "Run JS in the BACKEND process (NOT the browser page — for that, use the eval tool) against `results`: this plan's step values so far, one entry {index, goal, method, value} per finished step that performed exactly ONE action (a step with none or several has no entry). An eval step's `value` is the eval reply, so its data sits at `.value.value`. A bare expression is returned implicitly (like eval); multi-statement code needs an explicit `return`. Use to turn browser reads you've already done into an artifact, e.g. build a markdown report string, then write it with write_file in the NEXT step. On by default; a backend started with BCP_LOCAL_EVAL=off (or the desktop client's 「允许本机脚本」 switched off) refuses it — it runs in the backend's own process, a bigger blast radius than page eval. If this plan is recording (plan(..., {record})), this call is captured as that step's action — record_stop saves it, and run_playbook(mode:\"auto\") replays it later. Call advance({planId}) afterward either way.",
+        "Run JavaScript in the backend process — not the page (that is eval) — over `results`, the values of this plan's finished steps, to build an artifact such as a report; save it with write_file in the next step. `results` has one {index, goal, method, value} per finished step that performed exactly one action; an eval step's data is at .value.value. A single expression is returned; otherwise use `return`. Call advance afterwards. While recording, it becomes the step's action and run_playbook replays it. Refused when the backend runs with BCP_LOCAL_EVAL=off or the desktop client's 「允许本机脚本」 is off.",
       inputSchema: {
-        planId: z.string().describe("The active plan's id"),
-        code: z.string().describe("JavaScript run against `results`; a bare expression is returned, otherwise use `return`"),
+        planId: z.string().describe("Id of the active plan"),
+        code: z.string().describe("JavaScript over `results`; a single expression is returned, otherwise use `return`"),
       },
     },
     async ({ planId, code }) => {
@@ -81,10 +81,10 @@ export function registerPlaybookTools({
     "write_file",
     {
       description:
-        "Write the value of the step RIGHT BEFORE this one (typically a local_eval's markdown/text output; a non-string is written as JSON) to reports/<path> under the backend's working directory — a path that escapes reports/ is refused, and so is a previous step that produced no single value. If this plan is recording, this call is captured as that step's action — record_stop saves it, run_playbook(mode:\"auto\") replays it later. Call advance({planId}) afterward either way.",
+        "Write the previous step's value (usually local_eval output; anything but a string is written as JSON) to reports/<path> in the backend's working directory. A path outside reports/ is refused, and so is a previous step without a single value. Call advance afterwards. While recording, it becomes the step's action and run_playbook replays it.",
       inputSchema: {
-        planId: z.string().describe("The active plan's id"),
-        path: z.string().describe("File path relative to reports/ (in the backend's working directory)"),
+        planId: z.string().describe("Id of the active plan"),
+        path: z.string().describe("Path relative to reports/"),
       },
     },
     async ({ planId, path }) => {
@@ -103,7 +103,7 @@ export function registerPlaybookTools({
     "list_playbooks",
     {
       description:
-        "List the playbooks saved on this machine — name, goal, the {{slot}} params each one expects, and step count. run_playbook needs an exact name AND a matching param set, so check here before assuming a task has to be driven (or recorded) from scratch.",
+        "List the saved playbooks: name, goal, the {{slot}} params each expects, and step count. Check here before driving or recording a repeated task from scratch; run_playbook needs the exact name and those params.",
       inputSchema: {},
     },
     async () => {
@@ -125,13 +125,13 @@ export function registerPlaybookTools({
     "run_playbook",
     {
       description:
-        'Load a saved playbook and run it. mode:"assisted" (default) registers it as a normal plan — YOU still perform each step\'s action yourself (the reply names the tool and arguments for each step), advance() gates as usual. mode:"auto" runs it with ZERO agent involvement until it completes, PAUSES at a step that needs you — a risk:"confirm" step (before acting, every run, no exceptions), an assert/visualAssert judgment (a screenshot is attached for a visual one), or a step with no recorded action — or FAILS when a step\'s verify does not hold within its retry budget. After a pause, do what the reply says, then call run_playbook again with resumePlanId to continue the SAME run (it resumes in the mode the run started in). A failed run is over: its tabs are closed and it cannot be resumed — fix the cause and start it again.',
+        'Run a saved playbook, filling its {{slot}} params. mode "assisted" (default) loads it as a plan: you perform each step (the reply gives the tool and arguments) and advance checks it. mode "auto" runs it without you and pauses only at a risk:"confirm" step (before acting, on every run), an assert / visualAssert (a screenshot is attached for a visual one), or a step with neither a recorded action nor a wait; do what the pause asks, then call again with resumePlanId. A step whose verify still fails after its retries ends the run: it cannot be resumed and its tabs are closed (kept when the backend runs with BCP_KEEP_FAILED_TABS=1) — fix the cause and start again.',
       inputSchema: {
         name: z.string().describe("Playbook name, as list_playbooks shows it"),
-        params: z.record(z.string(), z.unknown()).optional().describe("Concrete values for this run's {{slot}} placeholders; omit when resuming with resumePlanId"),
-        paramsFile: z.string().optional().describe("Path (absolute, or relative to the backend's working directory) to a JSON file holding the same object as `params`. For a book whose input is large (a product with 70+ SKUs runs past 12KB), inlining it into the tool call is what actually breaks — the JSON gets truncated in transit and the run never starts. Mutually exclusive with `params`."),
-        mode: z.enum(["assisted", "auto"]).optional().describe('Default "assisted" for a new run; a resume defaults to the mode the run started in. "auto" = hard-script playback, no agent needed except at risk/judge/no-action checkpoints.'),
-        resumePlanId: z.string().optional().describe("Continue a paused run instead of loading the playbook again — the planId from the pause message."),
+        params: z.record(z.string(), z.unknown()).optional().describe("Values for the playbook's {{slot}} params; omit when resuming"),
+        paramsFile: z.string().optional().describe("Path of a JSON file holding the same object as params (absolute, or relative to the backend's working directory). Use it for large inputs, which can get truncated when sent inline. Not together with params"),
+        mode: z.enum(["assisted", "auto"]).optional().describe('"assisted" or "auto". A new run defaults to "assisted"; a resume keeps the run\'s mode unless you pass one'),
+        resumePlanId: z.string().optional().describe("planId from a pause message, to continue that run instead of starting a new one"),
       },
     },
     async ({ name, params, paramsFile, mode, resumePlanId }, extra) => {

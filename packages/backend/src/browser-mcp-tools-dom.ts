@@ -145,10 +145,10 @@ export function registerDomTools({ server, call, deltaKey, drainEvents, readDump
     "read_content_dump",
     {
       description:
-        "Read one file of the current page-text dump that read_content or analyze_page wrote on the backend host — for when your own file reader cannot reach that host. Start with the manifest path from the reply, then pass only the chunk path you need. Paths are sandboxed to the current dump directory. Reading does not count as a browser operation, so the dump stays available until your next browser tool call.",
+        "Read one file of the current read_content / analyze_page text dump, for when your own file reader cannot reach the backend host. Start with the manifest path from the reply, then read only the chunks you need. Only paths inside the current dump are accepted. This call does not delete the dump; your next browser tool call does.",
       inputSchema: {
-        path: z.string().describe("Absolute path copied from the current dump manifest or read_content reply"),
-        maxChars: z.coerce.number().int().positive().optional().describe("Optional output cap for this file; omit to read the whole selected chunk"),
+        path: z.string().describe("Absolute path from the current dump manifest or the read_content reply"),
+        maxChars: z.coerce.number().int().positive().optional().describe("Maximum characters to return; omit for the whole file"),
       },
     },
     async ({ path, maxChars }) => {

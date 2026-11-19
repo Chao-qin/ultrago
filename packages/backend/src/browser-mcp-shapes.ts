@@ -20,35 +20,50 @@ z.boolean(),
 
 export const verifyShape = z
   .object({
-    actionSucceeded: looseBool.optional().describe("The current step has an action that returned successfully; use for terminal actions such as close_tab"),
-    urlIncludes: z.string().min(1).optional(),
-    textPresent: z.string().min(1).optional(),
-    textAbsent: z.string().min(1).optional(),
-    elementName: z.string().min(1).optional(),
-    elementChecked: z.string().min(1).optional(),
-    elementEnabled: z.string().min(1).optional(),
-    elementValue: z.object({ name: z.string().min(1), equals: z.string().optional(), includes: z.string().optional() }).optional(),
-    assert: z.string().min(1).optional().describe("Agent-judged TEXT claim — after mechanical checks pass, you confirm it via advance's confirm; forces a look, weaker than structured checks"),
-    visualAssert: z.string().min(1).optional().describe("Agent-judged VISUAL claim — the runner screenshots and hands you the image to confirm (for canvas / image correctness / pixels the structured checks & text can't see)"),
-    networkOk: z
-      .object({ urlIncludes: z.string().min(1), status: z.coerce.number().optional(), bodyIncludes: z.string().min(1).optional() })
-      .optional(),
-    evalCheck: z
-      .object({ code: z.string().min(1), equals: z.string().optional() })
+    actionSucceeded: looseBool.optional().describe("The step's action returned successfully — for steps that leave nothing to check, such as close_tab"),
+    urlIncludes: z.string().min(1).optional().describe("The tab's URL contains this"),
+    textPresent: z.string().min(1).optional().describe("The top frame's visible text contains this — use it for status banners, which snapshot may not list"),
+    textAbsent: z.string().min(1).optional().describe("The top frame's visible text does not contain this"),
+    elementName: z.string().min(1).optional().describe("An interactable element whose accessible name contains this exists"),
+    elementChecked: z.string().min(1).optional().describe("An element whose accessible name contains this is checked"),
+    elementEnabled: z.string().min(1).optional().describe("An element whose accessible name contains this is enabled"),
+    elementValue: z
+      .object({
+        name: z.string().min(1).describe("Text the element's accessible name contains"),
+        equals: z.string().optional().describe("The exact value expected; takes precedence over includes"),
+        includes: z.string().optional().describe("Text the value contains"),
+      })
       .optional()
-      .describe("Runner runs this page JS and gates on its value (equals, or truthy). Arbitrary expressiveness; read-only; refused only when the backend runs with BCP_EVAL=off"),
-    noErrors: looseBool.optional(),
-    settled: looseBool.optional(),
-    dialogOpen: looseBool.optional(),
-    formSubmittable: looseBool.optional(),
+      .describe("An element named like `name` has a value that equals `equals`, else contains `includes`, else is set at all"),
+    assert: z.string().min(1).optional().describe("A claim you judge yourself: once the other checks pass, advance asks you to confirm it"),
+    visualAssert: z.string().min(1).optional().describe("A visual claim you judge from a screenshot the runner attaches — for canvas, images or layout"),
+    networkOk: z
+      .object({
+        urlIncludes: z.string().min(1).describe("Text the request URL contains"),
+        status: z.coerce.number().optional().describe("Required HTTP status; default any 2xx"),
+        bodyIncludes: z.string().min(1).optional().describe("Text the response body contains; body capture is turned on for the step"),
+      })
+      .optional()
+      .describe("A matching request completed since the step started"),
+    evalCheck: z
+      .object({
+        code: z.string().min(1).describe("Page JavaScript to evaluate; keep it free of side effects"),
+        equals: z.string().optional().describe("Expected result, compared as a string; omit to require a truthy result"),
+      })
+      .optional()
+      .describe("The runner evaluates page JavaScript and checks the result. Refused when the backend runs with BCP_EVAL=off"),
+    noErrors: looseBool.optional().describe("The page shows no visible error messages"),
+    settled: looseBool.optional().describe("The page has finished loading and rendering"),
+    dialogOpen: looseBool.optional().describe("A dialog or modal is open"),
+    formSubmittable: looseBool.optional().describe("The page has form controls and none is required-empty or invalid"),
   })
-  .describe("Structured done-criteria the runner checks itself; all present fields must hold (ANDed).");
+  .describe("Done-criteria the runner checks itself; every field given must hold. Boolean fields only count when true");
 export const stepShape = z.object({
-  goal: z.string().describe("What this step accomplishes"),
+  goal: z.string().describe("What this step achieves"),
   verify: verifyShape,
-  onFail: z.enum(["retry", "rescan", "escalate"]).optional().describe('Recovery on a failed verify (default "escalate")'),
-  maxRetries: z.coerce.number().optional().describe("Retry/rescan budget before a forced escalate (default 1)"),
-  risk: z.enum(["confirm"]).optional().describe('Mark this step irreversible (submit/delete/pay/send/publish). If this plan is being recorded, the marker carries into the saved playbook, where auto playback will always pause before executing it.'),
+  onFail: z.enum(["retry", "rescan", "escalate"]).optional().describe('On a failed verify: "retry" redoes the step, "rescan" re-reads the page and redoes it (both within maxRetries), "escalate" (default) stops and reports'),
+  maxRetries: z.coerce.number().optional().describe("Retries or rescans before escalating (default 1)"),
+  risk: z.enum(["confirm"]).optional().describe('"confirm" marks an irreversible step (submit, delete, pay, send, publish); in a recorded playbook, auto mode always pauses before it'),
 });
 
 export const tabId = z.coerce.number().optional().describe(TAB_ID_DOC);

@@ -42,10 +42,10 @@ export function registerLifecycleTools({
       "use_browser",
       {
         description:
-          "Point THIS session's tools at a specific browser INSTANCE (kind + full instanceId from browser_state). Session-scoped: other MCP sessions keep their own targets, so several agents can drive different instances concurrently without fighting. Omit instanceId to use the global default when it is that kind; outside the desktop client it otherwise falls back to the first connected instance of that kind (the desktop client only drives its own browser).",
+          "Point this session's tools at a browser instance; other sessions keep their own targets, so several agents can drive different browsers at once. With instanceId, that instance must be connected. Without it: the global default if it is that kind, else the first connected instance of that kind (the desktop client only drives its own browser).",
         inputSchema: {
-          kind: z.enum(["chrome", "firefox"]).describe('Browser kind, e.g. "chrome"'),
-          instanceId: z.string().optional().describe("Full instance id from browser_state; omit to use the default instance of that kind"),
+          kind: z.enum(["chrome", "firefox"]).describe("Browser kind"),
+          instanceId: z.string().optional().describe("Full instance id from browser_state; omit to pick as described above"),
         },
       },
       async ({ kind, instanceId }) => {
@@ -80,10 +80,10 @@ export function registerLifecycleTools({
       "claim_tab",
       {
         description:
-          "Claim a tab as THIS session's default workspace: tools that omit tabId then target the claimed tab instead of the active tab of the last-focused window. Essential when several agent sessions — or the agent and the user — share one browser. release:true reverts to the active-tab default.",
+          "Make a tab this session's default: tools called without tabId then act on it instead of the active tab of the last-focused window. Use it whenever other agents or the user share the browser. release:true drops the claim. In manual mode a tabId is required and the user's visible tab cannot be claimed.",
         inputSchema: {
-          tabId: z.coerce.number().optional().describe("Tab to claim (from list_windows / new_tab); omit to claim the active tab of the last-focused window"),
-          release: looseBool.optional().describe("true = release the claim instead"),
+          tabId: z.coerce.number().optional().describe("Tab to claim (from list_windows / new_tab); omit for the active tab of the last-focused window (not allowed in manual mode)"),
+          release: looseBool.optional().describe("true to release your claim instead"),
         },
       },
       async ({ tabId, release }) => {
@@ -136,11 +136,11 @@ export function registerLifecycleTools({
       "set_browser_mode",
       {
         description:
-          "Mark a browser INSTANCE as manual (the user is personally driving it) or auto (agents may drive freely). In manual mode agents cannot switch its tabs or act on the tab the user is looking at: a tool that omits tabId (and has no claimed tab) is refused — only page_state, snapshot, read_content and read_network may still read that tab — new_tab opens in the background, and screenshots never re-foreground. Set manual when the user says they're using that browser themselves.",
+          "Mark a connected browser instance manual (the user is driving it) or auto (the default: agents drive freely). In manual mode switch_tab is refused; a tool called without tabId (and no claimed tab) is refused, except page_state, snapshot, read_content and read_network; the user's visible tab cannot be changed; new tabs and windows open in the background; screenshots never bring a window forward. Set manual when the user says they are using the browser, auto when they hand it back.",
         inputSchema: {
           kind: z.enum(["chrome", "firefox"]).describe("Browser kind"),
           instanceId: z.string().describe("Full instance id from browser_state"),
-          mode: z.enum(["auto", "manual"]).describe('"manual" = the user is driving this browser; "auto" = agents may drive it freely'),
+          mode: z.enum(["auto", "manual"]).describe('"manual": the user is driving this browser; "auto": agents may drive it freely'),
         },
       },
       async ({ kind, instanceId, mode }) => {
@@ -176,12 +176,12 @@ export function registerLifecycleTools({
       "launch_browser",
       {
       description:
-        "Start (or reuse) a browser instance for automation and WAIT for its extension to complete the handshake (hello→welcome→ready). Omit instanceId to reuse the connected instance of that kind and mode, else the one already set up here, else to create a new one. user mode (default): opens your real browser normally; when its extension does not connect within a short grace window, the install guide (chrome://extensions + the extension build to load) opens. managed mode: launches a dedicated backend-owned profile with the extension pre-loaded. Returns the target (kind + full instanceId) + readiness, and makes it this session's target when ready. Idempotent: an already-ready instance returns immediately. Default wait 30s, max 5min.",
+        "Start or reuse a browser instance and wait until its extension is connected and ready; a ready instance becomes this session's target. mode \"user\" (default) opens the user's own browser, and opens the extension install guide if the extension has not connected within a few seconds. mode \"managed\" starts a separate backend-owned Chrome profile with the extension preloaded. Without instanceId it reuses a connected instance of that kind and mode, then one already set up, else creates one. Returns the instance id and readiness; an instance that is not ready in time is reported in the reply, not as an error. An already-ready instance returns at once.",
         inputSchema: {
           kind: z.enum(["chrome", "firefox"]).describe("Browser kind"),
-          mode: z.enum(["user", "managed"]).optional().describe("user = your own profile (default, never owned by the backend); managed = dedicated backend-owned profile (chrome only)"),
-          instanceId: z.string().optional().describe("Full instance id to start or reuse; omit to reuse the connected/known instance of this kind and mode, or create one"),
-          waitMs: z.coerce.number().optional().describe("Max wait for the ready ack, ms (default 30000)"),
+          mode: z.enum(["user", "managed"]).optional().describe('"user" (default): the user\'s own profile, never stopped by the backend. "managed": a backend-owned profile, Chrome only'),
+          instanceId: z.string().optional().describe("Full instance id to start or reuse; omit to pick as described above"),
+          waitMs: z.coerce.number().optional().describe("How long to wait for readiness, ms (default 30000, clamped to 1000–300000)"),
         },
       },
       async ({ kind, mode, instanceId, waitMs }) => {
@@ -205,11 +205,11 @@ export function registerLifecycleTools({
       "stop_browser",
       {
         description:
-          "Stop a MANAGED browser instance (the dedicated profile the backend launched). Only backend-owned managed instances can be stopped — user-profile instances are never touched. Requires confirm:true (irreversible external process control).",
+          "Stop a managed browser instance that this backend started; any other instance, including the user's own browser, is refused. Requires confirm:true. Stopping an instance that is already stopped just returns its status.",
         inputSchema: {
           kind: z.enum(["chrome", "firefox"]).describe("Browser kind"),
           instanceId: z.string().describe("Full instance id of the managed instance (from browser_state / launch_browser)"),
-          confirm: z.literal(true).describe("Must be true — stopping a browser process is irreversible"),
+          confirm: z.literal(true).describe("Must be true: it ends the browser process"),
         },
         annotations: { readOnlyHint: false },
       },
@@ -230,7 +230,7 @@ export function registerLifecycleTools({
     "browser_state",
     {
       description:
-        "The one browser status view: this session's target and claimed tab; every connected browser instance (kind + full instanceId, mode, global default) × its windows (which has OS focus, which tab each shows) × tabs; every tab claim, marked as yours or another session's; and, when the backend manages browser setup, each configured instance's readiness (connected / waiting_extension / executable_missing / …) plus the browser executables it can launch. Read-only; does NOT change your target. Copy instance ids from here into use_browser / set_browser_mode / stop_browser.",
+        "Overview of every browser: this session's target and claimed tab; each connected instance (kind, full instance id, mode, whether it is the global default) with its windows (OS focus, visible tab) and tabs; every tab claim, marked yours or another session's; and, when the backend manages browser setup, each configured instance's readiness (connected / waiting_extension / executable_missing / …) and the browsers it can launch. Read-only. Copy instance ids from here into use_browser, set_browser_mode and stop_browser.",
       inputSchema: {},
     },
     async () => {
