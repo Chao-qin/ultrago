@@ -1320,6 +1320,17 @@ async function main() {
     },
   );
 
+  // page_state's rendering probe: a visible page that renders must never be
+  // reported as stalled — that warning tells the user to restart Chrome.
+  await withPage(
+    `<button id="b">ok</button>`,
+    async (t) => {
+      const s = await t.call("state", {});
+      eq(s.value?.documentHidden, false, "a page in the foreground is not hidden");
+      eq(s.value?.framesStalled, undefined, "and a rendering page is not reported as stalled");
+    },
+  );
+
   // hover and right-click take the same locator as click: a description works
   // where a ref used to be the only way in.
   await withPage(

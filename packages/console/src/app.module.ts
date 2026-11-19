@@ -88,7 +88,7 @@ export class AppModule implements OnModuleInit {
     const indexed = await this.prisma.book.count({ where: { deletedAt: null } });
     this.logger.log(
       indexed === 0
-        ? "filesync: manual only — no books indexed yet, POST /api/books/rescan to index resource/playbooks/"
+        ? "filesync: no books indexed yet — `pnpm start` indexes resource/playbooks/ right after boot (or POST /api/books/rescan)"
         : `filesync: manual only — ${indexed} book(s) already indexed, POST /api/books/rescan to re-index`,
     );
     // Same reasoning for the Schema registry, which has the same shape of
@@ -105,7 +105,7 @@ export class AppModule implements OnModuleInit {
     const registered = await this.prisma.schema.count({ where: { deletedAt: null } });
     this.logger.log(
       registered === 0
-        ? "schema registry: EMPTY — books citing paramSchemaRef/outputSchemaRef will fall back to their inline contract. Seed it with `node scripts/register-schemas.mjs` (needs this server running and `pnpm build` done)"
+        ? "schema registry: EMPTY — books citing paramSchemaRef/outputSchemaRef will fall back to their inline contract. `pnpm start` seeds it right after boot; otherwise run `node scripts/seed-console.mjs`"
         : `schema registry: ${registered} schema(s) registered`,
     );
   }

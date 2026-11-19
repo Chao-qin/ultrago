@@ -90,7 +90,7 @@ async function main(): Promise<void> {
       );
     }
   } else {
-    console.log("[backend] weclaw: disabled (BCP_WECLAW_DISABLE=1)");
+    console.log("[backend] weclaw: off (set BCP_WECLAW_ENABLE=1 to start the WeChat bridge)");
   }
 
   let shuttingDown = false;

@@ -7,7 +7,7 @@
  * closure — so they are the part of that file that can be read, and tested,
  * on its own.
  */
-import { RpcMethod, toolNameOf, type ActionDelta, type PageState, type SnapshotElement, type StepVerify, type TabInfo } from "@bcp/shared";
+import { CHROME_RENDERING_FLAGS, RpcMethod, toolNameOf, type ActionDelta, type PageState, type SnapshotElement, type StepVerify, type TabInfo } from "@bcp/shared";
 import type { RecordingNote } from "./orchestrator.js";
 import type { ReadDump } from "./browser-read-dump.js";
 
@@ -323,6 +323,19 @@ export function renderTabsByWindow(tabs: TabInfo[]): string {
     .join("\n");
 }
 
+/** Chrome has stopped painting this tab's window although nothing minimized or
+ *  hid the tab: it is covered by other windows and Chrome was started without
+ *  CHROME_RENDERING_FLAGS. Everything that needs a frame then silently stalls. */
+export function renderingStalled(s: Pick<PageState, "framesStalled" | "documentHidden" | "active" | "windowState">): boolean {
+  if (s.framesStalled) return true;
+  return !!s.documentHidden && s.active && s.windowState != null && s.windowState !== "minimized";
+}
+
+export const RENDERING_STALLED =
+  `⚠ Chrome is NOT rendering this window (it is covered by other windows): animations freeze, typed values may not land, screenshots come back stale. ` +
+  `Chrome must be started with ${CHROME_RENDERING_FLAGS.join(" ")} — tell the user to quit Chrome completely and reopen it with them ` +
+  `(launch_browser does this when Chrome is not running; \`pnpm doctor\` checks it). Until then, bring this window to the front before acting.`;
+
 /** Render a PageState into a compact, scannable digest. Reuses renderDelta for
  * the `changed` line so it reads identically to click/type's "↳ changed:". */
 export function renderPageState(s: PageState): string {
@@ -341,6 +354,7 @@ export function renderPageState(s: PageState): string {
   const vis =
     !s.active ? " (background tab)" : s.windowFocused === false ? " (visible in a background window)" : s.windowFocused ? " (foreground — user is looking at this)" : "";
   L.push(`state: tab ${s.tabId}${vis} · ${s.interactableCount} interactable${flags.length ? " · " + flags.join(" · ") : " · clean"}`);
+  if (renderingStalled(s)) L.push(RENDERING_STALLED);
   if (s.interactableCount > LARGE_PAGE) L.push(`large page: narrow snapshot with query (text/role) or viewportOnly:true instead of reading it whole`);
 
   const scr = s.scroll;

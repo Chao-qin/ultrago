@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, shell, session, utilityProcess, safeStorage, dialog } from 'electron';
+import { chromeShortcutSpec } from './chrome-shortcut.mjs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fork as forkNode } from 'node:child_process';
@@ -164,6 +165,13 @@ else {
         extensionFolder: () => shell.openPath(paths.extension),
         extensions: () => shell.openExternal('https://support.google.com/chrome_webstore/answer/2664769?hl=zh-Hans'),
         chromeDownload: () => shell.openExternal('https://www.google.com/chrome/'),
+        chromeShortcut: () => {
+          if (process.platform !== 'win32') throw new Error('只有 Windows 能在这里创建快捷方式；其他系统请按说明带参数启动 Chrome。');
+          const spec = chromeShortcutSpec({ env: process.env, desktopDir: app.getPath('desktop') });
+          if (!spec) throw new Error('没有找到已安装的 Chrome，请先安装 Chrome。');
+          if (!shell.writeShortcutLink(spec.path, 'create', spec.options)) throw new Error(`无法在桌面创建快捷方式：${spec.path}`);
+          return { shortcut: spec.path };
+        },
         dataFolder: () => shell.openPath(paths.userData),
         logFolder: () => shell.openPath(join(paths.userData, 'logs')),
         copyDiagnostics: async () => {

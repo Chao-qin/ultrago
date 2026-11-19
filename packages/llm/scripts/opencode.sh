@@ -67,7 +67,7 @@ env_val() {
   fi
 }
 
-BCP_LLM_ENABLE="$(env_val BCP_LLM_ENABLE)"; BCP_LLM_ENABLE="${BCP_LLM_ENABLE:-1}"
+BCP_LLM_ENABLE="$(env_val BCP_LLM_ENABLE)"; BCP_LLM_ENABLE="${BCP_LLM_ENABLE:-0}"
 # Must agree with src/adapters/opencode.ts, which reads the same variable.
 BCP_LLM_OPENCODE_PORT="$(env_val BCP_LLM_OPENCODE_PORT)"; BCP_LLM_OPENCODE_PORT="${BCP_LLM_OPENCODE_PORT:-11438}"
 OPENCODE_BIN="$(env_val BCP_LLM_OPENCODE_BIN)"

@@ -4,7 +4,8 @@
 #   1. @bcp/backend  — Node process: extension WS (BCP_PORT) + MCP HTTP (BCP_MCP_PORT)
 #   2. weclaw        — WeChat sidecar daemon (WECLAW_API_ADDR), spawned by the backend
 #
-# The backend spawns weclaw itself, so `start` brings both up. weclaw daemonizes
+# The backend spawns weclaw itself, so `start` brings both up when WeClaw is
+# enabled (BCP_WECLAW_ENABLE=1; it is off by default). weclaw daemonizes
 # (its launcher forks a background daemon and exits), so an ungracefully-killed
 # backend would ORPHAN the weclaw daemon — that's why `kill` stops the backend
 # gracefully first (its SIGTERM handler stops weclaw), then sweeps ports and
@@ -27,7 +28,7 @@ WECLAW_BUILD_STAMP="$ROOT/packages/weclaw/bin/.external-delivery-commit"
 require_go_1_25() {
   if ! command -v go >/dev/null 2>&1; then
     echo "[stack] Go toolchain not found — the WeClaw external-delivery binary is built from source." >&2
-    echo "[stack]   fix: install Go 1.25+ (https://go.dev/dl/) and re-run, or set BCP_WECLAW_DISABLE=1 to skip WeClaw." >&2
+    echo "[stack]   fix: install Go 1.25+ (https://go.dev/dl/) and re-run, or remove BCP_WECLAW_ENABLE=1 from .env to skip WeClaw." >&2
     return 1
   fi
   local raw num major minor
@@ -37,7 +38,7 @@ require_go_1_25() {
   minor="${num#*.}"; minor="${minor%%.*}"; minor="${minor//[!0-9]/}"; minor="${minor:-0}"
   if [ "$major" -lt 1 ] || { [ "$major" -eq 1 ] && [ "$minor" -lt 25 ]; }; then
     echo "[stack] Go 1.25+ is required to build the WeClaw external-delivery binary (found ${raw:-unknown})." >&2
-    echo "[stack]   fix: upgrade Go (https://go.dev/dl/) and re-run, or set BCP_WECLAW_DISABLE=1 to skip WeClaw." >&2
+    echo "[stack]   fix: upgrade Go (https://go.dev/dl/) and re-run, or remove BCP_WECLAW_ENABLE=1 from .env to skip WeClaw." >&2
     return 1
   fi
   return 0
@@ -86,13 +87,15 @@ export CONSOLE_PORT
 WECLAW_ADDR="$(env_val WECLAW_API_ADDR)"; WECLAW_ADDR="${WECLAW_ADDR:-127.0.0.1:18011}"
 WECLAW_PORT="${WECLAW_ADDR##*:}"
 export WECLAW_API_ADDR="$WECLAW_ADDR"
-BCP_WECLAW_DISABLE="$(env_val BCP_WECLAW_DISABLE)"
-# One normalization point, same spellings as the backend's envFlag (on/1/true/yes, any case): every check below
-# compares with "1", and the backend reads the exported value — a "true" accepted there but not here split them.
-case "$(printf '%s' "${BCP_WECLAW_DISABLE:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
-  on|1|true|yes) BCP_WECLAW_DISABLE=1 ;;
-  *) BCP_WECLAW_DISABLE=0 ;;
-esac
+# WeClaw (the WeChat bridge) is OPT-IN: building it needs Go and starting it
+# needs an interactive WeChat QR login, which must never stand between a new
+# user and the browser tools. BCP_WECLAW_ENABLE=1 turns it on; the older
+# BCP_WECLAW_DISABLE=1 still forces it off. One normalization point, same
+# spellings as the backend's envFlag (on/1/true/yes, any case): every check
+# below compares BCP_WECLAW_DISABLE with "1", and the backend reads it too.
+env_on() { case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in on|1|true|yes) return 0 ;; *) return 1 ;; esac; }
+BCP_WECLAW_DISABLE=1
+if env_on "$(env_val BCP_WECLAW_ENABLE)" && ! env_on "$(env_val BCP_WECLAW_DISABLE)"; then BCP_WECLAW_DISABLE=0; fi
 export BCP_WECLAW_DISABLE
 WECLAW_CONFIG_DIR="$(env_val WECLAW_CONFIG_DIR)"
 if [ -n "$WECLAW_CONFIG_DIR" ]; then export WECLAW_CONFIG_DIR; fi
@@ -101,7 +104,8 @@ BCP_TOKEN="$(env_val BCP_TOKEN)"; export BCP_TOKEN
 # Local LLM (@bcp/llm) settings — the provider-aware dispatcher starts with the
 # stack and stops with it. Export the provider configuration so child processes
 # (backend, console) resolve the same effective provider as the shell.
-LLM_ENABLE="$(env_val BCP_LLM_ENABLE)"; LLM_ENABLE="${LLM_ENABLE:-1}"
+# The local LLM is opt-in too (it needs a model runtime and a model download).
+LLM_ENABLE="$(env_val BCP_LLM_ENABLE)"; LLM_ENABLE="${LLM_ENABLE:-0}"
 BCP_LLM_PORT="$(env_val BCP_LLM_PORT)"; BCP_LLM_PORT="${BCP_LLM_PORT:-11435}"
 BCP_LLM_PROVIDER="$(env_val BCP_LLM_PROVIDER)"; BCP_LLM_PROVIDER="${BCP_LLM_PROVIDER:-auto}"
 BCP_LLM_MODEL="$(env_val BCP_LLM_MODEL)"; BCP_LLM_MODEL="${BCP_LLM_MODEL:-qwen3.5:4b}"
@@ -598,6 +602,13 @@ start() {
     echo "[stack] console failed to start on port $CONSOLE_PORT" >&2
     kill_all
     exit 1
+  fi
+  # Seed what a fresh database lacks (schemas, flows) and index the playbooks.
+  # Only missing rows are written, so console-UI edits survive a restart. A
+  # failure leaves the stack running — the [seed] lines say what to re-run.
+  echo "[stack] preparing console data"
+  if ! node "$ROOT/scripts/seed-console.mjs" --url "http://127.0.0.1:$CONSOLE_PORT"; then
+    echo "[stack] warning: console data is incomplete — see the [seed] lines above, or run: pnpm doctor --fix" >&2
   fi
   start_llm
 

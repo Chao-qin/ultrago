@@ -673,6 +673,14 @@ export interface FormBlocker {
  * ActionDelta so `changed` speaks a vocabulary the agent already knows. */
 export interface PageState {
   url: string;
+  /** `document.visibilityState === "hidden"` at the time of the read. */
+  documentHidden?: boolean;
+  /** The page says it is visible, yet no animation frame ran within a short
+   *  probe — Chrome stopped rendering this window (it is covered by others and
+   *  Chrome was started without CHROME_RENDERING_FLAGS). */
+  framesStalled?: boolean;
+  /** The tab's window state ("normal" / "minimized" / "maximized" / "fullscreen"). */
+  windowState?: string;
   title: string;
   readyState: DocumentReadyState;
   /** Still loading / not yet hydrated: readyState≠complete OR body has no text

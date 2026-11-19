@@ -60,8 +60,10 @@ export const config = {
    * requirement (you must declare a verifiable plan before you can change the
    * page). Off by default; the gate stays opt-in. */
   get forcePlan(): boolean { return envFlag(process.env.BCP_FORCE_PLAN); },
-  /** Set BCP_WECLAW_DISABLE=1 to skip the weclaw sidecar (useful for tests). */
-  weclawDisabled: envFlag(process.env.BCP_WECLAW_DISABLE),
+  /** The weclaw (WeChat) sidecar is opt-in: it runs only with BCP_WECLAW_ENABLE=1,
+   * and BCP_WECLAW_DISABLE=1 still forces it off. Building it needs Go and
+   * starting it an interactive QR login — not something a first run may require. */
+  weclawDisabled: envFlag(process.env.BCP_WECLAW_DISABLE) || !envFlag(process.env.BCP_WECLAW_ENABLE),
   /** Optional realtime webhook for the few events that are only actionable
    * while they are happening (a challenge appearing / clearing, a browser
    * going away). Empty = disabled, and then nothing is subscribed or sent.

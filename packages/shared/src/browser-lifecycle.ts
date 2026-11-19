@@ -41,6 +41,17 @@ export function isValidInstanceId(id: string): boolean {
   return INSTANCE_ID_RE.test(id);
 }
 
+/** Chrome flags that keep a window rendering while other windows cover it.
+ * Without them Chrome stops painting an occluded window: animations freeze on
+ * their first frame, React commits stall, screenshots come back blank — and a
+ * task window is behind the user's own windows by design. Playwright and
+ * Puppeteer pass the second flag by default; the first is Windows' occlusion
+ * calculation. They only take effect when Chrome STARTS with them. */
+export const CHROME_RENDERING_FLAGS = [
+  "--disable-features=CalculateNativeWinOcclusion",
+  "--disable-backgrounding-occluded-windows",
+] as const;
+
 /** How a target is named in tool replies and errors: kind plus the FULL
  * instanceId. Agents copy ids out of these replies into use_browser /
  * set_browser_mode / stop_browser, which match the id exactly — a shortened

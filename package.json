@@ -16,6 +16,7 @@
     "lumen:dev": "pnpm --filter @bcp/lumen-studio dev",
     "lumen:start": "pnpm --filter @bcp/lumen-studio start",
     "init": "bash scripts/init.sh",
+    "doctor": "node scripts/doctor.mjs",
     "python:setup": "bash scripts/setup-python.sh",
     "python:check": "bash scripts/python.sh scripts/check-python-runtime.py --montage --report",
     "python": "bash scripts/python.sh",

@@ -2016,10 +2016,29 @@ export async function bcpDomRuntime(
         const dialogEls = visibleDialogs(); // shared visible-filter (matches captureSig)
         const busy = [...document.querySelectorAll('[aria-busy="true"],[role="progressbar"],progress:not([value])')].filter(isVisible).length;
 
+        // Rendering probe. A page that reports itself visible gets an animation
+        // frame within a few frames; none means Chrome stopped painting this
+        // window because others cover it and Chrome was started without the
+        // rendering flags. Hidden pages (background tab, minimized) are expected
+        // not to paint, so they are not probed.
+        const documentHidden = document.visibilityState === "hidden";
+        // A timer that fires late means the main thread was busy (hydration, a
+        // heavy script) — then a missing frame proves nothing, so the probe
+        // answers "unknown" instead of blaming Chrome.
+        const framesStalled = documentHidden
+          ? undefined
+          : await new Promise<boolean | undefined>((done) => {
+              const start = performance.now();
+              const timer = setTimeout(() => done(performance.now() - start < 400 ? true : undefined), 300);
+              requestAnimationFrame(() => { clearTimeout(timer); done(false); });
+            });
+
         return {
           value: {
             url: location.href,
             title: document.title,
+            documentHidden,
+            ...(framesStalled ? { framesStalled } : {}),
             readyState: document.readyState,
             loading: document.readyState !== "complete" || bodyText.length === 0,
             interactableCount: nowSig.count,
