@@ -11,7 +11,7 @@
     "test": "node --test test/*.test.mjs",
     "check": "node scripts/check.mjs",
     "build": "node scripts/check.mjs --source",
-    "workspace:build": "pnpm --filter @bcp/shared --filter @bcp/weclaw --filter @bcp/backend --filter @bcp/llm --filter @bcp/console-web --filter @bcp/extension build && pnpm --filter @bcp/console build:server",
+    "workspace:build": "pnpm --filter @bcp/shared --filter @bcp/weclaw --filter @bcp/backend --filter @bcp/llm --filter @bcp/console-web --filter @bcp/extension build && pnpm --filter @bcp/console build",
     "native:build": "node scripts/build-native.mjs",
     "windows:engines": "node scripts/prepare-windows.mjs",
     "windows:python": "node scripts/prepare-python.mjs",
