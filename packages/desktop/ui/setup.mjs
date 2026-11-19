@@ -13,6 +13,8 @@ const stepNames = ['准备工作台', '连接 Chrome', 'AI 模型', '接入 AI �
 const LAST = stepIds.length - 1;
 const optional = (step) => step === 2 || step === 3;
 const reachable = (state) => state.phase === 'ready' ? state.browserReady ? LAST : 1 : 0;
+// A failed preparation can be caused by the model settings, so the model step stays open to fix them.
+const canOpen = (step, state) => step <= reachable(state) || step === 2 && state.phase === 'failed';
 const onlineAssistants = (state) => (state.connections?.assistants || []).filter((client) => client.state === 'connected');
 const modelReady = (state) => state.modelMode === 'local' ? !!state.localModel?.configured : state.modelMode === 'cloud' && !!state.modelConfigured;
 function stepDone(step, state) {
@@ -24,7 +26,8 @@ function stepDone(step, state) {
 }
 
 function showStep(index, focus = true) {
-  activeStep = Math.max(0, Math.min(LAST, index, reachable(current)));
+  const step = Math.max(0, Math.min(LAST, index));
+  activeStep = canOpen(step, current) ? step : Math.min(step, reachable(current));
   sessionStorage.setItem('setupStep', String(activeStep));
   renderWizard();
   if (activeStep === 2) void refreshLocalModel();
@@ -38,7 +41,7 @@ function renderWizard() {
   document.querySelectorAll('.stepper [data-step-target]').forEach((button) => {
     const step = Number(button.dataset.stepTarget);
     const done = stepDone(step, current) && step !== activeStep;
-    button.disabled = step > available;
+    button.disabled = !canOpen(step, current);
     button.classList.toggle('complete', done);
     button.querySelector('.step-dot').textContent = done ? '✓' : step + 1;
     if (step === activeStep) button.setAttribute('aria-current', 'step');
@@ -91,7 +94,7 @@ function renderLocalModel(local) {
   $('ollama-state').textContent = !local.checked ? '正在检测…'
     : local.running ? `已安装并在运行${local.version && local.version !== 'unknown' ? `（版本 ${local.version}）` : ''}。`
     : local.installed ? '已安装，但还没有运行。点击启动，或从开始菜单打开 Ollama。'
-    : '这台电脑还没有 Ollama。下载安装（不需要管理员权限）后回到这里，会自动检测到。';
+    : '这台电脑还没有 Ollama。下载安装后回到这里，会自动检测到。';
   $('ollama-download').hidden = !local.checked || local.installed;
   $('ollama-start').hidden = !local.installed || local.running || !local.executable;
   const modelDone = !!local.hasModel;
@@ -275,7 +278,7 @@ function render(state) {
   // Confirming (or auto-confirming) the browser moves on to the next step in line; a page reload keeps the remembered step.
   if (previousPhase && !previouslyConnected && state.browserReady && activeStep === 1) activeStep = state.setupCompleted ? LAST : 2;
   if (state.openPanel === 'agents') activeStep = 3;
-  activeStep = Math.min(activeStep, reachable(state));
+  if (!canOpen(activeStep, state)) activeStep = Math.min(activeStep, reachable(state));
   renderWizard();
 }
 

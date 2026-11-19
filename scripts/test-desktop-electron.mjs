@@ -57,6 +57,11 @@ try {
   assert.equal(await application.evaluate(({ Menu }) => Menu.getApplicationMenu()), null, '原生菜单已移除');
   const shellPage = application.context().pages().find((candidate) => candidate.url().endsWith('/ui/shell.html'));
   assert.ok(shellPage, '浮动控制层必须存在');
+  const shellVisible = () => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].contentView.children.find((child) => child.webContents?.getURL().endsWith('/ui/shell.html')).getVisible());
+  assert.equal(await shellVisible(), false, '准备页已有全部入口，不显示浮动按钮');
+  // Any page other than the setup page stands in for the workbench here; no business service is started.
+  await application.evaluate(({ BrowserWindow }, url) => BrowserWindow.getAllWindows()[0].loadURL(url), sample);
+  assert.equal(await shellVisible(), true, '离开准备页后显示浮动按钮');
   await shellPage.locator('#shell-trigger').waitFor();
   await shellPage.locator('#shell-trigger').click();
   assert.equal(await shellPage.locator('#shell-menu').isVisible(), true);
@@ -81,7 +86,7 @@ try {
   });
   assert.deepEqual(isolated, [true, true], '生产浮动通道须拒绝主页面与错误Frame');
   await shellPage.evaluate(() => { window.shellEvents = []; for (const type of ['pointerenter', 'pointerleave', 'focusin', 'blur']) window.addEventListener(type, () => window.shellEvents.push(type), true); });
-  await page.locator('h2:visible').click();
+  await page.mouse.click(600, 400);
   try { await shellPage.waitForFunction(() => document.body.classList.contains('idle'), undefined, { timeout: 11000 }); }
   catch (error) { throw new Error('idle observation: ' + JSON.stringify(await shellPage.evaluate(() => ({ events: window.shellEvents, focus: document.hasFocus(), active: document.activeElement?.id, classes: document.body.className, hover: document.querySelector('#shell-trigger').matches(':hover') }))), { cause: error }); }
   await shellPage.waitForFunction(() => Number(getComputedStyle(document.querySelector('#shell-trigger')).opacity) < .4, undefined, { timeout: 2000 });
@@ -119,6 +124,10 @@ try {
   assert.equal((await fetch(sample)).status, 200);
   await application.evaluate(({ app }) => app.emit('activate'));
   assert.equal(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].id), originalWindow);
+  await shellPage.locator('#shell-trigger').click();
+  await shellPage.locator('[data-shell-action="setup"]').click();
+  await page.waitForURL(/\/ui\/index\.html$/);
+  assert.equal(await shellVisible(), false, '回到准备页后隐藏浮动按钮');
   assert.equal((await page.evaluate(() => window.desktop.action('state'))).generation, state.generation);
   await assert.rejects(access(join(userData, 'resource/db/console.db')));
   await page.screenshot({ path: join(profile, 'setup.png') });
@@ -127,7 +136,7 @@ try {
   await Promise.race([exit, new Promise((_done, fail) => { const timer = setTimeout(() => fail(new Error('退出清理超时')), 12000); timer.unref(); })]);
   exited = true;
   await assert.rejects(fetch(sample, { signal: AbortSignal.timeout(1000) }));
-  process.stdout.write(`PASS actual Electron initial load/reload, icon, clipboard, drag/dock/persistence/menu bounds, tray close/hide/restore, minimize handler and explicit quit; ingress survives hiding and closes on quit; no business services or database. Screenshot: ${join(profile, 'setup.png')}\n`);
+  process.stdout.write(`PASS actual Electron initial load/reload, icon, clipboard, floating menu hidden on the setup page, drag/dock/persistence/menu bounds, tray close/hide/restore, minimize handler and explicit quit; ingress survives hiding and closes on quit; no business services or database. Screenshot: ${join(profile, 'setup.png')}\n`);
 } finally {
   if (application && !exited) {
     const ownedProcess = application.process();

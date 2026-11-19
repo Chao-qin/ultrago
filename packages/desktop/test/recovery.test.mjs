@@ -582,3 +582,18 @@ test('a local model is used only once Ollama runs with it, starts the gateway wi
     assert.equal(coordinator.snapshot().localModel.configured, true);
   } finally { await coordinator.close(); }
 });
+
+test('a packaged client points Prisma at the engine it ships for this system; from source Prisma keeps its own', async () => {
+  const { coordinator, live, prepare } = await preparedFixture();
+  try {
+    coordinator.paths.engineFiles = { query: 'libquery_engine-darwin-arm64.dylib.node', schema: 'schema-engine-darwin-arm64' };
+    await prepare();
+    for (const service of ['backend', 'console']) {
+      assert.equal(live(service).env.PRISMA_QUERY_ENGINE_LIBRARY, join(coordinator.paths.engines, 'libquery_engine-darwin-arm64.dylib.node'));
+      assert.equal(live(service).env.PRISMA_SCHEMA_ENGINE_BINARY, join(coordinator.paths.engines, 'schema-engine-darwin-arm64'));
+    }
+    coordinator.paths.engineFiles = null;
+    await prepare();
+    assert.equal(Object.hasOwn(live('backend').env, 'PRISMA_QUERY_ENGINE_LIBRARY'), false);
+  } finally { await coordinator.close(); }
+});

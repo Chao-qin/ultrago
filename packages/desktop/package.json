@@ -13,10 +13,14 @@
     "build": "node scripts/check.mjs --source",
     "workspace:build": "pnpm --filter @bcp/shared --filter @bcp/weclaw --filter @bcp/backend --filter @bcp/llm --filter @bcp/console-web --filter @bcp/extension build && pnpm --filter @bcp/console build",
     "native:build": "node scripts/build-native.mjs",
-    "windows:engines": "node scripts/prepare-windows.mjs",
+    "windows:engines": "node scripts/prepare-engines.mjs",
     "windows:python": "node scripts/prepare-python.mjs",
     "package:win:zip": "pnpm workspace:build && pnpm native:build && pnpm windows:engines && pnpm windows:python && pnpm check && electron-builder --win --x64 --dir --publish never && node scripts/audit-package.mjs && node scripts/audit-runtime.mjs && electron-builder --win zip --x64 --publish never --prepackaged release/win-unpacked",
-    "package:win": "pnpm workspace:build && pnpm native:build && pnpm windows:engines && pnpm windows:python && pnpm check && node scripts/package-windows.mjs"
+    "package:win": "pnpm workspace:build && pnpm native:build && pnpm windows:engines && pnpm windows:python && pnpm check && node scripts/package-windows.mjs",
+    "mac:native": "node scripts/build-native.mjs mac",
+    "mac:engines": "node scripts/prepare-engines.mjs mac",
+    "mac:python": "node scripts/prepare-python.mjs mac",
+    "package:mac": "pnpm workspace:build && pnpm mac:native && pnpm mac:engines && pnpm mac:python && node scripts/check.mjs --mac && node scripts/package-mac.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -46,18 +50,32 @@
       { "from": "../extension/.output/chrome-mv3", "to": "extension", "filter": ["**/*", "!runtime-config.json"] },
       { "from": "../console/prisma", "to": "prisma", "filter": ["schema.prisma", "migrations/**/*"] },
       { "from": "../console/dist-web", "to": "console-web" },
-      { "from": "native/bin/bcp-native-host.exe", "to": "native/bcp-native-host.exe" },
       { "from": "src/mcp-entry.cjs", "to": "mcp-entry.cjs" },
-      { "from": "native/bin/prisma", "to": "prisma-engines" },
       { "from": "build/app-icon.png", "to": "branding/app-icon.png" },
-      { "from": "native/bin/python", "to": "runtime/python", "filter": ["**/*", "!**/__pycache__/**", "!**/*.pyc"] },
       { "from": "templates", "to": "templates" },
       { "from": "../../resource/playbooks/baidu-hot-search.json", "to": "templates/baidu-hot-search.json" },
       { "from": "../../resource/playbooks/1688-offer-snatch.json", "to": "templates/1688-offer-snatch.json" },
       { "from": "../../.claude/skills/product-preprocess/raw-1688-offer.schema.json", "to": "contracts/raw-1688-offer@2.json" }
     ],
     "directories": { "output": "release" },
-    "win": { "target": [{ "target": "nsis", "arch": ["x64"] }], "icon": "build/app-icon.png", "signExecutable": false },
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }], "icon": "build/app-icon.png", "signExecutable": false,
+      "extraResources": [
+        { "from": "native/bin/bcp-native-host.exe", "to": "native/bcp-native-host.exe" },
+        { "from": "native/bin/prisma", "to": "prisma-engines" },
+        { "from": "native/bin/python", "to": "runtime/python", "filter": ["**/*", "!**/__pycache__/**", "!**/*.pyc"] }
+      ]
+    },
+    "mac": {
+      "target": [{ "target": "dmg", "arch": ["arm64", "x64"] }, { "target": "zip", "arch": ["arm64", "x64"] }],
+      "icon": "build/app-icon.png", "category": "public.app-category.productivity",
+      "artifactName": "UltraGo-${version}-mac-${arch}.${ext}",
+      "extraResources": [
+        { "from": "native/bin/darwin-${arch}/bcp-native-host", "to": "native/bcp-native-host" },
+        { "from": "native/bin/darwin-${arch}/prisma", "to": "prisma-engines" },
+        { "from": "native/bin/darwin-${arch}/python", "to": "runtime/python", "filter": ["**/*", "!**/__pycache__/**", "!**/*.pyc"] }
+      ]
+    },
     "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": "always", "createStartMenuShortcut": true, "include": "build/installer.nsh", "artifactName": "UltraGo-${version}-win-x64-setup.${ext}" }
   }
 }

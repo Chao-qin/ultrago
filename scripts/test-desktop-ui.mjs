@@ -62,7 +62,7 @@ try {
     await page.locator('#prepare-next').filter({ hasText: '点击准备工作台' }).waitFor();
     await page.locator('#agent-config').filter({ hasText: 'mcpServers' }).waitFor({ state: 'attached' });
     assert.equal(await page.locator('.wizard-panel:visible').count(), 1);
-    assert.equal(await page.locator('.stepper button').count(), 3, '仅保留三个主步骤');
+    assert.equal(await page.locator('.stepper button').count(), 5, '五个步骤按固定顺序排列');
     assert.equal(await page.locator('#next-step').isDisabled(), true);
     assert.equal(await page.locator('[data-step-target="1"]').isDisabled(), true);
     assert.equal(await page.locator('#preparation-log').evaluate((node) => node.open), false);
@@ -79,7 +79,10 @@ try {
     await page.locator('[data-action="copyDiagnostics"]:visible').click();
     await page.locator('[data-step-target="2"]').click();
     assert.equal(await page.locator('#model').isVisible(), true, '失败后仍可修正模型配置');
-    await page.locator('#cloud-form button').click();
+    assert.equal(await page.locator('#model-save').isVisible(), false, '没改选择时不显示保存');
+    await page.locator('input[value="cloud"]').check();
+    await page.locator('input[value="skip"]').check();
+    await page.locator('#model-save').click();
     await page.locator('#environment').waitFor();
     await page.locator('#prepare').click();
     assert.equal(await page.locator('#preparation-log').evaluate((node) => node.open), false, '恢复后收起失败日志');
@@ -93,10 +96,10 @@ try {
     await page.locator('#bridge-repair').waitFor({ state: 'hidden' });
     assert.equal(await page.locator('#next-step').isDisabled(), true);
     assert.equal(await page.locator('#browser-select option').first().textContent(), 'Chrome（已连接）', '唯一浏览器不显示内部 ID');
+    assert.equal(await page.locator('#header-workbench').isVisible(), true, '服务就绪后每一步都能进入工作台');
     await page.locator('#select-browser').click();
-    await page.locator('#experience').waitFor();
-    assert.equal(await page.locator('#experience').isVisible(), true, '确认浏览器后直接到开始使用，不强制配置模型或助手');
-    assert.equal(await page.locator('#workbench').isVisible(), true);
+    await page.locator('#model').waitFor();
+    assert.match(await page.locator('#next-step').textContent(), /跳过，下一步：接入 AI 助手/, '确认浏览器后进入下一步，模型可跳过');
     await page.locator('[data-step-target="2"]').click();
     assert.equal(await page.locator('input[value="skip"]').isChecked(), true);
     assert.equal(await page.locator('#cloud-fields').isVisible(), false);
@@ -112,7 +115,7 @@ try {
     await page.locator('[data-step-target="2"]').click();
     assert.equal(await page.locator('#api-url').inputValue(), 'https://fixture.example/v1', '步骤切换保留草稿');
     await page.locator('input[value="skip"]').check();
-    await page.locator('#cloud-form button').click();
+    await page.locator('#model-save').click();
     await page.locator('#environment').waitFor();
     assert.equal(await page.locator('#api-key').inputValue(), '');
     await page.locator('#prepare').click();
@@ -120,10 +123,11 @@ try {
     assert.match(await page.locator('#prepare-next').textContent(), /下一步.*Chrome/);
     await page.locator('#next-step').click();
     await page.locator('#select-browser').click();
-    // "一切就绪" names the assistants found on this computer and leads straight to connecting them.
-    await page.locator('#agent-summary').filter({ hasText: '检测到 Claude Code、Cursor' }).waitFor();
-    await page.locator('#experience [data-step-target="4"]').click();
+    await page.locator('#model').waitFor();
+    await page.locator('#next-step').click();
     await page.locator('#agents').waitFor();
+    // The assistant step names the assistants found on this computer.
+    await page.locator('#agent-summary').filter({ hasText: '检测到 Claude Code、Cursor' }).waitFor();
     assert.equal(await page.locator('#agent-list input[value="vscode"]').isDisabled(), true, '未检测到的助手不能勾选');
     assert.equal(await page.locator('#agent-list input[value="claude"]').isDisabled(), true, '应用商店版 Claude 写配置不生效，不能勾选');
     assert.match(await page.locator('#agent-list li', { has: page.locator('input[value="claude"]') }).textContent(), /MSIX/);
@@ -171,6 +175,7 @@ try {
     assert.equal(await page.locator('#screenshot-dir-clear').isVisible(), true);
     await page.locator('#screenshot-dir-clear').click();
     await page.locator('#screenshot-dir-value').filter({ hasText: '截图保存位置：系统临时目录' }).waitFor();
+    await page.locator('[data-step-target="4"]').click();
     assert.equal(await page.locator('#autostart').isChecked(), false);
     await page.locator('#autostart').check();
     assert.equal(await page.locator('#autostart').isChecked(), true);
@@ -183,6 +188,7 @@ try {
     await page.locator('#error').filter({ hasText: '开机启动写入失败' }).waitFor();
     assert.equal(await page.locator('#autostart').isChecked(), false, '写入失败时开关回到实际状态');
     await page.evaluate(() => { window.autostartFixture = undefined; document.getElementById('error').hidden = true; });
+    await page.locator('[data-step-target="3"]').click();
     await page.locator('#agent-check').click();
     await page.locator('#agent-check-result').filter({ hasText: '12 个工具' }).waitFor();
     await page.evaluate(() => window.setDesktopFixture({ connections: { serviceReady: true, mcpReady: true, assistants: [{ id: 'workbuddy', name: 'Workbuddy', state: 'connected', toolCount: 12 }], lastError: '' } }));
@@ -198,7 +204,7 @@ try {
     await page.evaluate(() => { window.setDesktopFixture({ generation: 'new-launch' }); window.resolveMcpFixture(); window.holdMcpFixture = false; });
     assert.doesNotMatch(await page.locator('#agent-check-result').textContent(), /99 个工具/);
     assert.equal(await page.locator('#demo').isEnabled(), true);
-    await page.locator('[data-step-target="3"]').click();
+    await page.locator('[data-step-target="4"]').click();
     await page.locator('#demo').click();
     await page.locator('#result').filter({ hasText: '云朵收纳袋' }).waitFor();
     if (screenshots) await page.screenshot({ path: join(screenshots, `${width}-${colorScheme}-experience.png`), fullPage: true, animations: 'disabled' });
@@ -210,7 +216,7 @@ try {
     await page.evaluate(() => window.setDesktopFixture({ phase: 'ready' }));
     assert.equal(await page.locator('#browser').isVisible(), true, '已使用用户仅需恢复浏览器连接');
     await page.evaluate(() => window.setDesktopFixture({ browserReady: true }));
-    await page.locator('[data-step-target="3"]').click();
+    await page.locator('[data-step-target="4"]').click();
     await page.evaluate(() => scrollTo(0, 0));
     if (screenshots) await page.screenshot({ path: join(screenshots, `${width}-${colorScheme}.png`), fullPage: true, animations: 'disabled' });
     process.stdout.write(`PASS setup interaction / ${width}px / ${colorScheme} (fixture bridge, no backend)\n`);

@@ -35,6 +35,16 @@ test('an Ollama installed after the client started is found in its install folde
   assert.equal(await findOllama({ env: {}, platform: 'win32', find: async () => 'C:\\bin\\ollama.exe' }), 'C:\\bin\\ollama.exe');
 });
 
+test('on macOS Ollama is found where Finder-launched apps cannot see it: /usr/local/bin, Homebrew and inside Ollama.app', async () => {
+  const find = async () => null;
+  const look = (...files) => ({ env: {}, find, home: '/Users/u', exists: async (file) => files.includes(file) });
+  assert.equal(await findOllama({ ...look(), platform: 'darwin' }), null);
+  assert.equal(await findOllama({ ...look('/opt/homebrew/bin/ollama'), platform: 'darwin' }), '/opt/homebrew/bin/ollama');
+  assert.equal(await findOllama({ ...look('/Applications/Ollama.app/Contents/Resources/ollama'), platform: 'darwin' }), '/Applications/Ollama.app/Contents/Resources/ollama');
+  assert.equal(await findOllama({ ...look('/Users/u/Applications/Ollama.app/Contents/Resources/ollama'), platform: 'darwin' }), '/Users/u/Applications/Ollama.app/Contents/Resources/ollama');
+  assert.equal(await findOllama({ ...look('/usr/local/bin/ollama'), platform: 'linux' }), null, '其他系统只看 PATH');
+});
+
 test('detection tells apart not installed, installed but stopped, running without the model, and ready', async () => {
   const none = async () => null;
   const found = async () => '/usr/bin/ollama';

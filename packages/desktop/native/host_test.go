@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -17,7 +18,7 @@ func TestMcpLauncherUsesPackagedRuntimeAndExplicitStdio(t *testing.T) {
 	host := filepath.Join(t.TempDir(), "UltraGo", "resources", "native", "bcp-native-host.exe")
 	config := filepath.Join(t.TempDir(), "用户数据")
 	command := mcpCommand(host, config)
-	if command.Path != filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(host))), "UltraGo Internal.exe") {
+	if command.Path != applicationPath(filepath.Dir(filepath.Dir(host)), runtime.GOOS) {
 		t.Fatal(command.Path)
 	}
 	if command.Args[1] != filepath.Join(filepath.Dir(filepath.Dir(host)), "mcp-entry.cjs") {
@@ -29,6 +30,17 @@ func TestMcpLauncherUsesPackagedRuntimeAndExplicitStdio(t *testing.T) {
 	joined := strings.Join(command.Env, "\n")
 	if !strings.Contains(joined, "ELECTRON_RUN_AS_NODE=1") || strings.Contains(joined, "NODE_OPTIONS=") {
 		t.Fatal("invalid runtime environment")
+	}
+}
+
+func TestApplicationPathFollowsEachPackageLayout(t *testing.T) {
+	windows := applicationPath(filepath.Join("C:", "UltraGo", "resources"), "windows")
+	if windows != filepath.Join("C:", "UltraGo", "UltraGo.exe") {
+		t.Fatal(windows)
+	}
+	mac := applicationPath(filepath.Join("/Applications", "UltraGo.app", "Contents", "Resources"), "darwin")
+	if mac != filepath.Join("/Applications", "UltraGo.app", "Contents", "MacOS", "UltraGo") {
+		t.Fatal(mac)
 	}
 }
 

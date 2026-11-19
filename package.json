@@ -11,6 +11,7 @@
     "desktop:test": "pnpm --filter @bcp/desktop test",
     "desktop:package:win": "pnpm --filter @bcp/desktop package:win",
     "desktop:package:win:zip": "pnpm --filter @bcp/desktop package:win:zip",
+    "desktop:package:mac": "pnpm --filter @bcp/desktop package:mac",
     "dev": "bash scripts/backend.sh dev",
     "dev:ext": "pnpm --filter @bcp/extension dev",
     "lumen:dev": "pnpm --filter @bcp/lumen-studio dev",

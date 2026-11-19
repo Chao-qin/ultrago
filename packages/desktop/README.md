@@ -1,4 +1,4 @@
-# Windows 桌面内测客户端
+# 桌面内测客户端（Windows / macOS）
 
 本包实现独立的准备中心，管理 backend、Console 与可选模型网关（本机 Ollama 或云 API）。每轮服务使用操作系统分配的端口，用户不填写端口；已有 Chrome 通过 Native Messaging 找到当前客户端。多租户、自动更新和正式签名发行不属于本轮内测；Ollama 由用户自己下载安装，本机模型只在用户点击后才下载。
 
@@ -59,6 +59,28 @@ pnpm desktop:package:win:zip
 ```
 
 ZIP 同样使用品牌图标。请把整份 ZIP 解压到固定目录，不能单独复制其中的 EXE；扩展和连接宿主都位于同目录的 resources 中。构建产物排除开发缓存、开发配置、数据库及凭据文件。
+
+## macOS 安装包
+
+macOS 包只能在 Mac 上构建：dmg 与代码签名都依赖 macOS 自带工具。维护机需要 Go（编译连接组件）、uv 与 tar（准备随包 Python），以下命令请你自己执行：
+
+```text
+pnpm install
+pnpm desktop:package:mac
+```
+
+它依次构建工作区、为 Apple 芯片（arm64）与 Intel（x64）各编译一份连接组件、下载对应的 Prisma 引擎与固定 SHA-256 的 Python 3.11.15，然后输出 `release/UltraGo-<版本>-mac-arm64.dmg`、`-mac-x64.dmg` 和同名 zip，并对两个 `UltraGo.app` 做包内容审计，对本机架构那个再做一次运行时检查。各平台专用文件按 `${arch}` 只放进对应的包。
+
+签名：设置了 `CSC_NAME`（钥匙串里的 Developer ID 名称）或 `CSC_LINK`（证书文件）时按 Developer ID 正常签名；都没设置时做 ad-hoc 签名，否则 Apple 芯片拒绝运行。ad-hoc 签名的包从网上下载后会被系统拦下，第一次需要右键「打开」，或执行 `xattr -dr com.apple.quarantine /Applications/UltraGo.app`。要给外部用户顺畅安装，需要 Apple 开发者账号做 Developer ID 签名和公证（notarize），本版未配置公证。
+
+与 Windows 的差异：
+
+- 连接组件注册写在 `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.ultrago.desktop.json`（Chrome 读取当前用户连接组件的位置），不写注册表。
+- 「在桌面创建快捷方式」在桌面生成 `Chrome（UltraGo）.app`，它用 `open -a` 带渲染参数打开已安装的 Chrome；和 Windows 一样，要先按 ⌘Q 彻底退出 Chrome 再用它打开，参数才生效。
+- 托盘在菜单栏；开机启动写入系统登录项，开机后在后台恢复。
+- 本机模型：从访达打开的应用看不到 `/usr/local/bin` 和 Homebrew 的 PATH，所以另外查找 `/usr/local/bin`、`/opt/homebrew/bin` 与 `Ollama.app` 里的 `ollama`。
+
+本仓库的开发机是 Linux，macOS 包没有在真实 Mac 上构建和运行过；首次发布前请在 Apple 芯片与 Intel 各一台 Mac 上按「用户首次使用」走一遍。
 
 ## 用户首次使用
 
