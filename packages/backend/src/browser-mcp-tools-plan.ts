@@ -27,15 +27,18 @@ export function registerPlanTools({ server, runner }: PlanToolDeps): void {
     "plan",
     {
       description:
-        "Register an ordered, verifiable plan for a MULTI-STEP task, then work it with advance(). Each step declares its own done-criteria (verify) + recovery (onFail); once you're in a plan, advance re-reads the page ITSELF and won't move to the next step until the current step's verify holds. IMPORTANT — this is an OPT-IN gate (unless the backend runs with BCP_FORCE_PLAN=on): its value depends on you choosing to plan multi-step tasks and giving each step a REAL, non-empty verify (empty or \"\" verifies are rejected). Prefer the strongest check that fits: elementValue for a field's exact value, networkOk (+ bodyIncludes to check the response body) for a save that must reach the server, evalCheck for anything a page expression can compute; assert / visualAssert hand a claim back to you to judge. In manual mode, claim a tab first (verification reads target your claimed/current tab). Skip planning for a trivial single action; you still perform each action with the normal tools — plan/advance only gate.",
+        "Register a multi-step task as ordered steps, each with its own done-criteria (verify), then work through it with advance: you perform each step with the normal tools, and advance reads the page itself and does not move on until the step's verify holds. Use it for forms, wizards and publish or checkout flows; skip it for one or two actions. Every step needs a real verify (an empty one is rejected). Prefer checks the runner measures — elementValue for a field's value, networkOk (plus bodyIncludes for the response body) for a save that must reach the server, evalCheck for anything a page expression can compute — over assert / visualAssert, which hand the judgment back to you. Pass record to save the run as a playbook (see record_stop). In manual mode, claim a tab first. When the backend runs with BCP_FORCE_PLAN=on, mutating tools are refused without an active plan.",
       inputSchema: {
-        goal: z.string().describe("What the whole plan accomplishes"),
+        goal: z.string().describe("What the whole plan achieves"),
         steps: z.array(stepShape).min(1).describe("Ordered steps, each with its own goal and verify"),
         record: z
-          .object({ paramNames: z.array(z.string()), paramValues: z.record(z.string(), z.string()) })
+          .object({
+            paramNames: z.array(z.string()).describe("Names of the playbook's inputs"),
+            paramValues: z.record(z.string(), z.string()).describe("This run's value for each name"),
+          })
           .optional()
           .describe(
-            "Turn on recording for this plan. Every advance()'d step's action gets captured; record_stop() then saves it as a reusable playbook. paramValues are THIS run's concrete values for each paramName: when saving, every exactly-equal string in a step's action params AND verify becomes its {{slot}}.",
+            "Record this run as a playbook: the action of every advanced step is captured, and record_stop saves it. On save, every string in a step's action or verify that exactly equals one of paramValues becomes that name's {{slot}}.",
           ),
       },
     },
@@ -57,10 +60,10 @@ export function registerPlanTools({ server, runner }: PlanToolDeps): void {
     "advance",
     {
       description:
-        "Verify the CURRENT step of a plan and move to the next. The runner gathers its own evidence and checks the step's declared criteria: pass → returns the next step; fail → says what's still wrong and whether to redo the step (onFail retry/rescan, while its maxRetries budget lasts) or to stop (onFail \"escalate\", which is the default when a step sets none). It never performs the action — do that first, then call this. If the step has an agent-judged `assert` / `visualAssert`, a first advance (after the mechanical checks pass) returns the claim for YOU to judge — gather evidence / screenshot, then call advance again with confirm:true (it holds) or confirm:false (it doesn't).",
+        "Check the current step of a plan against its verify and move on. Pass returns the next step; fail says what is still wrong and whether to redo the step (onFail retry or rescan, while maxRetries lasts) or stop (escalate, the default). It does not perform the action — act first, then call advance. For a step with assert / visualAssert, the first call returns the claim; look at the page, then call again with confirm.",
       inputSchema: {
         planId: z.string().describe("Plan id from plan() / run_playbook"),
-        confirm: looseBool.optional().describe("Your verdict for a step's agent-judged `assert` / `visualAssert`, AFTER you've looked: true = it holds, false = it doesn't"),
+        confirm: looseBool.optional().describe("Your verdict on the step's assert / visualAssert after looking: true if it holds, false if not"),
       },
     },
     async ({ planId, confirm }) => {
@@ -111,7 +114,7 @@ export function registerPlanTools({ server, runner }: PlanToolDeps): void {
     "plan_status",
     {
       description:
-        "Show a plan's current step and its done-criteria — use it to re-orient if you've lost track of where you are in a multi-step task. Also reports whether the plan is RECORDING and how much of it has captured a replayable action so far, which nothing else surfaces once plan()'s reply has scrolled away.",
+        "Show a plan's current step and its verify, and, while recording, how many steps have captured a replayable action. Use it to re-orient in a long task.",
       inputSchema: { planId: z.string().describe("Plan id from plan() / run_playbook") },
     },
     async ({ planId }) => {
@@ -142,7 +145,7 @@ export function registerPlanTools({ server, runner }: PlanToolDeps): void {
     "plan_abort",
     {
       description:
-        "Drop a plan you're not going to finish — a recording you'd rather re-do from scratch, or an auto-playbook run that went wrong and shouldn't be resumed. Any recording is DISCARDED (nothing is written to disk; already-saved playbooks are untouched). This is the only way to end a run early: record_stop refuses an incomplete plan by design, and an abandoned plan otherwise stays 'active' — which matters when BCP_FORCE_PLAN is on, since it would keep letting mutating actions through. Page state is NOT rolled back; whatever the run already did to the browser stays done.",
+        "End a plan or a paused playbook run early — the only way to: record_stop refuses an unfinished plan, and an abandoned plan stays active (with BCP_FORCE_PLAN on, it keeps permitting actions). Its recording is discarded; saved playbooks are untouched. Nothing done in the browser is undone.",
       inputSchema: { planId: z.string().describe("Plan id to abort") },
     },
     async ({ planId }) => {
@@ -163,11 +166,11 @@ export function registerPlanTools({ server, runner }: PlanToolDeps): void {
     "record_stop",
     {
       description:
-        "Finalize a recording plan (started via plan(..., {record})) into a playbook, saved to resource/playbooks/<name>.json. The plan must be COMPLETE (every step advanced) — a half-finished run isn't a usable playbook. An existing playbook of the same name is NOT replaced unless overwrite:true. Review the returned JSON before trusting it: {{slot}} auto-substitution matches by exact value, so a coincidental match can misfire.",
+        "Save a completed recording plan (one started with record) as resource/playbooks/<name>.json and return the JSON. Every step must have been advanced. Review the result: slots are substituted by exact value, so a value that happens to appear elsewhere becomes a slot there too.",
       inputSchema: {
         planId: z.string().describe("The completed recording plan's id"),
-        name: z.string().describe('Playbook name = file name: letters, digits, ".", "_" or "-"'),
-        overwrite: looseBool.optional().describe("Replace an existing playbook of that name (default false: refuse)"),
+        name: z.string().describe('Playbook name, also its file name: a letter or digit, then letters, digits, ".", "_" or "-"'),
+        overwrite: looseBool.optional().describe("Replace an existing playbook with this name (default false: refuse)"),
       },
     },
     async ({ planId, name, overwrite }) => {

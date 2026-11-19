@@ -38,7 +38,7 @@ MCP server(Node 后端)暴露 `browser_*` 工具 → WS-RPC → 浏览器扩展�
 ## 心得 · 动作(act)
 
 - **合成事件 `isTrusted===false`**:多数 React/Vue 控件吃;少数强校验"真实用户手势"的不吃——这是纯扩展方案的天花板,不是 bug。
-- **点击走完整指针序列**(pointerover/enter → move → down → up → click);`hover` 复用前半段、不 down/up(专为 hover-only tooltip/菜单)。**humanize 抖动在 click/type 上默认关**——合成事件本来就 `isTrusted:false`,抖动买不到任何真实掩护,却每次点击多付 150-350ms、每字符 35-110ms;只在有人盯屏时显式传 `humanize:true`。**scroll 的 humanize 仍默认开**,那里的节奏是功能性的(驱动懒加载),不是伪装。
+- **点击走完整指针序列**(pointerover/enter → move → down → up → click);`hover` 复用前半段、不 down/up(专为 hover-only tooltip/菜单)。**humanize 抖动在 click/type 上默认关**——合成事件本来就 `isTrusted:false`,抖动买不到任何真实掩护,却每次点击多付约 85-255ms、每字符 35-200ms;只在有人盯屏时显式传 `humanize:true`。**scroll 的 humanize 仍默认开**,那里的节奏是功能性的(驱动懒加载),不是伪装。
 - **`pointerenter`/`mouseenter` 不冒泡,命中测试(`deepElementFromPoint`)给的又总是坐标下最深那一个节点**:真实鼠标移动时浏览器会对光标路径上每一层祖先分别派发 enter 事件(outermost → innermost),纯 JS `dispatchEvent` 单点调用不会自动做这件事——于是 hover-only 菜单的触发监听器一旦绑在比命中节点更外层的包裹元素上(常见于 Naive UI/Element/Ant 的 trigger wrapper),会收不到信号,表现成"hover/click 了但下拉菜单不出来"(2026-08-19,详见 `.agent/learn.md`)。`realClick`/`realHover` 已修:沿 composed-tree 祖先链从命中节点走到根,逐层补发 `pointerenter`/`mouseenter`。**修不了的部分**:弹层若纯靠 CSS `:hover` 展开(没有 JS 监听器),任何合成事件都无法触发 `:hover` 伪类匹配——这和"原生文件对话框驱动不了"是同一量级的纯扩展方案天花板,唯一能做到这点的是 CDP 级别的输入注入。
 - **下拉分两种**:原生 `<select>` → `select_option`;自定义(Ant/Element/Arco)→ `pick_option`。
 - **`upload_file` 吃公网 URL 或本地文件路径**(二选一):`url` 走服务端 fetch(SSRF guard + 同源 Referer/UA 防盗链)、`localPath` 读本机文件;均 ≤25MB,底层复用 RPC `dataBase64` 通道注入 `input.files`。**原生文件对话框驱动不了**;要求 trusted user gesture 的上传控件会拒绝注入——**无 `drag` 兜底**(`drag` 的 DataTransfer 为空、不携带文件),只能回报用户手动传。

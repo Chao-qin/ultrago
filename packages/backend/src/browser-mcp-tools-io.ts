@@ -23,7 +23,7 @@ const NETWORK_BODY_PREVIEW = 2_000;
 
 /** Event reads filter by tab rather than resolve one, so an omitted tabId means
  *  every tab — unlike the action tools' shared `tabId`. */
-const eventTabId = z.coerce.number().optional().describe("Only events from this tab; omit for events from every tab of your target browser (orchestration events are never filtered by tab)");
+const eventTabId = z.coerce.number().optional().describe("Only events from this tab; omit for every tab of your target browser. Orchestration events are never filtered by tab");
 
 export interface IoToolDeps {
   server: McpServer;
@@ -138,10 +138,10 @@ export function registerIoTools({ server, call, events, evLine, resolvedTarget, 
     "pick_option",
     {
       description:
-        "Choose from a CUSTOM (non-native) dropdown/combobox in one call: clicks the trigger, waits for the option list to render, then clicks the option whose visible text matches — searched only among the elements the opening click revealed. Use it for Ant Design / Element / Arco / custom dropdowns; for a native <select> use select_option. Name the trigger like any element (ref or description); a description survives the re-render the list causes and is what makes a recorded step replayable. Several matching options is an error listing them — pass the option's exact full text. Recorded as ONE step action, replayed as one.",
+        "Choose from a custom (non-native) dropdown in one call: click the trigger, wait for the options, then click the one whose text matches `option` — exact match first, then substring — among the elements the click revealed (the whole page if it revealed none; the reply then warns). Target the trigger like click; a description also replays in a recorded playbook, a ref does not. Several matching options is an error that lists them. It has no confirm parameter, so a trigger or option with a risky label is refused. For a native <select> use select_option.",
       inputSchema: {
         ...locatorShape,
-        option: z.string().describe("Visible text of the option to choose — exact match preferred, then substring"),
+        option: z.string().describe("Visible text of the option to choose"),
         tabId,
       },
     },
@@ -249,11 +249,11 @@ export function registerIoTools({ server, call, events, evLine, resolvedTarget, 
     "read_events",
     {
       description:
-        "Pull recent page events the browser captured out-of-band between your tool calls — navigation, dialog, console error, network failure, etc. — plus orchestration events (browser/mode/claim/window). This is the full-detail companion to the '⚠ events since your last call' piggyback line: filter by kind/tab, and page from a prior read with sinceSeq. One summary line per event; captured response bodies are read with read_network.",
+        "List events recorded between your calls, one line each with its seq: page events (navigation_started, navigation, dialog, console_error, network_failed, network_body, dom_changed, tab_closed) and orchestration events (browser_online, browser_offline, mode_changed, claim_changed, target_changed, window_opened, window_closed). It is the full version of the \"⚠ N event(s) since your last call\" line other replies carry. Returns the newest matches; pass the highest seq you saw as sinceSeq to get only later ones. Response bodies are read with read_network.",
       inputSchema: {
-        kinds: z.array(z.string()).optional().describe('Restrict to these event kinds (e.g. ["navigation","console_error"]); omit for all'),
-        sinceSeq: z.coerce.number().optional().describe("Only events after this seq (from a previous read_events); omit for the whole buffer"),
-        limit: z.coerce.number().optional().describe("Max events to return (default 50)"),
+        kinds: z.array(z.string()).optional().describe('Only these kinds, e.g. ["navigation","console_error"]; omit for all'),
+        sinceSeq: z.coerce.number().optional().describe("Only events after this seq; omit for everything still buffered"),
+        limit: z.coerce.number().optional().describe("Maximum events to return, keeping the newest (default 50)"),
         tabId: eventTabId,
       },
     },
@@ -284,12 +284,12 @@ export function registerIoTools({ server, call, events, evLine, resolvedTarget, 
     "wait_for_event",
     {
       description:
-        "Wait until an event of a given kind occurs, then return it — the event-driven way to wait, instead of busy-polling. It first checks events that arrived since your previous tool call (so a transition that already happened is returned at once), then long-polls until a match lands or it times out. Page kinds: navigation (a full page load reaching complete — SPA route changes do not emit it; wait_for an element of the new view instead), dialog, console_error, network_failed, network_body, dom_changed, tab_closed. ORCHESTRATION kinds (not scoped to your target browser): browser_online, browser_offline, mode_changed, claim_changed, target_changed, window_opened, window_closed — wait for another browser to come online, another agent to release a tab, a window to open, your target to disconnect, etc.",
+        "Wait until an event of one of the given kinds arrives and return it — event-driven waiting instead of polling. An event that already arrived is returned at once, unless an earlier reply has moved past it (a reply reports only the events of the tab it acted on and skips the rest). Page kinds: navigation (a full page load finished), navigation_started (also fired by SPA route and hash changes), dialog, console_error, network_failed, network_body, dom_changed, tab_closed. Orchestration kinds, from any browser: browser_online, browser_offline, mode_changed, claim_changed, target_changed, window_opened, window_closed — e.g. wait for a browser to connect, a peer to release a tab, or your target to disconnect.",
       inputSchema: {
-        kinds: z.array(z.string()).describe('Event kinds to wait for — page (e.g. ["navigation"]) or orchestration (e.g. ["browser_offline","claim_changed"])'),
-        urlPattern: z.string().optional().describe("For navigation/network events: only match when the event's url contains this substring"),
+        kinds: z.array(z.string()).describe('Event kinds to wait for, e.g. ["navigation"] or ["browser_offline","claim_changed"]'),
+        urlPattern: z.string().optional().describe("For navigation and network kinds: only events whose URL contains this"),
         tabId: eventTabId,
-        timeoutMs: z.coerce.number().optional().describe("Max wait in ms (default 20000, capped at 60000)"),
+        timeoutMs: z.coerce.number().optional().describe("Maximum wait, ms (default 20000, max 60000)"),
       },
     },
     async ({ kinds, urlPattern, tabId, timeoutMs }) => {

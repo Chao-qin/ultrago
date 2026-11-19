@@ -105,12 +105,12 @@ export function registerCaptureTools({ server, call, deltaKey, drainEvents, capt
     "analyze_page",
     {
       description:
-        "One-shot comprehensive page analysis = the full bundle: open tabs + page_state STATE digest (readiness/focus/forms/scroll/dialogs/changed) + accessibility snapshot (elements with [ref]s) + a manifest of the visible text dumped to temporary files on the backend host (exactly as read_content does — open the chunks with your file reader, or with read_content_dump when it can't reach that host; they are deleted before your next browser operation) + a PNG screenshot. Use on an unfamiliar or visual page when you want everything at once. For the cheap per-beat pulse use page_state (no screenshot); for just [ref]s use snapshot.",
+        "Everything about a tab in one call, for an unfamiliar, visual or confusing page: open tabs, page_state in detail, snapshot (paged on large pages — the reply says how to continue), a text dump manifest (as read_content: read the chunks you need before your next browser tool call) and a screenshot. If one part fails, such as the screenshot in manual mode, the rest is still returned. It is the most expensive read; when one question needs answering, page_state, snapshot or screenshot is cheaper.",
       inputSchema: {
         tabId,
-        saveScreenshot: looseBool.optional().describe("If true, write the screenshot to a file on the backend host instead of returning it inline (default false)"),
-        screenshotPath: z.string().optional().describe("Path to save the PNG to when saveScreenshot is true; must end in .png"),
-        maxChars: z.coerce.number().int().positive().optional().describe("Maximum characters per temporary dump chunk file; omit for adaptive chunking"),
+        saveScreenshot: looseBool.optional().describe("Save the screenshot on the backend host instead of returning it inline (default false)"),
+        screenshotPath: z.string().optional().describe("Where to save it when saveScreenshot is true; same rules as screenshot's savePath. Ignored otherwise"),
+        maxChars: z.coerce.number().int().positive().optional().describe("Maximum characters per text dump chunk; omit to adapt to the page"),
       },
     },
     async ({ tabId, saveScreenshot, screenshotPath, maxChars }) => {

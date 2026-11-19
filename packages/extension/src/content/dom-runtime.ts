@@ -67,7 +67,7 @@ export async function bcpDomRuntime(
 
     // Behavioral humanization for click/type is OFF by default: synthetic events
     // carry isTrusted:false, which any anti-bot check reads first — so the jitter
-    // buys no real cover while costing 150-350ms per click and 35-110ms per
+    // buys no real cover while costing ~85-255ms per click and 35-200ms per
     // keystroke. Opt in with humanize:true when a human is watching the run.
     // (scroll keeps its own default-ON tick loop — there the pacing is functional,
     // it drives lazy-load/IntersectionObserver, not disguise.)
