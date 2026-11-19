@@ -11,12 +11,17 @@ export function envFlag(value: string | undefined): boolean {
   return /^(on|1|true|yes)$/i.test((value ?? "").trim());
 }
 
+/** A switch that is ON unless explicitly turned off with "off", "0", "false" or "no" (any case). */
+export function envFlagDefaultOn(value: string | undefined): boolean {
+  return !/^(off|0|false|no)$/i.test((value ?? "").trim());
+}
+
 /** How to turn page eval on, for every error that refuses it. The desktop client starts the backend itself,
  * so an env entry in an assistant's MCP config never reaches the process that checks it. */
-export const EVAL_DISABLED = "page JS (eval) is disabled. Desktop client: turn on 「允许页面脚本」 under 准备与连接. Otherwise start the backend with BCP_EVAL=on (on/1/true/yes).";
+export const EVAL_DISABLED = "page JS (eval) is disabled. Desktop client: turn on 「允许页面脚本」 under 准备与连接. Otherwise this backend was started with BCP_EVAL=off — unset it (eval is on by default).";
 
 /** Same for local.eval steps, which run in this backend process (node:vm, not a hard boundary). */
-export const LOCAL_EVAL_DISABLED = "backend JS (local.eval) is disabled. Desktop client: turn on 「允许本机脚本」 under 准备与连接. Otherwise start the backend with BCP_LOCAL_EVAL=on (on/1/true/yes).";
+export const LOCAL_EVAL_DISABLED = "backend JS (local.eval) is disabled. Desktop client: turn on 「允许本机脚本」 under 准备与连接. Otherwise this backend was started with BCP_LOCAL_EVAL=off — unset it (local.eval is on by default).";
 
 /** Runtime config, all overridable via env. */
 export const config = {
@@ -39,15 +44,17 @@ export const config = {
   /** Optional navigation boundary. Empty allowlist = allow all (minus blocklist). */
   allowedDomains: csv(process.env.BCP_ALLOWED_DOMAINS),
   blockedDomains: csv(process.env.BCP_BLOCKED_DOMAINS),
-  /** Gate the arbitrary-JS `eval` tool. Off by default (arbitrary page JS is a
-   * big blast radius); set BCP_EVAL=on to enable it. Read on every call, so the desktop
-   * client can switch it at runtime (see /internal/browsers/policy). */
-  get evalEnabled(): boolean { return envFlag(process.env.BCP_EVAL); },
+  /** Gate the arbitrary-JS `eval` tool. ON by default — agents and books rely
+   * on it, and the desktop client already shipped it on; set BCP_EVAL=off to
+   * refuse page JS. Read on every call, so the desktop client can switch it at
+   * runtime (see /internal/browsers/policy). */
+  get evalEnabled(): boolean { return envFlagDefaultOn(process.env.BCP_EVAL); },
   /** Gate the `local.eval` playbook step (arbitrary JS run in the BACKEND
    * Node process, not a browser sandbox — bigger blast radius than page
-   * eval). Off by default; set BCP_LOCAL_EVAL=on to enable it. Read on every call, so the desktop
+   * eval). ON by default, like page eval and the desktop client; set
+   * BCP_LOCAL_EVAL=off to refuse it. Read on every call, so the desktop
    * client can switch it at runtime (see /internal/browsers/policy). */
-  get localEvalEnabled(): boolean { return envFlag(process.env.BCP_LOCAL_EVAL); },
+  get localEvalEnabled(): boolean { return envFlagDefaultOn(process.env.BCP_LOCAL_EVAL); },
   /** When on (BCP_FORCE_PLAN=on), mutating browser actions are REFUSED unless the
    * session has an active plan — turning the opt-in plan/advance gate into a hard
    * requirement (you must declare a verifiable plan before you can change the
