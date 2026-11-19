@@ -1030,10 +1030,13 @@ export default defineBackground(() => {
         // windowFocused: is this tab's window the OS-foreground one? active alone
         // can't tell "user is looking at it" from "visible in a background window".
         let windowFocused: boolean | undefined;
+        let windowState: string | undefined;
         try {
-          windowFocused = fresh.windowId != null && (await cx.windows.get(fresh.windowId)).focused;
+          const win = fresh.windowId != null ? await cx.windows.get(fresh.windowId) : undefined;
+          windowFocused = !!win?.focused;
+          windowState = win?.state;
         } catch { /* window gone */ }
-        return { ...r.value, tabId: fresh.id, windowId: fresh.windowId, active: !!fresh.active, windowFocused };
+        return { ...r.value, tabId: fresh.id, windowId: fresh.windowId, active: !!fresh.active, windowFocused, windowState };
       }
       case RpcMethod.ListWindows: {
         const wins = await cx.windows.getAll({ populate: true });

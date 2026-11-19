@@ -14,6 +14,7 @@ import { promisify } from "node:util";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import {
+  CHROME_RENDERING_FLAGS,
   browserError,
   type BrowserError,
   type BrowserExecutableCandidate,
@@ -109,6 +110,9 @@ function isExecutable(p: string): Promise<boolean> {
   return access(p, constants.X_OK).then(() => true, () => false);
 }
 
+/** Re-exported for the desktop client, which reaches shared code through @bcp/backend/dist. */
+export { CHROME_RENDERING_FLAGS };
+
 /* ----------------------------- Chrome ----------------------------- */
 
 class ChromeAdapter implements BrowserAdapter {
@@ -155,8 +159,7 @@ class ChromeAdapter implements BrowserAdapter {
     const args = [
       "--no-first-run",
       "--no-default-browser-check",
-      "--disable-features=CalculateNativeWinOcclusion",
-      "--disable-backgrounding-occluded-windows",
+      ...CHROME_RENDERING_FLAGS,
     ];
     if (input.profileDir) args.push(`--user-data-dir=${input.profileDir}`);
     if (input.artifactDir) {
@@ -179,20 +182,24 @@ class ChromeAdapter implements BrowserAdapter {
     });
   }
 
+  // User mode opens the user's own Chrome with the rendering flags. When Chrome
+  // is already running they are ignored (a running Chrome keeps the command line
+  // it started with — page_state and `pnpm doctor` report that case); when it is
+  // not, this start is what makes background task windows keep rendering.
   async openBrowser(input: { executable: string }): Promise<void> {
-    if (process.platform === 'win32') return openUserProcess(input.executable, []);
-    await openWith(["-a", input.executable]);
+    if (process.platform === 'win32') return openUserProcess(input.executable, [...CHROME_RENDERING_FLAGS]);
+    await openWith(["-a", input.executable, "--args", ...CHROME_RENDERING_FLAGS]);
   }
 
   async openInstallGuide(input: { executable: string; artifactDir: string }): Promise<void> {
     if (process.platform === 'win32') {
-      await openUserProcess(input.executable, ['chrome://extensions']);
+      await openUserProcess(input.executable, [...CHROME_RENDERING_FLAGS, 'chrome://extensions']);
       await openUserProcess('explorer.exe', [input.artifactDir]);
       return;
     }
     // Open chrome://extensions (where "Load unpacked" lives) and reveal the
     // artifact dir in the OS file manager so the user can point it there.
-    await openWith(["-a", input.executable, "chrome://extensions"]);
+    await openWith(["-a", input.executable, "chrome://extensions", "--args", ...CHROME_RENDERING_FLAGS]);
     await openWith(["-R", join(input.artifactDir, "manifest.json")]);
   }
 }

@@ -199,6 +199,14 @@ async function action(name, input) {
 }
 document.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => void action(button.dataset.action, button.dataset.input)));
 $('select-browser').addEventListener('click', () => void action('selectBrowser', $('browser-select').value));
+$('chrome-shortcut').addEventListener('click', async () => {
+  $('error').hidden = true;
+  try {
+    if (!bridge) throw new Error('此页面需要在 Electron 客户端内打开。');
+    const { shortcut } = await bridge.action('chromeShortcut');
+    $('chrome-shortcut-status').textContent = `已创建：${shortcut}`;
+  } catch (error) { $('error').textContent = error.message; $('error').hidden = false; }
+});
 document.querySelectorAll('[data-step-target]').forEach((button) => button.addEventListener('click', () => showStep(Number(button.dataset.stepTarget))));
 $('previous-step').addEventListener('click', () => showStep(optional(activeStep) ? returnStep : primarySteps[Math.max(0, primarySteps.indexOf(activeStep) - 1)]));
 $('next-step').addEventListener('click', () => showStep(primarySteps[primarySteps.indexOf(activeStep) + 1] ?? 3));
