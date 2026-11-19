@@ -13,9 +13,14 @@ for (const folder of ['src', 'ui', 'scripts']) {
   }
 }
 const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
-for (const resource of manifest.build.extraResources) {
-  if (!existsSync(join(root, resource.from))) {
-    process.stderr.write(`未准备打包资源：${resource.from}\n`);
+// Shared resources plus the target system's own; `--mac` checks the Mac package, otherwise the Windows one.
+const platform = process.argv.includes('--mac') ? 'mac' : 'win';
+const architectures = platform === 'mac' ? [...new Set(manifest.build.mac.target.flatMap((target) => target.arch))] : ['x64'];
+const resources = [...manifest.build.extraResources, ...manifest.build[platform].extraResources]
+  .flatMap((resource) => architectures.map((arch) => resource.from.replaceAll('${arch}', arch)));
+for (const from of new Set(resources)) {
+  if (!existsSync(join(root, from))) {
+    process.stderr.write(`未准备打包资源：${from}\n`);
     if (!process.argv.includes('--source')) failed = true;
   }
 }

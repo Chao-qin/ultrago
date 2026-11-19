@@ -52,9 +52,9 @@ service worker 用扩展 API 执行 → 回 `rpc_response` → 结果连同 `↳
 
 ## 快速开始
 
-### Windows：桌面客户端（推荐，不用装开发环境）
+### Windows / macOS：桌面客户端（推荐，不用装开发环境）
 
-1. 安装 `UltraGo-<版本>-win-x64-setup.exe`（自行构建见 [`packages/desktop/README.md`](packages/desktop/README.md)）。
+1. 安装 `UltraGo-<版本>-win-x64-setup.exe`，或 macOS 的 `UltraGo-<版本>-mac-arm64.dmg`（Apple 芯片）/ `-mac-x64.dmg`（Intel）。自行构建见 [`packages/desktop/README.md`](packages/desktop/README.md)；macOS 包只能在 Mac 上构建。
 2. 打开客户端，点「准备工作台」：数据库、服务、内置模板全部自动完成。
 3. 「连接浏览器」：按提示加载扩展；点「在桌面创建快捷方式」，以后用桌面上的「Chrome（UltraGo）」打开 Chrome。
 4. 「AI 模型」（可跳过）：推荐本机模型，客户端检测 Ollama、引导安装，点击后下载 `qwen3.5:4b`；它用于验证码提醒，截图不出本机。不设置时任务卡在验证码不会提醒。
@@ -83,7 +83,7 @@ pnpm doctor                            # 逐项检查，缺什么、怎么补都
 这两个参数只在 Chrome **启动时**生效，所以：
 
 - `managed` 模式和 `launch_browser`（Chrome 没在运行时）会自动带上；
-- Windows 桌面客户端可以一键在桌面生成带参数的「Chrome（UltraGo）」快捷方式；
+- 桌面客户端可以一键在桌面生成带参数的「Chrome（UltraGo）」：Windows 是快捷方式，macOS 是一个用 `open -a` 带参数启动 Chrome 的小应用；
 - Chrome 已经在运行却没带参数时，`page_state` 会直接提示「Chrome 没在渲染这个窗口」，`pnpm doctor` 也会查出来。
 
 需要手动加时（你自己的 Chrome）：

@@ -6,14 +6,24 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 )
 
+// applicationPath is the client executable next to the resources folder. electron-builder names it after the
+// product name: UltraGo.exe beside resources on Windows, Contents/MacOS/UltraGo beside Contents/Resources on macOS.
+func applicationPath(resources, goos string) string {
+	if goos == "darwin" {
+		return filepath.Join(filepath.Dir(resources), "MacOS", "UltraGo")
+	}
+	return filepath.Join(filepath.Dir(resources), "UltraGo.exe")
+}
+
 func mcpCommand(host, config string) *exec.Cmd {
 	resources := filepath.Dir(filepath.Dir(host))
-	application := filepath.Join(filepath.Dir(resources), "UltraGo Internal.exe")
+	application := applicationPath(resources, runtime.GOOS)
 	entry := filepath.Join(resources, "mcp-entry.cjs")
 	command := exec.Command(application, entry, filepath.Join(config, "UltraGoDesktop", "runtime.json"))
 	for _, value := range os.Environ() {
