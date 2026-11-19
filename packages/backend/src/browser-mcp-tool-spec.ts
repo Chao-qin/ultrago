@@ -10,7 +10,6 @@
  * dropped before it reached the browser.
  */
 import type { McpServer, ToolCallback } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import type { ZodRawShapeCompat } from "@modelcontextprotocol/sdk/server/zod-compat.js";
 import { MCP_TOOL_INSTRUCTIONS, type McpToolInstruction, type RpcMethod } from "@bcp/shared";
 
@@ -37,18 +36,17 @@ export function describedShape<S extends ZodRawShapeCompat>(method: RpcMethod, s
   return out as S;
 }
 
-/** Register the tool for `method` under its documented name and description. */
+/** Register the tool for `method` under its documented name, description and annotations. */
 export function registerRpcTool<S extends ZodRawShapeCompat>(
   server: McpServer,
   method: RpcMethod,
   shape: S,
   cb: ToolCallback<S>,
-  annotations?: ToolAnnotations,
 ): void {
   const spec = toolSpecOf(method);
   server.registerTool(
     spec.name,
-    { description: spec.description, inputSchema: describedShape(method, shape), ...(annotations ? { annotations } : {}) },
+    { description: spec.description, inputSchema: describedShape(method, shape), annotations: spec.annotations },
     cb,
   );
 }

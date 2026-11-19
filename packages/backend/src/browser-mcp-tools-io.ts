@@ -8,7 +8,8 @@
  */
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { LocalMethod, RpcMethod, isAgentHiddenEvent, isTopologyEvent, type BrowserEvent, type BrowserTarget, type PlaybookStepAction } from "@bcp/shared";
+import { LocalMethod, RpcMethod, isTopologyEvent, type BrowserEvent, type PlaybookStepAction, TOOL_HINTS } from "@bcp/shared";
+import type { EventInbox } from "./event-inbox.js";
 import { config, domainAllowed } from "./config.js";
 import { resolveUploadSources } from "./upload-source.js";
 import type { EventStore } from "./event-store.js";
@@ -30,9 +31,10 @@ export interface IoToolDeps {
   call: BrowserCall;
   events: EventStore;
   evLine: (e: BrowserEvent) => string;
-  resolvedTarget: () => BrowserTarget | null;
-  /** Live cursor — drainEvents advances it between registration and call. */
-  getLastSeenSeq: () => number;
+  /** Which events this session has been shown. */
+  inbox: EventInbox;
+  /** The events this session may see at all (target browser + topology, minus agent-hidden kinds). */
+  sessionSees: () => (e: BrowserEvent) => boolean;
   /** This session's snapshot-baseline key (pick_option derives a private one from it). */
   deltaKey: string;
   /** Run a composite so the current plan step records it as ONE action. */
@@ -42,7 +44,7 @@ export interface IoToolDeps {
 /** Registers switch_tab / download / upload_file / pick_option / drag /
  *  read_network / set_network_capture / read_events /
  *  wait_for_event / right_click / double_click / paste_text / hover. */
-export function registerIoTools({ server, call, events, evLine, resolvedTarget, getLastSeenSeq, deltaKey, recordAsOne }: IoToolDeps): void {
+export function registerIoTools({ server, call, events, evLine, inbox, sessionSees, deltaKey, recordAsOne }: IoToolDeps): void {
   registerRpcTool(
     server,
     RpcMethod.SwitchTab,
@@ -137,6 +139,7 @@ export function registerIoTools({ server, call, events, evLine, resolvedTarget, 
   server.registerTool(
     "pick_option",
     {
+      annotations: TOOL_HINTS.pageAction,
       description:
         "Choose from a custom (non-native) dropdown in one call: click the trigger, wait for the options, then click the one whose text matches `option` — exact match first, then substring — among the elements the click revealed (the whole page if it revealed none; the reply then warns). Target the trigger like click; a description also replays in a recorded playbook, a ref does not. Several matching options is an error that lists them. It has no confirm parameter, so a trigger or option with a risky label is refused. For a native <select> use select_option.",
       inputSchema: {
@@ -192,10 +195,10 @@ export function registerIoTools({ server, call, events, evLine, resolvedTarget, 
         // Bodies captured while set_network_capture was on arrive as network_body
         // events. Pair each with its request (same method + URL, newest first)
         // so the body sits under the request it answers.
-        const tgt = resolvedTarget();
+        const sees = sessionSees();
         const readTab = r.tabId ?? tabId; // an older extension does not report the tab it read
         const bodies = (readTab == null ? [] : events.since(0, readTab).events).filter(
-          (e) => e.kind === "network_body" && (tgt == null || e.browser == null || e.browser === tgt.instanceId),
+          (e) => e.kind === "network_body" && sees(e),
         );
         const used = new Set<BrowserEvent>();
         const bodyFor = (method: string, url: string): BrowserEvent | undefined => {
@@ -248,8 +251,9 @@ export function registerIoTools({ server, call, events, evLine, resolvedTarget, 
   server.registerTool(
     "read_events",
     {
+      annotations: TOOL_HINTS.read,
       description:
-        "List events recorded between your calls, one line each with its seq: page events (navigation_started, navigation, dialog, console_error, network_failed, network_body, dom_changed, tab_closed) and orchestration events (browser_online, browser_offline, mode_changed, claim_changed, target_changed, window_opened, window_closed). It is the full version of the \"⚠ N event(s) since your last call\" line other replies carry. Returns the newest matches; pass the highest seq you saw as sinceSeq to get only later ones. Response bodies are read with read_network.",
+        "List events recorded between your calls, one line each with its seq: page events (navigation_started, navigation, dialog, console_error, network_failed, network_body, dom_changed, tab_closed) and orchestration events (browser_online, browser_offline, mode_changed, claim_changed, target_changed, window_opened, window_closed). It is the full version of the \"⚠ N unseen event(s)\" line other replies carry; events listed here are not shown again there. Returns the newest matches; pass the highest seq you saw as sinceSeq to get only later ones. Response bodies are read with read_network.",
       inputSchema: {
         kinds: z.array(z.string()).optional().describe('Only these kinds, e.g. ["navigation","console_error"]; omit for all'),
         sinceSeq: z.coerce.number().optional().describe("Only events after this seq; omit for everything still buffered"),
@@ -263,15 +267,16 @@ export function registerIoTools({ server, call, events, evLine, resolvedTarget, 
         // an unscoped tabId filter would surface another browser's events.
         // Don't push tabId into since() — topology events (tabId -1) must still
         // come through when a tabId is given; filter tab here WITH a topology bypass.
-        const tgt = resolvedTarget();
+        const sees = sessionSees();
         const { events: evs, maxSeq } = events.since(sinceSeq ?? 0);
         const filtered = evs
-          .filter((e) => !isAgentHiddenEvent(e.kind))
-          .filter((e) => isTopologyEvent(e.kind) || tgt == null || e.browser == null || e.browser === tgt.instanceId)
+          .filter(sees)
           .filter((e) => isTopologyEvent(e.kind) || tabId == null || e.tabId === tabId)
           .filter((e) => !kinds?.length || kinds.includes(e.kind))
           .slice(-(limit ?? 50));
         if (!filtered.length) return text(`(no matching events; current maxSeq=${maxSeq})`);
+        // Listed here means seen: a later reply does not show these again.
+        inbox.markShown(filtered);
         const lines = filtered.map((e) => `[seq ${e.seq}] ${e.kind} (tab ${e.tabId}) — ${evLine(e)}`).join("\n");
         return text(`## Events (${filtered.length}, maxSeq=${maxSeq}) — page events + orchestration events (browser/mode/claim/window, shown with tab -1)\n${lines}`);
       } catch (e) {
@@ -283,8 +288,9 @@ export function registerIoTools({ server, call, events, evLine, resolvedTarget, 
   server.registerTool(
     "wait_for_event",
     {
+      annotations: TOOL_HINTS.read,
       description:
-        "Wait until an event of one of the given kinds arrives and return it — event-driven waiting instead of polling. An event that already arrived is returned at once, unless an earlier reply has moved past it (a reply reports only the events of the tab it acted on and skips the rest). Page kinds: navigation (a full page load finished), navigation_started (also fired by SPA route and hash changes), dialog, console_error, network_failed, network_body, dom_changed, tab_closed. Orchestration kinds, from any browser: browser_online, browser_offline, mode_changed, claim_changed, target_changed, window_opened, window_closed — e.g. wait for a browser to connect, a peer to release a tab, or your target to disconnect.",
+        "Wait until an event of one of the given kinds arrives and return it — event-driven waiting instead of polling. An unseen match that arrived since your previous tool call began is returned at once, with how long ago it happened — e.g. the popup your last click opened in another tab. Page kinds: navigation (a full page load finished), navigation_started (also fired by SPA route and hash changes), dialog, console_error, network_failed, network_body, dom_changed, tab_closed. Orchestration kinds, from any browser: browser_online, browser_offline, mode_changed, claim_changed, target_changed, window_opened, window_closed — e.g. wait for a browser to connect, a peer to release a tab, or your target to disconnect.",
       inputSchema: {
         kinds: z.array(z.string()).describe('Event kinds to wait for, e.g. ["navigation"] or ["browser_offline","claim_changed"]'),
         urlPattern: z.string().optional().describe("For navigation and network kinds: only events whose URL contains this"),
@@ -295,23 +301,23 @@ export function registerIoTools({ server, call, events, evLine, resolvedTarget, 
     async ({ kinds, urlPattern, tabId, timeoutMs }) => {
       try {
         const cap = Math.min(timeoutMs ?? 20_000, 60_000);
-        const tgt = resolvedTarget();
+        const sees = sessionSees();
         const pred = (e: BrowserEvent): boolean =>
           kinds.includes(e.kind) &&
-          !isAgentHiddenEvent(e.kind) &&
-          // Topology events aren't browser- OR tab-scoped (they carry tabId -1);
-          // page events stay scoped to this target + tab.
-          (isTopologyEvent(e.kind) || tgt == null || e.browser == null || e.browser === tgt.instanceId) &&
+          sees(e) &&
+          // Topology events aren't tab-scoped (they carry tabId -1).
           (isTopologyEvent(e.kind) || tabId == null || e.tabId === tabId) &&
           (!urlPattern || String(e.detail?.url ?? "").includes(urlPattern));
-        // Catch-up: orchestration events are discrete transitions that often
-        // ALREADY happened before this call (e.g. the browser came online 2s
-        // ago). Scan the buffer since our cursor first, so we don't block 60s
-        // for something that already fired. (waitFor only sees FUTURE pushes.)
-        const already = events.since(getLastSeenSeq()).events.find(pred);
+        // Catch-up: what the agent waits for has often ALREADY happened — the
+        // popup its last click opened, a browser that came online 2s ago — and
+        // waitFor only sees FUTURE pushes. So first take an unseen match from
+        // since the previous tool call began.
+        const already = inbox.recent(pred);
         const hit = already ?? (await events.waitFor(pred, cap));
         if (!hit) return text(`Timed out after ${cap}ms waiting for ${kinds.join("/")}.`);
-        return text(`Event: ${hit.kind} (tab ${hit.tabId}) — ${evLine(hit)}`);
+        inbox.markShown([hit]);
+        const age = already ? ` (already happened ${Math.max(0, Math.round((Date.now() - hit.ts) / 1000))}s ago)` : "";
+        return text(`Event: ${hit.kind} (tab ${hit.tabId}) — ${evLine(hit)}${age}`);
       } catch (e) {
         return fail(e);
       }

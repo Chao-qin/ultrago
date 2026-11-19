@@ -99,6 +99,11 @@ export class EventStore {
     return { events, maxSeq: this.seq };
   }
 
+  /** The seq of the newest event ingested so far (0 before the first). */
+  latestSeq(): number {
+    return this.seq;
+  }
+
   /** Block until an event satisfies `pred`, or resolve null after timeoutMs.
    * The long-poll primitive behind wait_for_event: the tool call stays open
    * (no busy-poll) and returns the instant a matching page event arrives. */

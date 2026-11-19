@@ -3,7 +3,28 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveUploadSource, resolveUploadSources } from "./upload-source.js";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
+import { resolveUploadSource, resolveUploadSources, type UploadSourceDeps } from "./upload-source.js";
+import { isSpecialPurposeAddress } from "./public-fetch.js";
+
+/** A real HTTP server on loopback, reached through a public-looking name. */
+async function withServer(handler: (req: IncomingMessage, res: ServerResponse) => void, body: (origin: string) => Promise<void>): Promise<void> {
+  const server = createServer(handler);
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    await body(`http://files.test:${(server.address() as AddressInfo).port}`);
+  } finally {
+    server.closeAllConnections();
+    await new Promise((r) => server.close(r));
+  }
+}
+
+/** files.test is the test server (loopback, allowed here); internal.test is private and stays refused. */
+const LOCAL: UploadSourceDeps = {
+  lookup: async (host) => [{ address: host === "files.test" ? "127.0.0.1" : "10.0.0.5", family: 4 }],
+  isBlockedAddress: (ip) => ip !== "127.0.0.1" && isSpecialPurposeAddress(ip),
+};
 
 test("resolveUploadSource reads a local file and derives its metadata", async () => {
   const dir = await mkdtemp(join(tmpdir(), "bcp-upload-source-"));
@@ -27,25 +48,19 @@ test("resolveUploadSource validates source cardinality and local paths", async (
 });
 
 test("resolveUploadSource rejects private URLs before fetching", async () => {
-  await assert.rejects(resolveUploadSource({ url: "http://127.0.0.1/private.png" }), /private\/loopback\/link-local/);
+  await assert.rejects(resolveUploadSource({ url: "http://127.0.0.1/private.png" }), /private, loopback or reserved/);
 });
 
 test("resolveUploadSource uses response metadata and caller filename for URLs", async () => {
-  const body = Uint8Array.from([1, 2, 3]).buffer;
-  const fetchImpl = (async () => ({
-    ok: true,
-    status: 200,
-    url: "https://cdn.example.com/original.png",
-    headers: new Headers({ "content-type": "image/png", "content-length": "3" }),
-    arrayBuffer: async () => body,
-  })) as unknown as typeof fetch;
-  const result = await resolveUploadSource(
-    { url: "https://cdn.example.com/original.png", filename: "renamed.png" },
-    { fetch: fetchImpl, lookup: async () => ({ address: "93.184.216.34" }) },
-  );
-  assert.equal(result.filename, "renamed.png");
-  assert.equal(result.mimeType, "image/png");
-  assert.equal(result.bytes, 3);
+  await withServer((_req, res) => {
+    res.writeHead(200, { "content-type": "image/png" });
+    res.end(Buffer.from([1, 2, 3]));
+  }, async (origin) => {
+    const result = await resolveUploadSource({ url: `${origin}/original.png`, filename: "renamed.png" }, LOCAL);
+    assert.equal(result.filename, "renamed.png");
+    assert.equal(result.mimeType, "image/png");
+    assert.equal(result.bytes, 3);
+  });
 });
 
 test("resolveUploadSources preserves attachment order", async () => {
@@ -62,37 +77,52 @@ test("resolveUploadSources preserves attachment order", async () => {
   }
 });
 
-test('URL download retries a transient connection failure and retains the image bytes', async () => {
+test("URL download retries a transient connection failure and retains the image bytes", async () => {
   let attempts = 0;
-  const fetchImpl = (async () => {
-    if (++attempts === 1) throw new TypeError('fetch failed', { cause: Object.assign(new Error('connection reset'), { code: 'ECONNRESET' }) });
-    return new Response('image-data', { headers: { 'content-type': 'image/jpeg' } });
-  }) as typeof fetch;
-  const result = await resolveUploadSource({ url: 'https://93.184.216.34/image.jpg' }, { fetch: fetchImpl });
-  assert.equal(Buffer.from(result.dataBase64, 'base64').toString(), 'image-data');
-  assert.equal(attempts, 2);
+  await withServer((req, res) => {
+    if (++attempts === 1) return req.socket.destroy(); // the connection drops mid-request
+    res.writeHead(200, { "content-type": "image/jpeg" });
+    res.end("image-data");
+  }, async (origin) => {
+    const result = await resolveUploadSource({ url: `${origin}/image.jpg` }, LOCAL);
+    assert.equal(Buffer.from(result.dataBase64, "base64").toString(), "image-data");
+    assert.equal(attempts, 2);
+  });
 });
 
-test('URL download reports its URL and underlying error after bounded retries', async () => {
+test("URL download reports its URL and underlying error after bounded retries", async () => {
   let attempts = 0;
-  const fetchImpl = (async () => {
+  await withServer((req) => {
     attempts++;
-    throw new TypeError('fetch failed', { cause: Object.assign(new Error('connect timed out'), { code: 'UND_ERR_CONNECT_TIMEOUT' }) });
-  }) as typeof fetch;
-  await assert.rejects(resolveUploadSource({ url: 'https://93.184.216.34/detail.jpg' }, { fetch: fetchImpl }), /detail.jpg.*3.*UND_ERR_CONNECT_TIMEOUT/s);
-  assert.equal(attempts, 3);
+    req.socket.destroy();
+  }, async (origin) => {
+    await assert.rejects(resolveUploadSource({ url: `${origin}/detail.jpg` }, LOCAL), /detail\.jpg failed after 3 attempt\(s\).*ECONNRESET/s);
+    assert.equal(attempts, 3);
+  });
 });
 
-test('URL download retries server errors but does not retry a missing file', async () => {
+test("URL download retries server errors but does not retry a missing file", async () => {
   let attempts = 0;
-  let missing = false;
-  const fetchImpl = (async () => {
+  await withServer((req, res) => {
     attempts++;
-    return missing ? new Response('missing', { status: 404 }) : attempts === 1 ? new Response('unavailable', { status: 503 }) : new Response('image');
-  }) as typeof fetch;
-  assert.equal((await resolveUploadSource({ url: 'https://93.184.216.34/detail.jpg' }, { fetch: fetchImpl })).bytes, 5);
-  assert.equal(attempts, 2);
-  missing = true;
-  await assert.rejects(resolveUploadSource({ url: 'https://93.184.216.34/missing.jpg' }, { fetch: fetchImpl }), /HTTP 404/);
-  assert.equal(attempts, 3);
+    if (req.url === "/missing.jpg") return void res.writeHead(404).end("missing");
+    if (attempts === 1) return void res.writeHead(503).end("unavailable");
+    res.end("image");
+  }, async (origin) => {
+    assert.equal((await resolveUploadSource({ url: `${origin}/detail.jpg` }, LOCAL)).bytes, 5);
+    assert.equal(attempts, 2);
+    await assert.rejects(resolveUploadSource({ url: `${origin}/missing.jpg` }, LOCAL), /HTTP 404/);
+    assert.equal(attempts, 3);
+  });
+});
+
+test("URL download does not retry a refused address", async () => {
+  let attempts = 0;
+  await withServer((_req, res) => {
+    attempts++;
+    res.writeHead(302, { location: "http://internal.test/secret" }).end();
+  }, async (origin) => {
+    await assert.rejects(resolveUploadSource({ url: `${origin}/a.png` }, LOCAL), /internal\.test resolves to 10\.0\.0\.5/);
+    assert.equal(attempts, 1, "a refusal is the same on every attempt");
+  });
 });

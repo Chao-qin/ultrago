@@ -393,9 +393,9 @@ export class InternalRunner {
       async readContent(_planId, page) { return browserCall(RpcMethod.ReadContent, run.browserContext.route(RpcMethod.ReadContent, { full: true }, page)); },
       async readNetwork(_planId, page) { return browserCall(RpcMethod.ReadNetwork, run.browserContext.route(RpcMethod.ReadNetwork, {}, page)); },
       async snapshot(_planId, page) { return browserCall(RpcMethod.Snapshot, run.browserContext.route(RpcMethod.Snapshot, {}, page)); },
-      async evalJs(_planId, code, page) {
-        if (!config.evalEnabled && !run.trustedBundledBook) throw new Error(`evalCheck needs page JS — ${EVAL_DISABLED}`);
-        return browserCall(RpcMethod.Eval, run.browserContext.route(RpcMethod.Eval, { code }, page));
+      async evalJs(_planId, code, readOnly, page) {
+        if (!config.evalEnabled && !run.trustedBundledBook) throw new Error(`${readOnly ? "evalCheck" : "evalUntil"} needs page JS — ${EVAL_DISABLED}`);
+        return browserCall(RpcMethod.Eval, run.browserContext.route(RpcMethod.Eval, { code, readOnly }, page));
       },
       async setNetworkCapture(_planId, enabled, page) {
         await browserCall(RpcMethod.SetNetworkCapture, run.browserContext.route(RpcMethod.SetNetworkCapture, { enabled }, page));

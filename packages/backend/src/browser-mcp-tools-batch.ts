@@ -10,7 +10,7 @@
  */
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { RpcMethod, type ActionDelta } from "@bcp/shared";
+import { RpcMethod, type ActionDelta, TOOL_HINTS } from "@bcp/shared";
 import type { BrowserCall } from "./browser-mcp-types.js";
 import { deltaGate, describeTarget, gateNote, renderDelta, text } from "./browser-mcp-render.js";
 import { locatorShape, looseBool, tabId } from "./browser-mcp-shapes.js";
@@ -44,6 +44,7 @@ export function registerBatchTools({ server, call, drainEvents }: BatchToolDeps)
   server.registerTool(
     "batch",
     {
+      annotations: TOOL_HINTS.pageAction,
       description:
         "Run a known sequence of actions in one call, e.g. fill three fields and click submit. Each step is {action, ...that tool's arguments}, with action one of click, type_text, select_option, press_key, hover or scroll; tabId is set once for the whole batch. Steps run in order and stop at the first error. If a step changes the page unpredictably (opens a dialog, navigates), target later steps by description, or act one step at a time.",
       inputSchema: {

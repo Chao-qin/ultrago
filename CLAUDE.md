@@ -32,7 +32,7 @@ MCP server(Node 后端)暴露 `browser_*` 工具 → WS-RPC → 浏览器扩展�
 - **元素带视觉层坐标**:DOM 树只有嵌套没有几何(portal 到 body 的 modal 树深度 1 却盖满全屏),故每个元素带 `@dialog:<名>` / `@fixed-top|bottom|left` / 裸 `@fixed`;无标记 = 普通流内容。判层走**祖先包含**(控件通常在 fixed 容器内,自己是 static),不看元素自身 position;爬升用 composed tree(`assignedSlot ?? parentElement ?? host`)——`contains`/`parentElement` 都不跨 shadow 边界,slot 分发的子节点视觉父级是 slot 所在位置而非 light DOM 父级。**感知层不做遮挡检测**:"现在能不能点"只在动作时对单个目标回答(`realClick` 的 `waitActionable` + hit-test **重试**——命中无关元素即判被遮挡,退避重试并轮换滚动对齐,超时才抛 `click intercepted`;此前是静默把事件改派回目标,那会让被盖住的点击报告成功),Playwright 同样把 Receives-Events 放在 `_checkFrameIsHitTarget`、不铺进快照;逐元素 hit-test 比 rect/style 贵一个量级,且 `@dialog:<名>` 已经足够让 agent 判断该操作哪一组。
 - **不按可见性过滤**:隐藏/禁用元素也收录,标 `[hidden]`/`[disabled]`——所以藏在样式按钮后的 `[hidden]` file input 也能被 `upload_file` 命中。别指望 `[hidden]`/`[disabled]` 元素有正常响应(唯一例外就是那个文件输入框)。
 - **ref 跟着元素活**:元素还在 ref 就一直有效,重新 snapshot 不改号;元素被移除(虚拟列表回收、portal 重挂载)才失效并报 stale。会变动的内容用描述定位(text/role/name/css),动作时才解析。
-- **快照穿透 open shadow root + 同源 iframe**:逐帧注入,子帧 ref 前缀 frameId(`42_e3`);closed shadow / 跨源 iframe 够不到(无 CDP)。
+- **快照穿透 open shadow root + 所有 iframe**:`allFrames` 逐帧注入再合并,子帧 ref 前缀 frameId(`42_e3`),跨源 frame 的元素也列得出、靠前缀 ref 能操作;但跨源 frame 读不到父级偏移,所以那里的元素**没有视口坐标**。按描述定位、`x,y`、焦点追踪仍只在顶层与同源 frame 内;closed shadow 够不到(无 CDP)。
 - **snapshot(便宜)vs analyze_page(全但贵)**:analyze_page = snapshot + 可见文本 + tabs + **截图**,内部 4 个 RPC 并行。默认 snapshot 打紧循环;**新/不熟/视觉/含糊页**、以及**连续 2–3 次动作无反应**时升级到 analyze_page 看全貌。截图 token 很贵,别每步截。
 
 ## 心得 · 动作(act)

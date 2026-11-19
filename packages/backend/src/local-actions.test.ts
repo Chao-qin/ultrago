@@ -89,4 +89,13 @@ test("local.writeFile 写的是紧挨着的上一步的值；上一步没有值�
   const ok = await actions.writePreviousStepValue("r.md", results, 3);
   assert.equal(await readFile(ok, "utf8"), "# 报告");
   await assert.rejects(() => actions.writePreviousStepValue("r2.md", results, 2), /produced no single value/);
+  // A step that returned nothing, or a value JSON cannot express, is "no value" too — never a raw TypeError.
+  const odd = [
+    { index: 0, goal: "nothing", method: "local.eval", value: undefined },
+    { index: 1, goal: "cycle", method: "local.eval", value: (() => { const o: Record<string, unknown> = {}; o.self = o; return o; })() },
+    { index: 2, goal: "fn", method: "local.eval", value: () => 1 },
+  ];
+  await assert.rejects(() => actions.writePreviousStepValue("u.md", odd, 1), /produced no single value/);
+  await assert.rejects(() => actions.writePreviousStepValue("c.md", odd, 2), /cannot be written as JSON/);
+  await assert.rejects(() => actions.writePreviousStepValue("f.md", odd, 3), /a function, which has no JSON form/);
 });

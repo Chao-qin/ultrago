@@ -264,7 +264,7 @@ test("plan / batch 系的参数，含嵌套的 step 与 verify 形状", async ()
     Object.keys(step.properties?.verify?.properties ?? {}).sort(),
     [
       "actionSucceeded", "assert", "dialogOpen", "elementChecked", "elementEnabled", "elementName",
-      "elementValue", "evalCheck", "formSubmittable", "networkOk", "noErrors", "settled",
+      "elementValue", "evalCheck", "evalUntil", "formSubmittable", "networkOk", "noErrors", "settled",
       "textAbsent", "textPresent", "urlIncludes", "visualAssert",
     ],
     "verify 的判据字段变了",
@@ -613,4 +613,65 @@ test("batch 的每一步接受与单个工具相同的定位参数", async () =>
     assert.doesNotMatch(out, /新标题/, "输入的值（可能是密码）不能被当成目标回显");
     assert.match(out, /type_text name="标题"/);
   } finally { await close(); }
+});
+
+/* ───────────────────── events: shown once, never swallowed ─────────────────────
+ * A reply about one tab used to advance the session's event cursor past every
+ * event, including the other tabs' events it filtered out. The popup a click
+ * opened in tab 2 was then invisible to wait_for_event({tabId: 2}), which sat
+ * until its timeout for something that had already happened. */
+test("回复只展示本标签页的事件时，别的标签页的事件仍能被 wait_for_event 立即拿到", async () => {
+  const events = new EventStore();
+  const pageState = {
+    url: "https://x/", title: "t", readyState: "complete", loading: false, interactableCount: 1,
+    scroll: { y: 0, height: 100, viewport: 100, moreBelow: false, moreAbove: false },
+    focus: { focused: false }, forms: { controls: 0, filled: 0, emptyRequired: 0, invalid: 0, dirty: 0 },
+    dialogs: 0, scrollLocked: false, overlay: false, busy: 0, errorCount: 0, tabId: 1, active: true,
+  };
+  let pushed = false;
+  const rawCall = (async (method: RpcMethod) => {
+    // While the first read of tab 1 runs, tab 2 opens a dialog.
+    if (method === RpcMethod.PageState && !pushed && (pushed = true))
+      events.push({ kind: "dialog", tabId: 2, ts: Date.now(), summary: "confirm() on tab 2", browser: TARGET_A.instanceId });
+    return pageState as never;
+  }) as RawBrowserCall;
+  const server = createBrowserMcpServer(rawCall, events, makeRegistry(TARGET_A), undefined, { dispatcher: {}, setup: {} } as unknown as BrowserLifecycle);
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "contract-test", version: "0" });
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+  const first = await client.callTool({ name: "page_state", arguments: { tabId: 1 } });
+  assert.doesNotMatch(JSON.stringify(first.content), /tab 2/, "a reply about tab 1 does not show tab 2's event");
+
+  const started = Date.now();
+  const waited = await client.callTool({ name: "wait_for_event", arguments: { kinds: ["dialog"], tabId: 2, timeoutMs: 3000 } });
+  const body = JSON.stringify(waited.content);
+  assert.match(body, /Event: dialog \(tab 2\)/, "the dialog that already happened is returned");
+  assert.ok(Date.now() - started < 1000, "returned at once, not after the timeout");
+
+  const again = await client.callTool({ name: "page_state", arguments: { tabId: 2 } });
+  assert.doesNotMatch(JSON.stringify(again.content), /confirm\(\) on tab 2/, "an event wait_for_event returned is not shown again");
+  await client.close();
+});
+
+/* ───────────────────── annotations ─────────────────────
+ * Clients decide what to auto-approve from these, so every tool states all
+ * four, and which tools are read-only is a list someone edits on purpose. */
+test("每个工具都声明四项 annotations，且只读工具清单不变", async () => {
+  const { client, close } = await connect();
+  const { tools } = await client.listTools();
+  const incomplete = tools
+    .filter((t) => ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"].some((k) => typeof (t.annotations as Record<string, unknown> | undefined)?.[k] !== "boolean"))
+    .map((t) => t.name);
+  assert.deepEqual(incomplete, [], "这些工具的 annotations 不全");
+  const contradictory = tools.filter((t) => t.annotations?.readOnlyHint && (t.annotations.destructiveHint || !t.annotations.idempotentHint)).map((t) => t.name);
+  assert.deepEqual(contradictory, [], "只读工具不能同时可能破坏或不幂等");
+  assert.deepEqual(
+    tools.filter((t) => t.annotations?.readOnlyHint).map((t) => t.name).sort(),
+    [
+      "browser_state", "list_playbooks", "list_windows", "page_state", "plan_status", "read_content", "read_content_dump",
+      "read_events", "read_network", "snapshot", "wait_for", "wait_for_event",
+    ],
+  );
+  await close();
 });

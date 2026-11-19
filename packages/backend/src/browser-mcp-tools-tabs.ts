@@ -144,7 +144,6 @@ export function registerTabsTools({ server, call, resolvedTarget, claimFor, setC
         return fail(e);
       }
     },
-    { openWorldHint: true },
   );
 
   registerRpcTool(

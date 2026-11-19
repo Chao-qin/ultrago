@@ -1,3 +1,4 @@
+import { TOOL_HINTS } from "@bcp/shared";
 /**
  * The plan family: declaring a multi-step plan, advancing its cursor, reading
  * its state, aborting it, and closing a recording.
@@ -26,8 +27,9 @@ export function registerPlanTools({ server, runner }: PlanToolDeps): void {
   server.registerTool(
     "plan",
     {
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       description:
-        "Register a multi-step task as ordered steps, each with its own done-criteria (verify), then work through it with advance: you perform each step with the normal tools, and advance reads the page itself and does not move on until the step's verify holds. Use it for forms, wizards and publish or checkout flows; skip it for one or two actions. Every step needs a real verify (an empty one is rejected). Prefer checks the runner measures — elementValue for a field's value, networkOk (plus bodyIncludes for the response body) for a save that must reach the server, evalCheck for anything a page expression can compute — over assert / visualAssert, which hand the judgment back to you. Pass record to save the run as a playbook (see record_stop). In manual mode, claim a tab first. When the backend runs with BCP_FORCE_PLAN=on, mutating tools are refused without an active plan.",
+        "Register a multi-step task as ordered steps, each with its own done-criteria (verify), then work through it with advance: you perform each step with the normal tools, and advance reads the page itself and does not move on until the step's verify holds. Use it for forms, wizards and publish or checkout flows; skip it for one or two actions. Every step needs a real verify (an empty one is rejected). Prefer checks the runner measures — elementValue for a field's value, networkOk (plus bodyIncludes for the response body) for a save that must reach the server, evalCheck for anything a read-only page expression can compute, evalUntil for a check that has to act until it holds — over assert / visualAssert, which hand the judgment back to you. Pass record to save the run as a playbook (see record_stop). In manual mode, claim a tab first. When the backend runs with BCP_FORCE_PLAN=on, mutating tools are refused without an active plan.",
       inputSchema: {
         goal: z.string().describe("What the whole plan achieves"),
         steps: z.array(stepShape).min(1).describe("Ordered steps, each with its own goal and verify"),
@@ -59,6 +61,7 @@ export function registerPlanTools({ server, runner }: PlanToolDeps): void {
   server.registerTool(
     "advance",
     {
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
       description:
         "Check the current step of a plan against its verify and move on. Pass returns the next step; fail says what is still wrong and whether to redo the step (onFail retry or rescan, while maxRetries lasts) or stop (escalate, the default). It does not perform the action — act first, then call advance. For a step with assert / visualAssert, the first call returns the claim; look at the page, then call again with confirm.",
       inputSchema: {
@@ -113,6 +116,7 @@ export function registerPlanTools({ server, runner }: PlanToolDeps): void {
   server.registerTool(
     "plan_status",
     {
+      annotations: TOOL_HINTS.read,
       description:
         "Show a plan's current step and its verify, and, while recording, how many steps have captured a replayable action. Use it to re-orient in a long task.",
       inputSchema: { planId: z.string().describe("Plan id from plan() / run_playbook") },
@@ -144,6 +148,7 @@ export function registerPlanTools({ server, runner }: PlanToolDeps): void {
   server.registerTool(
     "plan_abort",
     {
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
       description:
         "End a plan or a paused playbook run early — the only way to: record_stop refuses an unfinished plan, and an abandoned plan stays active (with BCP_FORCE_PLAN on, it keeps permitting actions). Its recording is discarded; saved playbooks are untouched. Nothing done in the browser is undone.",
       inputSchema: { planId: z.string().describe("Plan id to abort") },
@@ -165,6 +170,7 @@ export function registerPlanTools({ server, runner }: PlanToolDeps): void {
   server.registerTool(
     "record_stop",
     {
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
       description:
         "Save a completed recording plan (one started with record) as resource/playbooks/<name>.json and return the JSON. Every step must have been advanced. Review the result: slots are substituted by exact value, so a value that happens to appear elsewhere becomes a slot there too.",
       inputSchema: {

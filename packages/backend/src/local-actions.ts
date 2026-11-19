@@ -77,12 +77,23 @@ export async function writePreviousStepValue(
   opts?: { overwrite?: "overwrite" | "error" | "rename" },
 ): Promise<string> {
   const prev = results.find((r) => r.index === stepIndex - 1);
-  if (!prev)
-    throw new Error(
-      `local.writeFile writes the value of the step right before it (step ${stepIndex}), but that step produced no single value — ` +
-        `put the step that computes the content (one action, e.g. local_eval) immediately before write_file`,
+  const noValue = (why: string) =>
+    new Error(
+      `local.writeFile writes the value of the step right before it (step ${stepIndex}), but that step ${why} — ` +
+        `put the step that computes the content (one action, e.g. local_eval returning a string or JSON value) immediately before write_file`,
     );
-  return writeLocalFile(path, typeof prev.value === "string" ? prev.value : JSON.stringify(prev.value), opts);
+  // `undefined` is what a step that returned nothing leaves behind; JSON has no
+  // text for it (nor for a function or symbol), so it is "no value", not a file.
+  if (!prev || prev.value === undefined) throw noValue("produced no single value");
+  if (typeof prev.value === "string") return writeLocalFile(path, prev.value, opts);
+  let json: string | undefined;
+  try {
+    json = JSON.stringify(prev.value);
+  } catch (e) {
+    throw noValue(`returned a value that cannot be written as JSON (${e instanceof Error ? e.message : String(e)})`);
+  }
+  if (json === undefined) throw noValue(`returned a ${typeof prev.value}, which has no JSON form`);
+  return writeLocalFile(path, json, opts);
 }
 
 export async function writeLocalFile(

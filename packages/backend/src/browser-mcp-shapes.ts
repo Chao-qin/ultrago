@@ -47,11 +47,18 @@ export const verifyShape = z
       .describe("A matching request completed since the step started"),
     evalCheck: z
       .object({
-        code: z.string().min(1).describe("Page JavaScript to evaluate; keep it free of side effects"),
+        code: z.string().min(1).describe("Page JavaScript that reads and returns a value synchronously"),
         equals: z.string().optional().describe("Expected result, compared as a string; omit to require a truthy result"),
       })
       .optional()
-      .describe("The runner evaluates page JavaScript and checks the result. Refused when the backend runs with BCP_EVAL=off"),
+      .describe("The runner evaluates read-only page JavaScript and checks the result. The check fails if the code changes the DOM, focuses, scrolls, sets an input value, fires events, sends requests, writes storage or returns a Promise. Refused when the backend runs with BCP_EVAL=off"),
+    evalUntil: z
+      .object({
+        code: z.string().min(1).describe("Page JavaScript that may act (click, scroll, await bcpWait) and returns whether the step is done"),
+        equals: z.string().optional().describe("Expected result, compared as a string; omit to require a truthy result"),
+      })
+      .optional()
+      .describe("Like evalCheck, but the code may act and is run again on every advance and retry until it holds, so a step can drive the page one round per attempt. Keep it safe to repeat; it is not behind the confirm gate. Runs after every other check. Refused when the backend runs with BCP_EVAL=off"),
     noErrors: looseBool.optional().describe("The page shows no visible error messages"),
     settled: looseBool.optional().describe("The page has finished loading and rendering"),
     dialogOpen: looseBool.optional().describe("A dialog or modal is open"),

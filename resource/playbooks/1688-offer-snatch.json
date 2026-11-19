@@ -44,7 +44,7 @@
     {
       "goal": "条件门1:标题模块到位(页面已渲染),并初始化采集暂存",
       "verify": {
-        "evalCheck": {
+        "evalUntil": {
           "code": [
             "(() => {",
             "  const st = (window.__bcp1688 = window.__bcp1688 || {});",
@@ -456,7 +456,7 @@
     {
       "goal": "条件门3:滚动累积主图(排掉 url(undefined) 幻影图),直到两次不再增长",
       "verify": {
-        "evalCheck": {
+        "evalUntil": {
           "code": [
             "(() => {",
             "  const vis = bcpDom.visible;",
@@ -566,7 +566,7 @@
     {
       "goal": "条件门4:将详情宿主(V-DETAIL-*)滚入视口触发懒加载,累积 shadowRoot 内 #detail img,直到两次不再增长;没有详情模块则记空放行",
       "verify": {
-        "evalCheck": {
+        "evalUntil": {
           "code": [
             "(() => {",
             "  const st = window.__bcp1688;",

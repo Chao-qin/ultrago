@@ -274,7 +274,9 @@ WeClaw sidecar 在线时，`wec_status` / `wec_send_text` / `wec_send_image` 出
 
 `plan` 注册一个有序计划，每步自带 `verify`（结构化断言：url 含 X、文本存在 / 不存在、某个可交互元素的
 名字 / 勾选 / 可用 / 取值、自本步开始以来某 URL 的 2xx、无页面错误、页面已静默、对话框已开、表单可提交，
-以及 `evalCheck`）与 `onFail`（retry / rescan / escalate，默认 escalate）。
+以及 `evalCheck` 与 `evalUntil`）与 `onFail`（retry / rescan / escalate，默认 escalate）。
+`evalCheck` 是只读检查：同步返回，执行期间改 DOM、聚焦、滚动、改输入值、派发事件、发请求、写存储都会让检查失败；
+需要边检查边推进（点击、滚动、等待）的写成 `evalUntil`，它每次 advance 和重试都会再执行一遍，所以必须可重复执行。
 `advance` **自己重新读页面**判定，验不过就不放行。它只判不做，动作仍由 agent 执行。
 
 默认这道门是自愿的；`BCP_FORCE_PLAN=on` 会把它变成硬要求——没有活跃计划就拒绝一切改动性动作。
@@ -321,7 +323,8 @@ WeClaw sidecar 在线时，`wec_status` / `wec_send_text` / `wec_send_image` 出
 - `set_browser_mode` 设成 `manual` 表示**用户本人正在用这个浏览器**：此后不能切标签页、不能无 `tabId` 动手、
   截图也不再抢前台。用户交回来时设回 `auto`。
 - 拓扑变化（上下线、模式切换、claim 变化、目标变化、窗口开关、验证码出现 / 解除）以事件推送，
-  搭在返回值里 piggyback，`wait_for_event` 可以阻塞等，不用轮询。
+  附在之后的工具返回里（每条事件只展示一次，回复只附带它所操作标签页的事件），`wait_for_event` 可以阻塞等，
+  上一次调用以来已经发生、还没展示过的事件会立即返回，不用轮询。
 - `launch_browser` 拉起并等握手完成：`user` 模式用你自己的浏览器与配置（backend 永不接管），
   `managed` 模式起一个 backend 自有 profile 并预装扩展（仅 Chrome）。`stop_browser` 只停 managed 实例，且要 `confirm:true`。
 
@@ -389,7 +392,7 @@ Schema Records（按契约落地的数据）· Database（内嵌 Prisma Studio�
 | `BCP_TOKEN` | `bcp-dev-token`（留空即用它） | 握手共享密钥，必须与扩展侧边栏一致；扩展内置的也是这个值，所以单机留空即可。`BCP_HOST` 对外暴露前务必改成随机长串 |
 | `BCP_RPC_TIMEOUT_MS` | `30000` | 单个浏览器动作的超时 |
 | `BCP_ALLOWED_DOMAINS` / `BCP_BLOCKED_DOMAINS` | 空 | 导航白 / 黑名单（逗号分隔）；`javascript:` `data:` `file:` 等协议一律拒绝 |
-| `BCP_EVAL` | 开 | 页面内任意 JS 的 `eval` 工具（MAIN world）与 `evalCheck`；设 `off` 关闭。桌面客户端在准备页的“允许页面脚本”中开关，运行中切换立即生效 |
+| `BCP_EVAL` | 开 | 页面内任意 JS 的 `eval` 工具（MAIN world）与 `evalCheck` / `evalUntil`；设 `off` 关闭。桌面客户端在准备页的“允许页面脚本”中开关，运行中切换立即生效 |
 | `BCP_LOCAL_EVAL` | 开 | `local.eval` 步骤和 `local_eval` 工具（在 **backend 进程**里跑 JS，影响面比页面 eval 更大）；设 `off` 关闭。桌面客户端在准备页的“允许本机脚本”中开关，运行中切换立即生效 |
 | `BCP_FORCE_PLAN` | 关 | 设 `on` 后，没有活跃计划就拒绝一切改动性动作 |
 | `BCP_SCREENSHOT_DIR` | 空 | 截图 `savePath` 允许写入的额外目录；系统临时目录始终允许。桌面客户端在准备页选择 |

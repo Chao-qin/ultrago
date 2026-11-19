@@ -3731,3 +3731,95 @@ export function bcpWaitFactory(bcpDeadline: number) {
     },
   };
 }
+
+/**
+ * Read-only evaluation for a plan's `evalCheck`: runs `fn` and refuses any
+ * effect the page could show, send or keep.
+ *
+ * Self-contained (no imports, no closure over module state) for the same
+ * reason as the factories above: background.ts injects it as source, and
+ * `pnpm check:dom` runs this exact code in a real browser.
+ *
+ * Why this can be strict without guessing: the check runs synchronously, so
+ * no page code runs while it does — the only code executing is the check and
+ * whatever handlers the check itself triggers. So for that window every
+ * effectful browser API is swapped for one that throws, and a
+ * MutationObserver's pending records (taken synchronously at the end) are
+ * exactly the DOM changes the check caused.
+ *
+ * The boundary is "outside the JS heap": DOM, focus and scroll, input values,
+ * events, network, storage and cookies, history, dialogs, media and new
+ * windows. Plain JS state (`window.__x = …`) and `location` assignment (its
+ * properties are unforgeable, so they cannot be swapped) are not detected.
+ * A check that has to act — click, scroll, wait — belongs in `evalUntil`.
+ */
+export function bcpReadOnlyGuard() {
+  const HINT = "use evalUntil for a check that has to act or wait";
+  return function runReadOnly<T>(fn: () => T): T {
+    const restore: Array<() => void> = [];
+    const refuse = (what: string) =>
+      function (): never {
+        throw new Error(`evalCheck is read-only: ${what} is not allowed — ${HINT}`);
+      };
+    /** Swap a method (or a setter, when `setter` is true) for one that throws. */
+    const block = (owner: object | undefined, key: string, what: string, setter = false): void => {
+      if (!owner) return;
+      const d = Object.getOwnPropertyDescriptor(owner, key);
+      if (!d || !d.configurable) return;
+      if (setter) {
+        if (!d.set) return;
+        Object.defineProperty(owner, key, { ...d, set: refuse(what) });
+      } else {
+        if (typeof d.value !== "function") return;
+        Object.defineProperty(owner, key, { ...d, value: refuse(what) });
+      }
+      restore.push(() => Object.defineProperty(owner, key, d));
+    };
+    const g = globalThis as unknown as Record<string, { prototype?: object } | undefined>;
+    const proto = (name: string): object | undefined => g[name]?.prototype;
+
+    const methods: Array<[string, string[]]> = [
+      ["EventTarget", ["dispatchEvent"]],
+      ["HTMLElement", ["click", "focus", "blur", "showPopover", "hidePopover", "togglePopover"]],
+      ["Element", ["scrollIntoView", "scroll", "scrollTo", "scrollBy", "requestFullscreen", "requestPointerLock"]],
+      ["HTMLFormElement", ["submit", "requestSubmit", "reset"]],
+      ["XMLHttpRequest", ["open", "send"]],
+      ["WebSocket", ["send"]],
+      ["Navigator", ["sendBeacon"]],
+      ["Storage", ["setItem", "removeItem", "clear"]],
+      ["History", ["pushState", "replaceState", "back", "forward", "go"]],
+      ["HTMLMediaElement", ["play", "pause"]],
+      ["HTMLDialogElement", ["show", "showModal", "close"]],
+    ];
+    for (const [cls, keys] of methods) for (const k of keys) block(proto(cls), k, `${cls}.${k}()`);
+    for (const k of ["fetch", "open", "scroll", "scrollTo", "scrollBy", "alert", "confirm", "prompt", "print", "postMessage"])
+      block(window, k, `window.${k}()`);
+    const setters: Array<[string, string[]]> = [
+      ["Element", ["scrollTop", "scrollLeft"]],
+      ["HTMLInputElement", ["value", "checked", "indeterminate", "files"]],
+      ["HTMLTextAreaElement", ["value"]],
+      ["HTMLSelectElement", ["value", "selectedIndex"]],
+      ["HTMLOptionElement", ["selected"]],
+      ["Document", ["cookie"]],
+    ];
+    for (const [cls, keys] of setters) for (const k of keys) block(proto(cls), k, `setting ${cls}.${k}`, true);
+
+    const observer = new MutationObserver(() => {});
+    observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+    try {
+      const value = fn();
+      if (value && typeof (value as { then?: unknown }).then === "function")
+        throw new Error(`evalCheck must return its result synchronously, not a Promise — ${HINT}`);
+      const changes = observer.takeRecords();
+      if (changes.length) {
+        const first = changes[0]!.target;
+        const where = first instanceof Element ? first.tagName.toLowerCase() : first.nodeName.toLowerCase();
+        throw new Error(`evalCheck is read-only but changed the page (${changes.length} DOM change(s), first on <${where}>) — ${HINT}`);
+      }
+      return value;
+    } finally {
+      observer.disconnect();
+      for (let i = restore.length - 1; i >= 0; i--) restore[i]!();
+    }
+  };
+}

@@ -48,7 +48,7 @@ function isLineArray(value: unknown): value is string[] {
 /** 递归把 book 里所有 `code` 行数组就地合成字符串，返回改动过的字段数。
  *
  * 按 key 名递归而不是按已知路径写死，理由是路径不止一种且会长：今天实测有三种
- * ——`steps[].action.params.code`、`steps[].verify.evalCheck.code`、
+ * ——`steps[].action.params.code`、`steps[].verify.evalCheck.code` / `evalUntil.code`、
  * `pages.*.signals.*.condition[.all[]].script.code`，最后一种还能任意深地嵌在
  * `all`/`any` 里。按路径枚举等于每加一种信号就要回来改一次，漏改的表现是那处
  * 代码原样带着数组跑到页面上。

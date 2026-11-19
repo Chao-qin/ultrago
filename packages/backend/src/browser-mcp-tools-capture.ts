@@ -104,6 +104,7 @@ export function registerCaptureTools({ server, call, deltaKey, drainEvents, capt
   server.registerTool(
     "analyze_page",
     {
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
       description:
         "Everything about a tab in one call, for an unfamiliar, visual or confusing page: open tabs, page_state in detail, snapshot (paged on large pages — the reply says how to continue), a text dump manifest (as read_content: read the chunks you need before your next browser tool call) and a screenshot. If one part fails, such as the screenshot in manual mode, the rest is still returned. It is the most expensive read; when one question needs answering, page_state, snapshot or screenshot is cheaper.",
       inputSchema: {

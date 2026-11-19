@@ -8,7 +8,7 @@
  */
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { RpcMethod, browserLabel, type BrowserStatus, type BrowserTarget } from "@bcp/shared";
+import { RpcMethod, browserLabel, type BrowserStatus, type BrowserTarget, TOOL_HINTS } from "@bcp/shared";
 import type { BrowserCall, BrowserLifecycle, BrowserRegistry, RawBrowserCall } from "./browser-mcp-types.js";
 import type { Claim } from "./browser-mcp-tools-tabs.js";
 import { fail, text, windowFocusLabel } from "./browser-mcp-render.js";
@@ -41,6 +41,7 @@ export function registerLifecycleTools({
     server.registerTool(
       "use_browser",
       {
+        annotations: TOOL_HINTS.sessionSetting,
         description:
           "Point this session's tools at a browser instance; other sessions keep their own targets, so several agents can drive different browsers at once. With instanceId, that instance must be connected. Without it: the global default if it is that kind, else the first connected instance of that kind (the desktop client only drives its own browser).",
         inputSchema: {
@@ -79,6 +80,7 @@ export function registerLifecycleTools({
     server.registerTool(
       "claim_tab",
       {
+        annotations: TOOL_HINTS.sessionSetting,
         description:
           "Make a tab this session's default: tools called without tabId then act on it instead of the active tab of the last-focused window. Use it whenever other agents or the user share the browser. release:true drops the claim. In manual mode a tabId is required and the user's visible tab cannot be claimed.",
         inputSchema: {
@@ -135,6 +137,7 @@ export function registerLifecycleTools({
     server.registerTool(
       "set_browser_mode",
       {
+        annotations: TOOL_HINTS.sessionSetting,
         description:
           "Mark a connected browser instance manual (the user is driving it) or auto (the default: agents drive freely). In manual mode switch_tab is refused; a tool called without tabId (and no claimed tab) is refused, except page_state, snapshot, read_content and read_network; the user's visible tab cannot be changed; new tabs and windows open in the background; screenshots never bring a window forward. Set manual when the user says they are using the browser, auto when they hand it back.",
         inputSchema: {
@@ -175,6 +178,7 @@ export function registerLifecycleTools({
     server.registerTool(
       "launch_browser",
       {
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       description:
         "Start or reuse a browser instance and wait until its extension is connected and ready; a ready instance becomes this session's target. mode \"user\" (default) opens the user's own browser, and opens the extension install guide if the extension has not connected within a few seconds. mode \"managed\" starts a separate backend-owned Chrome profile with the extension preloaded. Without instanceId it reuses a connected instance of that kind and mode, then one already set up, else creates one. Returns the instance id and readiness; an instance that is not ready in time is reported in the reply, not as an error. An already-ready instance returns at once.",
         inputSchema: {
@@ -204,6 +208,7 @@ export function registerLifecycleTools({
     server.registerTool(
       "stop_browser",
       {
+        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
         description:
           "Stop a managed browser instance that this backend started; any other instance, including the user's own browser, is refused. Requires confirm:true. Stopping an instance that is already stopped just returns its status.",
         inputSchema: {
@@ -211,7 +216,6 @@ export function registerLifecycleTools({
           instanceId: z.string().describe("Full instance id of the managed instance (from browser_state / launch_browser)"),
           confirm: z.literal(true).describe("Must be true: it ends the browser process"),
         },
-        annotations: { readOnlyHint: false },
       },
       async ({ kind, instanceId, confirm }) => {
         void confirm;
@@ -229,6 +233,7 @@ export function registerLifecycleTools({
   server.registerTool(
     "browser_state",
     {
+      annotations: TOOL_HINTS.read,
       description:
         "Overview of every browser: this session's target and claimed tab; each connected instance (kind, full instance id, mode, whether it is the global default) with its windows (OS focus, visible tab) and tabs; every tab claim, marked yours or another session's; and, when the backend manages browser setup, each configured instance's readiness (connected / waiting_extension / executable_missing / …) and the browsers it can launch. Read-only. Copy instance ids from here into use_browser, set_browser_mode and stop_browser.",
       inputSchema: {},

@@ -42,7 +42,7 @@ import { createPersistedTabSet } from "../persisted-tab-set";
 import { domOpError, errorInfoOf } from "../rpc-errors";
 import { ensureLocalInstanceId, loadRuntimeConfig } from "../runtime-config";
 import { createRpcDeduper } from "../rpc-dedup";
-import { bcpDomRuntime, bcpOverlay, bcpDialogShim, bcpDialogRestore, bcpEventProbes, bcpMainConsoleProbe, bcpNetworkPatch, bcpSignalWait, bcpWaitFactory, bcpDomHelpersFactory } from "../content/dom-runtime";
+import { bcpDomRuntime, bcpOverlay, bcpDialogShim, bcpDialogRestore, bcpEventProbes, bcpMainConsoleProbe, bcpNetworkPatch, bcpSignalWait, bcpWaitFactory, bcpDomHelpersFactory, bcpReadOnlyGuard } from "../content/dom-runtime";
 import { compressScreenshot } from '../screenshot-compression';
 import { installNavigationInvalidation } from '../navigation-events';
 import { DESKTOP_NATIVE_HOST, desktopConnection, reloadForDesktop } from '../desktop-discovery';
@@ -685,7 +685,7 @@ export default defineBackground(() => {
         return { closed: true, tabId: id };
       }
       case RpcMethod.Eval: {
-        const { code, tabId, frameId } = params as RpcContracts[typeof RpcMethod.Eval]["params"];
+        const { code, tabId, frameId, readOnly } = params as RpcContracts[typeof RpcMethod.Eval]["params"];
         // MAIN world (page context) is the ONLY place this can run: an MV3 extension's
         // own CSP forbids new Function / eval in the isolated world, so there is no
         // page-isolated fallback for arbitrary code. Pure chrome.scripting, no CDP.
@@ -697,7 +697,7 @@ export default defineBackground(() => {
         const [res] = await cx.scripting.executeScript({
           target: frameId != null ? { tabId: tab.id!, frameIds: [frameId] } : { tabId: tab.id! },
           world: "MAIN",
-          func: async (src: string, timeoutMs: number, maxLen: number, budgetMs: number, waitFactorySrc: string, domFactorySrc: string) => {
+          func: async (src: string, timeoutMs: number, maxLen: number, budgetMs: number, waitFactorySrc: string, domFactorySrc: string, readOnlyGuardSrc: string | null) => {
             // Absolute deadline handed to the evaluated code as `bcpDeadline`, so a
             // book expresses "run until you are nearly out of time" without ever
             // restating a millisecond budget of its own.
@@ -761,6 +761,13 @@ export default defineBackground(() => {
                 if (fn) break;
               }
               if (!fn) throw lastErr;
+              // A read-only evaluation (a plan's evalCheck) runs synchronously
+              // inside bcpReadOnlyGuard, which refuses every page effect and
+              // any Promise result; everything else may act and is awaited.
+              if (readOnlyGuardSrc != null) {
+                const runReadOnly = (new Function(`return (${readOnlyGuardSrc})`)() as () => (f: () => unknown) => unknown)();
+                return runReadOnly(() => fn!(...args));
+              }
               let v: unknown = fn(...args);
               if (v && typeof (v as { then?: unknown }).then === "function") v = await v; // await promises
               return v;
@@ -792,7 +799,7 @@ export default defineBackground(() => {
               return { ok: false, error: e instanceof Error ? e.message : String(e) };
             }
           },
-          args: [code, EVAL_TIMEOUT_MS, EVAL_MAX_LEN, EVAL_SAFE_BUDGET_MS, bcpWaitFactory.toString(), bcpDomHelpersFactory.toString()],
+          args: [code, EVAL_TIMEOUT_MS, EVAL_MAX_LEN, EVAL_SAFE_BUDGET_MS, bcpWaitFactory.toString(), bcpDomHelpersFactory.toString(), readOnly ? bcpReadOnlyGuard.toString() : null],
         });
         // res is undefined when the target frame vanished (navigation) — distinct from CSP.
         if (!res) {

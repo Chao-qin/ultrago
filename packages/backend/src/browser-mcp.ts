@@ -18,6 +18,7 @@ import { MUTATING, RECORDABLE_READS, TAB_SCOPED } from "./recordable-methods.js"
 import { extractArtifacts, extractOutputs, instantiateDeliveries } from "./delivery-executor.js";
 import type { DeliverySink } from "./console-delivery-client.js";
 import type { EventStore, RunFinishedEvent } from "./event-store.js";
+import { EventInbox } from "./event-inbox.js";
 import type { BrowserDispatcher } from "./browser-dispatcher.js";
 import type { BrowserSetupService } from "./browser-setup-service.js";
 import type { BrowserCall, BrowserLifecycle, BrowserRegistry, RawBrowserCall, ReadSnapshot } from "./browser-mcp-types.js";
@@ -53,6 +54,17 @@ export function createBrowserMcpServer(
 ): McpServer {
   const server = new McpServer({ name: "browser", version: "0.1.0" }, { instructions: BROWSER_INSTRUCTIONS });
   const readDumps = new PageReadDumpStore();
+
+  // Which events this session has been shown. Every tool registered below runs
+  // through this wrapper, so "since your previous tool call" means the same
+  // thing in every reply and in wait_for_event.
+  const inbox = new EventInbox(events);
+  const registerTool = server.registerTool.bind(server);
+  server.registerTool = ((name: string, toolConfig: unknown, cb: (...args: unknown[]) => unknown) =>
+    registerTool(name, toolConfig as never, ((...args: unknown[]) => {
+      inbox.beginCall();
+      return cb(...args);
+    }) as never)) as typeof server.registerTool;
 
   // ── Per-MCP-session routing state (this closure IS the session) ──────────
   /** Target this session drives; null = follow the backend's global default. */
@@ -311,27 +323,30 @@ export function createBrowserMcpServer(
   // from a non-target browser are attributable.
   const evLine = (e: BrowserEvent): string => (e.browser ? `[${e.browser}] ${e.summary}` : e.summary);
 
-  // Per-session piggyback cursor. Each drain returns only events NEW since this
-  // server's previous tool call, then advances the cursor. mcp-http creates one
-  // McpServer per MCP session, so this closure IS the per-session cursor state.
-  let lastSeenSeq = 0;
-  const drainEvents = (onTab?: number): string => {
-    const { events: evs, maxSeq } = events.since(lastSeenSeq);
-    lastSeenSeq = maxSeq; // advance past ALL events (don't re-surface others' later)
+  /** The events this session may see at all. Page events are scoped to this
+   * session's browser; topology events are global coordination signals —
+   * every agent should see them. One definition for replies, read_events and
+   * wait_for_event, so the three never disagree about what exists. */
+  const sessionSees = (): ((e: BrowserEvent) => boolean) => {
     const tgt = resolvedTarget();
-    // Page events are scoped to this session's browser; topology events are
-    // global coordination signals — every agent should see them.
-    const mine = evs
-      .filter((e) => !isAgentHiddenEvent(e.kind))
-      .filter((e) => isTopologyEvent(e.kind) || tgt == null || e.browser == null || e.browser === tgt.instanceId)
-      // …and, when the caller named a tab, to THAT tab. Filtering by browser
-      // alone meant every unrelated tab in the same Chrome poured its
-      // navigations into every reply: a measured session carried 21-22 events
-      // per page_state, all of them from a scratchpad file open in another tab.
-      // Tab-less events (-1) are worker-level and stay.
-      .filter((e) => onTab == null || isTopologyEvent(e.kind) || e.tabId < 0 || e.tabId === onTab);
+    return (e) =>
+      !isAgentHiddenEvent(e.kind) &&
+      (isTopologyEvent(e.kind) || tgt == null || e.browser == null || e.browser === tgt.instanceId);
+  };
+  /** The unseen events a reply about `onTab` carries, marked seen. Narrowed to
+   * that tab: filtering by browser alone meant every unrelated tab in the same
+   * Chrome poured its navigations into every reply (a measured session carried
+   * 21-22 events per page_state, all from a scratchpad file in another tab).
+   * Tab-less events (-1) are worker-level and stay. Events of other tabs stay
+   * unseen until a reply about their tab, read_events or wait_for_event. */
+  const drainEvents = (onTab?: number): string => {
+    const sees = sessionSees();
+    const mine = inbox.take((e) => sees(e) && (onTab == null || isTopologyEvent(e.kind) || e.tabId < 0 || e.tabId === onTab));
     if (!mine.length) return "";
-    return `\n⚠ ${mine.length} event(s) since your last call:\n${mine.map((e) => `  • ${evLine(e)}`).join("\n")}`;
+    const now = Date.now();
+    const line = (e: BrowserEvent) =>
+      `  • ${evLine(e)}${inbox.isEarlier(e) ? ` (earlier, ${Math.max(0, Math.round((now - e.ts) / 1000))}s ago)` : ""}`;
+    return `\n⚠ ${mine.length} unseen event(s):\n${mine.map(line).join("\n")}`;
   };
 
   registerLifecycleTools({
@@ -359,7 +374,7 @@ export function createBrowserMcpServer(
   registerDomTools({ server, call, deltaKey, drainEvents, readDumps, readSnapshot });
   registerCaptureTools({ server, call, deltaKey, drainEvents, captureWithLease, readDumps, readSnapshot });
   registerIoTools({
-    server, call, events, evLine, resolvedTarget, getLastSeenSeq: () => lastSeenSeq, deltaKey,
+    server, call, events, evLine, inbox, sessionSees, deltaKey,
     recordAsOne: (action, run) => (planRunner ? planRunner.asOneAction(action, run) : run()),
   });
 
@@ -383,11 +398,11 @@ export function createBrowserMcpServer(
     readContent: (planId, page) => call(RpcMethod.ReadContent, routePlaybackEvidence(planId, RpcMethod.ReadContent, { full: true }, page)),
     readNetwork: (planId, page) => call(RpcMethod.ReadNetwork, routePlaybackEvidence(planId, RpcMethod.ReadNetwork, {}, page)),
     snapshot: (planId, page) => call(RpcMethod.Snapshot, routePlaybackEvidence(planId, RpcMethod.Snapshot, {}, page)),
-    evalJs: (planId, code, page) => {
+    evalJs: (planId, code, readOnly, page) => {
       // Gate the runner's own eval on policy — call() reaches RpcMethod.Eval
       // directly, bypassing the eval TOOL's evalEnabled check, so enforce it here.
-      if (!config.evalEnabled) throw new Error(`evalCheck needs page JS — ${EVAL_DISABLED}`);
-      return call(RpcMethod.Eval, routePlaybackEvidence(planId, RpcMethod.Eval, { code }, page) as unknown as RpcContracts[typeof RpcMethod.Eval]["params"]);
+      if (!config.evalEnabled) throw new Error(`${readOnly ? "evalCheck" : "evalUntil"} needs page JS — ${EVAL_DISABLED}`);
+      return call(RpcMethod.Eval, routePlaybackEvidence(planId, RpcMethod.Eval, { code, readOnly }, page) as unknown as RpcContracts[typeof RpcMethod.Eval]["params"]);
     },
     setNetworkCapture: (planId, enabled, page) => call(RpcMethod.SetNetworkCapture, routePlaybackEvidence(planId, RpcMethod.SetNetworkCapture, { enabled }, page) as unknown as RpcContracts[typeof RpcMethod.SetNetworkCapture]["params"]).then(() => undefined),
     networkBodies: (planId, sinceSeq, page) => {

@@ -8,7 +8,7 @@
  */
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { RpcMethod, WAIT_FOR_DEFAULT_MS, WAIT_FOR_MAX_MS, type PageState, type SnapshotElement } from "@bcp/shared";
+import { RpcMethod, WAIT_FOR_DEFAULT_MS, WAIT_FOR_MAX_MS, type PageState, type SnapshotElement, TOOL_HINTS } from "@bcp/shared";
 import { config, EVAL_DISABLED } from "./config.js";
 import type { BrowserCall, ReadSnapshot } from "./browser-mcp-types.js";
 import { deltaGate, describeTarget, fail, gateNote, renderDelta, renderHistoryNav, renderPageState, renderReadDump, text } from "./browser-mcp-render.js";
@@ -144,6 +144,7 @@ export function registerDomTools({ server, call, deltaKey, drainEvents, readDump
   server.registerTool(
     "read_content_dump",
     {
+      annotations: TOOL_HINTS.read,
       description:
         "Read one file of the current read_content / analyze_page text dump, for when your own file reader cannot reach the backend host. Start with the manifest path from the reply, then read only the chunks you need. Only paths inside the current dump are accepted. This call does not delete the dump; your next browser tool call does.",
       inputSchema: {

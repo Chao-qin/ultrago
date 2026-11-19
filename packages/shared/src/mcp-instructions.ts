@@ -29,11 +29,39 @@
 import { LocalMethod, RpcMethod } from "./methods.js";
 import { EVAL_TIMEOUT_MS, NETWORK_LOG_PER_TAB, READ_DUMP_TTL_MS, WAIT_FOR_DEFAULT_MS, WAIT_FOR_MAX_MS } from "./limits.js";
 
+/**
+ * MCP tool annotations, declared for every tool next to its text so a client
+ * can tell reads from actions without parsing prose. All four are always set:
+ * - readOnlyHint: changes nothing the user can see or keep — pages, browser
+ *   state, files, recordings.
+ * - destructiveHint: may replace or discard something (an input value, the
+ *   current page, a file, a recording) rather than only add.
+ * - idempotentHint: repeating the call with the same arguments changes nothing more.
+ * - openWorldHint: may make the browser or backend contact external sites.
+ */
+export interface ToolHints {
+  readOnlyHint: boolean;
+  destructiveHint: boolean;
+  idempotentHint: boolean;
+  openWorldHint: boolean;
+}
+
+/** The common shapes; tools that fit none spell their own out. */
+export const TOOL_HINTS = {
+  /** Reads the page, the browser or this session's state. */
+  read: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  /** Acts on a page through its own handlers, which may submit, delete or navigate. */
+  pageAction: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  /** Sets this session's or the browser's routing state; nothing is lost. */
+  sessionSetting: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+} as const satisfies Record<string, ToolHints>;
+
 export interface McpToolInstruction {
   /** The registered MCP tool name. */
   name: string;
   description: string;
   params: Record<string, string>;
+  annotations: ToolHints;
 }
 
 const seconds = (ms: number): string => `${ms / 1000}s`;
@@ -70,6 +98,7 @@ const FIELD_EXACT_DOC = "Match name and near as whole strings (still case-insens
 export const MCP_TOOL_INSTRUCTIONS = {
   [RpcMethod.Navigate]: {
     name: "navigate",
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     description:
       "Load a URL in an existing tab (new_tab opens a new one). The reply flags a redirect to a different host or path. javascript:, data:, file:, blob: and vbscript: URLs are refused, as are hosts excluded by the backend's domain allow/block lists.",
     params: {
@@ -78,6 +107,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
   },
   [RpcMethod.NewTab]: {
     name: "new_tab",
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     description:
       "Open a new tab, optionally at a URL (same URL rules as navigate), and return its tab id. It opens in the background by default (always, in manual mode); claim:true also makes it this session's default tab (see claim_tab).",
     params: {
@@ -88,12 +118,14 @@ export const MCP_TOOL_INSTRUCTIONS = {
   },
   [RpcMethod.CloseTab]: {
     name: "close_tab",
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     description:
       "Close a tab — with no tabId, this session's claimed tab, else the active tab of the last-focused window. The reply names the tab it closed.",
     params: {},
   },
   [RpcMethod.NewWindow]: {
     name: "new_window",
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     description:
       "Open a new browser window and return its windowId and tabId — a separate workspace you drive by passing that tabId. It opens unfocused, but some platforms still raise it; restoreFocus:true puts the window the user was using back in front. A minimized window stops rendering, so prefer restoreFocus over minimized for a window you will drive.",
     params: {
@@ -109,6 +141,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
   },
   [RpcMethod.CloseWindow]: {
     name: "close_window",
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     description: "Close a window by id; with no windowId, the last-focused window (refused in manual mode — pass the id of a window you opened).",
     params: {
       windowId: "Window id from list_windows / new_window; omit for the last-focused window",
@@ -120,12 +153,14 @@ export const MCP_TOOL_INSTRUCTIONS = {
   [RpcMethod.ListTabs]: null,
   [RpcMethod.ListWindows]: {
     name: "list_windows",
+    annotations: TOOL_HINTS.read,
     description:
       "List the target browser's windows and their tabs (id, title, url): each window's visible tab is marked *, along with which window has OS focus (what the user is looking at) and each window's state. For every connected browser, modes and claims, use browser_state.",
     params: {},
   },
   [RpcMethod.Screenshot]: {
     name: "screenshot",
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     description:
       "Capture a tab's visible viewport as a PNG. Use it when the DOM cannot answer: icon-only controls, canvas or charts, layout and overlap questions, or an action that seemed to do nothing. Snapshot boxes (x,y w×h) are in the same viewport coordinates, and click({x, y}) acts on a point. " +
       "A background tab is briefly made the visible tab of its window, captured and switched back, without focusing the window (refused in manual mode). If Chrome is not rendering the window (minimized or covered), it is brought forward for one retry; the reply says whether the previous window could be put back in front.",
@@ -136,8 +171,9 @@ export const MCP_TOOL_INSTRUCTIONS = {
   },
   [RpcMethod.Snapshot]: {
     name: "snapshot",
+    annotations: TOOL_HINTS.read,
     description:
-      "List the page's interactable elements with [ref] handles, each with its state ([disabled], [hidden], [checked], [expanded], [invalid: …] …), viewport box (x,y w×h) and visual layer (@dialog:…, @fixed-…). Covers iframes (frame-prefixed refs) and open shadow roots. A ref stays valid while its element exists, and the reply lists the refs that are new since your last snapshot. Large pages are paged: narrow with query or viewportOnly, or continue with after. " +
+      "List the page's interactable elements with [ref] handles, each with its state ([disabled], [hidden], [checked], [expanded], [invalid: …] …), viewport box (x,y w×h) and visual layer (@dialog:…, @fixed-…). Covers iframes (frame-prefixed refs; elements in cross-origin frames have no box) and open shadow roots. A ref stays valid while its element exists, and the reply lists the refs that are new since your last snapshot. Large pages are paged: narrow with query or viewportOnly, or continue with after. " +
       "It has no page text (read_content), pixels (screenshot) or readiness and form state (page_state); analyze_page returns all of them.",
     params: {
       query: "Only elements whose role, name, value or options contain this text (case-insensitive), e.g. \"登录\" or \"textbox\"",
@@ -148,6 +184,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
   },
   [RpcMethod.Click]: {
     name: "click",
+    annotations: TOOL_HINTS.pageAction,
     description: `Click an element with a full pointer sequence. ${LOCATOR_RULES} A label with a risky word (submit, delete, pay, send, …) needs confirm:true.`,
     params: {
       ...LOCATOR_DOCS,
@@ -157,6 +194,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
   },
   [RpcMethod.Type]: {
     name: "type_text",
+    annotations: TOOL_HINTS.pageAction,
     description:
       "Replace a field's value with `text` (input, textarea or contenteditable); to insert without clearing, use paste_text. " +
       "Target the field by ref or by description — describe it with `name` (its label, placeholder or aria-label), since `text` is the value; a <label> resolves to its control. " +
@@ -177,6 +215,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
   },
   [RpcMethod.ReadContent]: {
     name: "read_content",
+    annotations: TOOL_HINTS.read,
     description:
       "Read the page's rendered text, top frame only — text inside iframes is missing here, so use snapshot or screenshot for it. " +
       "The text goes to temporary chunk files on the backend host; the reply gives a manifest path, chunk ranges and an outline. Read only the chunks you need, with your own file reader if it reaches the backend host, else with read_content_dump. " +
@@ -187,6 +226,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
   },
   [RpcMethod.WaitFor]: {
     name: "wait_for",
+    annotations: TOOL_HINTS.read,
     description:
       "Wait until `text` appears (top frame, case-sensitive), until a CSS `selector`'s element is visible or hidden, or — with neither — for a fixed `ms`. Give text or selector, not both. " +
       `When waiting on a condition, \`ms\` is the timeout (default ${WAIT_FOR_DEFAULT_MS}ms, max ${WAIT_FOR_MAX_MS}ms) and the reply says whether it was met. ` +
@@ -202,6 +242,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
   [RpcMethod.WaitSignal]: null,
   [RpcMethod.Eval]: {
     name: "eval",
+    annotations: TOOL_HINTS.pageAction,
     description:
       "Run JavaScript in the page's own context and return its JSON-serializable result — for what no other tool covers. A single expression is returned as is; multi-statement code needs `return`; top-level declarations don't leak onto window. A strict page CSP can block it. " +
       `Runs stop at ${seconds(EVAL_TIMEOUT_MS)} and oversized results are truncated. Injected helpers: ` +
@@ -216,6 +257,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
   },
   [RpcMethod.Download]: {
     name: "download",
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     description:
       "Download a URL to the browser's Downloads folder (exports, file links). The reply says whether it completed, failed or is still running, with the saved filename — Chrome renames on a name conflict. Same URL rules as navigate.",
     params: {
@@ -225,6 +267,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
   },
   [RpcMethod.SwitchTab]: {
     name: "switch_tab",
+    annotations: TOOL_HINTS.sessionSetting,
     description:
       "Show a tab to the user: make it the active tab and focus its window (no reload). Refused in manual mode. To work in a tab without showing it, pass its tabId to other tools or claim it with claim_tab.",
     params: {
@@ -233,6 +276,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
   },
   [RpcMethod.SelectOption]: {
     name: "select_option",
+    annotations: TOOL_HINTS.pageAction,
     description:
       "Set the selection of a native <select> by option value or visible label (exact, case-insensitive), replacing what was selected. For custom dropdowns use pick_option.",
     params: {
@@ -242,6 +286,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
   },
   [RpcMethod.PressKey]: {
     name: "press_key",
+    annotations: TOOL_HINTS.pageAction,
     description:
       'Send a key or chord (e.g. "Enter", "Escape", "ArrowDown", "Shift+Tab") to a [ref] element or the focused element. The page\'s key handlers run — Escape closes a modal, Enter submits a keydown-driven form — but browser defaults do not: Tab does not move focus, Control+a does not select, keys do not insert text (use type_text / paste_text). There is no confirm gate here.',
     params: {
@@ -251,21 +296,25 @@ export const MCP_TOOL_INSTRUCTIONS = {
   },
   [RpcMethod.GoBack]: {
     name: "go_back",
+    annotations: TOOL_HINTS.pageAction,
     description: "Go back one step in the tab's history. The reply says whether a navigation actually committed.",
     params: {},
   },
   [RpcMethod.GoForward]: {
     name: "go_forward",
+    annotations: TOOL_HINTS.pageAction,
     description: "Go forward one step in the tab's history. The reply says whether a navigation actually committed.",
     params: {},
   },
   [RpcMethod.Reload]: {
     name: "reload",
+    annotations: TOOL_HINTS.pageAction,
     description: "Reload the tab. The reply says whether a new document actually committed.",
     params: {},
   },
   [RpcMethod.Scroll]: {
     name: "scroll",
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     description:
       "Scroll the window or a scrollable container to reveal more content, including lazy-loaded lists. Returns the new position, what scrolled and whether more content remains. On a page with no DOM scroll container (canvas apps) it sends a wheel event instead and reports whether the page consumed it.",
     params: {
@@ -277,6 +326,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
   },
   [RpcMethod.Drag]: {
     name: "drag",
+    annotations: TOOL_HINTS.pageAction,
     description:
       'Drag one element onto another — two different elements, both by [ref] in the same frame. method "html5" (default) fires native drag-and-drop events, for sortable lists and boards built on the HTML5 API; "pointer" presses, moves and releases, for pointer/mouse-based libraries and sliders — try it when html5 had no effect. Neither carries a file (use upload_file) or can complete a human-verification slider.',
     params: {
@@ -288,6 +338,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
   },
   [RpcMethod.Upload]: {
     name: "upload_file",
+    annotations: TOOL_HINTS.pageAction,
     description:
       "Attach files to an <input type=file> without the OS file dialog. Source: `url` (fetched by the backend, http(s) only, private and loopback hosts refused, sent with a same-origin Referer), `localPath` (a file on the backend host) or `attachments` (a list of either); 25MB per file. " +
       "Target the input by ref, or describe the visible upload slot — a slot inside a <label> resolves to its input; otherwise use the input's [ref] (snapshot lists hidden inputs too). " +
@@ -311,6 +362,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
   },
   [RpcMethod.Hover]: {
     name: "hover",
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     description:
       `Move the pointer onto an element to reveal hover-only UI (tooltips, hover menus). ${LOCATOR_RULES} Read the page right away — hover UI closes on your next action. A menu that opens only through a CSS :hover rule cannot be triggered.`,
     params: { ...LOCATOR_DOCS },
@@ -319,6 +371,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
   [RpcMethod.ClickText]: null,
   [RpcMethod.ContextMenu]: {
     name: "right_click",
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     description:
       "Open a page's custom context menu (file trees, table rows, editors) by firing its contextmenu event; the browser's own menu cannot be opened. `defaultPrevented` in the reply means the page handled it — read the menu right away, it closes on your next action. " +
       LOCATOR_RULES,
@@ -326,6 +379,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
   },
   [RpcMethod.DblClick]: {
     name: "double_click",
+    annotations: TOOL_HINTS.pageAction,
     description:
       "Double-click an element — open a row, start inline editing, expand a tree node. Two click calls do not trigger dblclick handlers; this does. " +
       `${LOCATOR_RULES} Same confirm gate as click.`,
@@ -336,6 +390,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
   },
   [RpcMethod.Paste]: {
     name: "paste_text",
+    annotations: TOOL_HINTS.pageAction,
     description:
       "Paste text into a field as a clipboard paste, keeping its existing content: at the caret (replacing a selection) if the field had focus, else at the end. Use it for rich-text editors that build content from paste events, and for long text. `defaultPrevented` in the reply means the editor handled the paste itself. To replace a field's value, use type_text. " +
       "Target the field by ref or by description (name / role / css / near / nth); `text` is the content, not a locator.",
@@ -352,6 +407,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
   },
   [RpcMethod.ReadNetwork]: {
     name: "read_network",
+    annotations: TOOL_HINTS.read,
     description:
       `List the tab's recent XHR/fetch requests (method, URL, status; failures marked ✗), up to the last ${NETWORK_LOG_PER_TAB} since the extension's background worker started. Use it to confirm a save or submit reached the server with a 2xx instead of trusting the UI. ` +
       "Response bodies (JSON/text, truncated) appear only for requests made while set_network_capture was on — that is how you catch a 200 carrying a business error.",
@@ -361,6 +417,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
   },
   [RpcMethod.SetNetworkCapture]: {
     name: "set_network_capture",
+    annotations: TOOL_HINTS.sessionSetting,
     description:
       "Turn response-body capture on or off for a tab (default off). While on, the JSON/text bodies of new XHR/fetch responses are kept for read_network, across navigations of that tab. It patches the page's fetch and XHR, so turn it off when done.",
     params: {
@@ -369,6 +426,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
   },
   [RpcMethod.PageState]: {
     name: "page_state",
+    annotations: TOOL_HINTS.read,
     description:
       "One consistent read of a tab's state: url and title, loading, element count, scroll position, the focused control, a form summary (filled / required-empty / invalid / dirty), open dialogs, overlay or scroll lock, busy regions, visible errors, and `changed` since your last page_state on this tab. Cheap enough to call after every action to confirm it landed. No elements, text or pixels (snapshot, read_content, screenshot).",
     params: {

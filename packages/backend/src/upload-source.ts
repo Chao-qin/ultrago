@@ -1,11 +1,9 @@
 import { basename, extname, isAbsolute, resolve } from "node:path";
-import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
 import { readFile, stat } from "node:fs/promises";
 import { UPLOAD_MAX_BYTES } from '@bcp/shared';
 import type { UploadSource } from '@bcp/shared';
 import { setTimeout as delay } from 'node:timers/promises';
-import { domainAllowed } from "./config.js";
+import { fetchPublicUrl, PublicUrlRefused, type PublicFetchDeps, type PublicFetchResponse } from "./public-fetch.js";
 
 export { UPLOAD_MAX_BYTES };
 export type { UploadSource };
@@ -27,12 +25,9 @@ export interface ResolvedUploadSource {
   bytes: number;
 }
 
-export interface UploadSourceDeps {
-  /** Test seam; production deliberately defaults to the backend's fetch. */
-  fetch?: typeof fetch;
-  /** Test seam for public-host DNS validation; production uses real DNS. */
-  lookup?: (hostname: string) => Promise<{ address: string }>;
-}
+/** Test seams for name resolution and the address policy; production uses the
+ *  system resolver and refuses every non-public address. */
+export type UploadSourceDeps = PublicFetchDeps;
 
 export async function resolveUploadSources(sources: UploadSource[], deps: UploadSourceDeps = {}): Promise<ResolvedUploadSource[]> {
   return Promise.all(sources.map((source) => resolveUploadSource(source, deps)));
@@ -46,15 +41,12 @@ export async function resolveUploadSource(source: UploadSource, deps: UploadSour
 
   if (hasUrl) {
     const url = source.url!;
-    const d = domainAllowed(url);
-    if (!d.ok) throw new Error(d.reason);
-    await assertPublicHttpUrl(url, deps.lookup ?? lookup);
-    const { resp, buf } = await downloadUpload(url, deps.fetch ?? fetch);
+    const res = await downloadUpload(url, deps);
     return {
       filename: source.filename || url.split("/").pop()?.split(/[?#]/)[0] || "upload",
-      mimeType: source.mimeType || resp.headers.get("content-type")?.split(";")[0]?.trim() || guessMime(url),
-      dataBase64: buf.toString("base64"),
-      bytes: buf.length,
+      mimeType: source.mimeType || String(res.headers["content-type"] ?? "").split(";")[0]?.trim() || guessMime(url),
+      dataBase64: res.body.toString("base64"),
+      bytes: res.body.length,
     };
   }
 
@@ -91,32 +83,28 @@ const DOWNLOAD_ATTEMPTS = 3;
 const DOWNLOAD_TIMEOUT_MS = 15000;
 const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
 
-async function downloadUpload(url: string, fetchImpl: typeof fetch): Promise<{ resp: Response; buf: Buffer }> {
+async function downloadUpload(url: string, deps: PublicFetchDeps): Promise<PublicFetchResponse> {
   for (let attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt++) {
     let retryable = false;
     try {
-      const resp = await fetchImpl(url, {
-        headers: { Referer: new URL(url).origin + '/', 'User-Agent': UPLOAD_UA },
-        signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
-      });
-      if (!resp.ok) {
-        retryable = RETRYABLE_STATUS.has(resp.status);
-        await resp.body?.cancel();
-        throw new Error(`HTTP ${resp.status}${resp.url && resp.url !== url ? ` (redirected to ${resp.url})` : ''}`);
+      const res = await fetchPublicUrl(
+        url,
+        { headers: { Referer: new URL(url).origin + '/', 'User-Agent': UPLOAD_UA }, timeoutMs: DOWNLOAD_TIMEOUT_MS, maxBytes: UPLOAD_MAX_BYTES },
+        deps,
+      );
+      if (res.status < 200 || res.status >= 300) {
+        retryable = RETRYABLE_STATUS.has(res.status);
+        throw new Error(`HTTP ${res.status}${res.url !== url ? ` (redirected to ${res.url})` : ''}`);
       }
-      const declared = Number(resp.headers.get('content-length') || 0);
-      if (declared > UPLOAD_MAX_BYTES) {
-        await resp.body?.cancel();
-        throw new Error(`file too large (${declared}B > ${UPLOAD_MAX_BYTES}B cap)`);
-      }
-      const buf = Buffer.from(await resp.arrayBuffer());
-      if (buf.length > UPLOAD_MAX_BYTES) throw new Error(`file too large (${buf.length}B > ${UPLOAD_MAX_BYTES}B cap)`);
-      return { resp, buf };
+      return res;
     } catch (error) {
+      // A refused address or an oversized file is the same on every attempt.
+      if (error instanceof PublicUrlRefused) throw error;
       const cause = error instanceof Error ? error.cause : undefined;
-      const code = cause && typeof cause === 'object' && 'code' in cause ? String(cause.code) : '';
-      const transient = retryable || (error instanceof Error && error.name === 'TimeoutError') ||
-        /^(ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET|UND_ERR_BODY_TIMEOUT|UND_ERR_HEADERS_TIMEOUT)$/.test(code);
+      const code = error && typeof error === 'object' && 'code' in error ? String(error.code)
+        : cause && typeof cause === 'object' && 'code' in cause ? String(cause.code) : '';
+      const transient = retryable || (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) ||
+        /^(ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|EPIPE|ECONNABORTED)$/.test(code);
       if (!transient || attempt === DOWNLOAD_ATTEMPTS) {
         const message = error instanceof Error ? error.message : String(error);
         const detail = cause instanceof Error ? cause.message : cause ? String(cause) : '';
@@ -131,36 +119,4 @@ async function downloadUpload(url: string, fetchImpl: typeof fetch): Promise<{ r
 
 function guessMime(pathOrUrl: string): string {
   return MIME_BY_EXT[extname(pathOrUrl.split(/[?#]/)[0]).toLowerCase()] || "application/octet-stream";
-}
-
-function isPrivateIp(ip: string): boolean {
-  if (isIP(ip) === 4) {
-    const p = ip.split(".").map(Number);
-    return (
-      p[0] === 0 || p[0] === 10 || p[0] === 127 ||
-      (p[0] === 169 && p[1] === 254) ||
-      (p[0] === 172 && p[1] >= 16 && p[1] <= 31) ||
-      (p[0] === 192 && p[1] === 168)
-    );
-  }
-  const low = ip.toLowerCase();
-  return low === "::1" || low === "::" || low.startsWith("fe80") || low.startsWith("fc") || low.startsWith("fd");
-}
-
-async function assertPublicHttpUrl(raw: string, lookupImpl: (hostname: string) => Promise<{ address: string }>): Promise<void> {
-  let u: URL;
-  try {
-    u = new URL(raw);
-  } catch {
-    throw new Error("must be an absolute http(s) URL");
-  }
-  if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("only http(s) URLs are allowed");
-  const host = u.hostname.toLowerCase();
-  if (host === "localhost" || host.endsWith(".localhost")) throw new Error("refusing to fetch a loopback address");
-  if (isIP(host)) {
-    if (isPrivateIp(host)) throw new Error("refusing to fetch a private/loopback/link-local address");
-    return;
-  }
-  const { address } = await lookupImpl(host);
-  if (isPrivateIp(address)) throw new Error("refusing to fetch a host that resolves to a private/internal address");
 }
