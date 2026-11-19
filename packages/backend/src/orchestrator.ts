@@ -18,9 +18,11 @@ export interface EvidenceReader {
   readContent(planId: string, page?: string): Promise<{ text: string }>;
   readNetwork(planId: string, page?: string): Promise<{ requests: NetworkRequest[] }>;
   snapshot(planId: string, page?: string): Promise<{ elements: SnapshotElement[] }>;
-  /** Run a page JS expression (for `evalCheck`). Throws if eval is disabled by
-   * policy (BCP_EVAL) — the runner then fail-closes the check. */
-  evalJs(planId: string, code: string, page?: string): Promise<{ value: unknown }>;
+  /** Run a page JS expression for `evalCheck` (readOnly: true — run under the
+   * page-side read-only guard) or `evalUntil` (readOnly: false — may act).
+   * Throws if eval is disabled by policy (BCP_EVAL) — the runner then
+   * fail-closes the check. */
+  evalJs(planId: string, code: string, readOnly: boolean, page?: string): Promise<{ value: unknown }>;
   /** Toggle MAIN-world response-BODY capture for the target tab (for a
    * `networkOk.bodyIncludes` step: on at step entry, off once verified). */
   setNetworkCapture(planId: string, enabled: boolean, page?: string): Promise<void>;
@@ -81,6 +83,7 @@ export function hasCheckablePredicate(v: StepVerify): boolean {
     (v.elementValue != null && s(v.elementValue.name)) ||
     (v.networkOk != null && s(v.networkOk.urlIncludes)) ||
     (v.evalCheck != null && s(v.evalCheck.code)) ||
+    (v.evalUntil != null && s(v.evalUntil.code)) ||
     s(v.assert) ||
     s(v.visualAssert) ||
     v.noErrors === true ||
@@ -893,17 +896,23 @@ export class PlanRunner {
       }
     }
 
-    if (v.evalCheck != null) {
-      const { code, equals } = v.evalCheck;
+    // evalCheck reads (enforced page-side); evalUntil may act, so it runs
+    // last — every other predicate has already read the page it was given.
+    for (const [field, check, readOnly] of [
+      ["evalCheck", v.evalCheck, true],
+      ["evalUntil", v.evalUntil, false],
+    ] as const) {
+      if (check == null) continue;
+      const { code, equals } = check;
       try {
-        const { value } = await this.evidence.evalJs(planId, code, page);
+        const { value } = await this.evidence.evalJs(planId, code, readOnly, page);
         const ok = equals != null ? String(value) === equals : !!value;
         if (!ok)
           failed.push(
-            `evalCheck failed: \`${briefCode(code)}\` → ${JSON.stringify(value)} (wanted ${equals != null ? `= "${equals}"` : "truthy"})`,
+            `${field} failed: \`${briefCode(code)}\` → ${JSON.stringify(value)} (wanted ${equals != null ? `= "${equals}"` : "truthy"})`,
           );
       } catch (e) {
-        failed.push(`evalCheck could not run \`${briefCode(code)}\`: ${e instanceof Error ? e.message : String(e)}`);
+        failed.push(`${field} could not run \`${briefCode(code)}\`: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
 

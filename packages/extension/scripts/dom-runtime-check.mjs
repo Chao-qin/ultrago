@@ -669,16 +669,19 @@ async function main() {
     const { readFileSync } = await import("node:fs");
     const docs = readFileSync(pathResolve(HERE, "../../shared/src/mcp-instructions.ts"), "utf8");
     // The docs state the list once (CONFIRM_DOC, shared by click and double_click); any extra copy must match it.
-    const copies = [...docs.matchAll(/label contains one of: ([^.]+)\. Pass it only/g)].map((m) => m[1]);
+    const copies = [...docs.matchAll(/label contains a risky word: ([^(]+?) \(case-insensitive/g)].map((m) => m[1]);
     eq(copies.length >= 1 && copies.every((c) => c === copies[0]), true, "every copy of the confirm list is identical");
     const listed = copies[0];
     const risky = /const RISKY = (\/.+\/i);/.exec(runtimeSource) ?? /RISKY = (\/.+\/i);/.exec(runtimeSource);
     eq(!!listed && !!risky, true, "the documented confirm list and the RISKY gate are both found");
+    // A wording change in the docs must fail this check, not crash the harness past every later case.
+    if (listed && risky) {
     const gate = eval(risky[1]);
     const documented = listed.split(/[\/,\s]+/).filter(Boolean).join(" ").replace(/place order/, "place_order").replace(/sign out/, "sign_out").replace(/log out/, "log_out").split(" ").map((w) => w.replace("_", " "));
     for (const word of documented) eq(gate.test(word), true, `documented risky word "${word}" is gated`);
     const enforced = risky[1].slice(2, -3).split("|").map((w) => w.replace(/\\b/g, "").replace(/\\s\*/g, " "));
     for (const word of enforced) eq(documented.includes(word), true, `gated word "${word}" is documented`);
+    }
   }
 
   // A pointer drag dispatches at screen coordinates, so both ends must be on screen at once: scrolling the source
@@ -2284,6 +2287,83 @@ async function main() {
       match(p.verdict?.evidence?.join("; ") ?? "", /vendor fingerprint: geetest/, "C10 a geetest_-prefixed class names the vendor");
     },
   );
+
+  // R — evalCheck runs under bcpReadOnlyGuard. Each case drives the REAL guard source in a real page: reads
+  // pass, every class of page effect is refused (and the refusal names it), and the page is left exactly as it
+  // was — the swapped APIs are restored, so the page's own code keeps working after a refused check.
+  {
+    const guardSource = (await import(moduleUrl)).bcpReadOnlyGuard.toString();
+    await withPage(
+      `<form id="f"><input id="i" value="a"><button id="b" type="button">B</button></form>
+       <div id="s" style="height:50px;overflow:auto"><div style="height:500px"></div></div>`,
+      async () => {
+        const run = (body) => page.evaluate(([src, body]) => {
+          const guard = new Function(`return (${src})`)()();
+          try {
+            return { value: guard(new Function(body), body) };
+          } catch (e) {
+            return { error: String(e instanceof Error ? e.message : e) };
+          }
+        }, [guardSource, body]);
+        const r1 = await run("return document.getElementById('i').value + document.title.length");
+        eq(r1.value, "a0", "R1 a read passes and returns its value");
+        const refused = [
+          ["return document.getElementById('b').click()", /HTMLElement\.click\(\) is not allowed/, "R2 click"],
+          ["document.getElementById('i').value = 'x'; return true", /setting HTMLInputElement\.value is not allowed/, "R3 setting an input value"],
+          ["document.getElementById('s').scrollTop = 30; return true", /setting Element\.scrollTop is not allowed/, "R4 scrolling a container"],
+          ["return document.getElementById('i').focus()", /HTMLElement\.focus\(\) is not allowed/, "R5 focus"],
+          ["return document.body.dispatchEvent(new Event('x'))", /EventTarget\.dispatchEvent\(\) is not allowed/, "R6 dispatching an event"],
+          ["fetch('/x'); return true", /window\.fetch\(\) is not allowed/, "R7 fetch"],
+          ["localStorage.setItem('k', '1'); return true", /Storage\.setItem\(\) is not allowed/, "R8 storage writes"],
+          ["history.pushState(null, '', '#x'); return true", /History\.pushState\(\) is not allowed/, "R9 history"],
+          ["document.getElementById('b').setAttribute('data-x', '1'); return true", /changed the page \(1 DOM change/, "R10 a DOM write"],
+          ["document.body.append('t'); return true", /changed the page/, "R11 inserting a node"],
+          ["return Promise.resolve(true)", /must return its result synchronously/, "R12 a Promise result"],
+        ];
+        for (const [body, want, label] of refused) match((await run(body)).error ?? "(no error)", want, `${label} is refused by the read-only guard`);
+        const after = await page.evaluate(() => {
+          let clicks = 0;
+          const b = document.getElementById("b");
+          b.addEventListener("click", () => clicks++);
+          b.click();
+          document.getElementById("i").value = "z";
+          return { clicks, value: document.getElementById("i").value, attr: b.getAttribute("data-x"), fetchIsNative: /\[native code\]/.test(String(window.fetch)) };
+        });
+        eq(after.clicks, 1, "R13 click works again after a refused check (APIs restored)");
+        eq(after.value, "z", "R13 input value setter restored");
+        eq(after.attr, "1", "R13 the guard reports a DOM write; it does not undo it");
+        eq(after.fetchIsNative, true, "R13 window.fetch restored");
+        eq((await run("window.__probe = 1; return window.__probe")).value, 1, "R14 JS heap state is outside the guard (documented boundary)");
+
+        // Nothing may outlive the guarded window: deferred code would run after the APIs are restored.
+        await page.evaluate(() => { window.__lateClicks = 0; document.getElementById("b").addEventListener("click", () => window.__lateClicks++); });
+        match((await run("(async () => { await 0; document.getElementById('b').click(); })(); return true")).error ?? "(no error)",
+          /async \/ await is not allowed/, "R15 async code is refused before it runs");
+        const deferred = [
+          ["setTimeout(() => document.getElementById('b').click(), 0); return true", /window\.setTimeout\(\) is not allowed/, "R16 setTimeout"],
+          ["queueMicrotask(() => document.getElementById('b').click()); return true", /window\.queueMicrotask\(\) is not allowed/, "R17 queueMicrotask"],
+          ["Promise.resolve().then(() => document.getElementById('b').click()); return true", /Promise\.then\(\) is not allowed/, "R18 a promise callback"],
+          ["requestAnimationFrame(() => document.getElementById('b').click()); return true", /requestAnimationFrame\(\) is not allowed/, "R19 requestAnimationFrame"],
+        ];
+        for (const [body, want, label] of deferred) match((await run(body)).error ?? "(no error)", want, `${label} is refused by the read-only guard`);
+        await page.waitForTimeout(50);
+        eq(await page.evaluate(() => window.__lateClicks), 0, "R20 no deferred click ever happened");
+        eq((await run("return 'await approval'.length")).value, 14, "R21 'await' inside a string is not mistaken for async code");
+
+        const before = await page.evaluate(() => location.href);
+        match((await run("location.hash = 'x'; return true")).error ?? "(no error)", /navigating to .*#x is not allowed/, "R22 location.hash navigation is refused");
+        match((await run("location.assign('/elsewhere'); return true")).error ?? "(no error)", /navigating to .*\/elsewhere is not allowed/, "R23 location.assign is refused");
+        await page.waitForTimeout(200);
+        eq(await page.evaluate(() => location.href), before, "R24 a refused navigation did not happen");
+        match((await run("localStorage.k = '1'; return true")).error ?? "(no error)", /writing localStorage is not allowed/, "R25 a storage property write is refused");
+        eq(await page.evaluate(() => localStorage.getItem("k")), null, "R25 nothing was stored");
+        match((await run("indexedDB.open('x'); return true")).error ?? "(no error)", /IDBFactory\.open\(\) is not allowed/, "R26 IndexedDB is refused");
+        eq((await run("return localStorage.getItem('missing') === null && sessionStorage.length >= 0")).value, true, "R27 storage reads still work");
+        eq(await page.evaluate(() => new Promise((r) => setTimeout(() => r("ran"), 0))), "ran", "R28 timers work again after the check");
+      },
+      "https://guard.test/",
+    );
+  }
 
   await browser.close();
 

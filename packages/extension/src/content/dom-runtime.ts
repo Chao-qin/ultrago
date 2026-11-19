@@ -3731,3 +3731,152 @@ export function bcpWaitFactory(bcpDeadline: number) {
     },
   };
 }
+
+/**
+ * Read-only evaluation for a plan's `evalCheck`: runs `fn` and refuses any
+ * effect the page could show, send or keep.
+ *
+ * Self-contained (no imports, no closure over module state) for the same
+ * reason as the factories above: background.ts injects it as source, and
+ * `pnpm check:dom` runs this exact code in a real browser.
+ *
+ * Why this can be strict without guessing: the check runs synchronously, so
+ * no page code runs while it does — the only code executing is the check and
+ * whatever handlers the check itself triggers. So for that window every
+ * effectful browser API is swapped for one that throws, and a
+ * MutationObserver's pending records (taken synchronously at the end) are
+ * exactly the DOM changes the check caused.
+ *
+ * Nothing may outlive that window either: the source may not use async /
+ * await, and every way to schedule code for later (timers, microtasks,
+ * promise callbacks, message ports) is refused during it — otherwise the
+ * deferred part would run after the APIs are restored, unguarded.
+ *
+ * The boundary is "outside the JS heap": DOM, focus and scroll, input values,
+ * events, navigation (caught through the Navigation API, since `location`'s
+ * own properties cannot be swapped), network, storage, cookies and IndexedDB,
+ * history, dialogs, media and new windows. Plain JS state (`window.__x = …`)
+ * is not detected — check:books rejects it in bundled books.
+ * A check that has to act — click, scroll, wait — belongs in `evalUntil`.
+ */
+export function bcpReadOnlyGuard() {
+  const HINT = "use evalUntil for a check that has to act or wait";
+  /** `async` / `await` outside strings and comments: a deferred part the guard could not cover. */
+  const usesAsync = (src: string): boolean =>
+    /\b(async|await)\b/.test(
+      src.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*|'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`/g, " "),
+    );
+  return function runReadOnly<T>(fn: () => T, source = ""): T {
+    if (usesAsync(source)) throw new Error(`evalCheck must be synchronous — async / await is not allowed; ${HINT}`);
+    const restore: Array<() => void> = [];
+    const refuse = (what: string) =>
+      function (): never {
+        throw new Error(`evalCheck is read-only: ${what} is not allowed — ${HINT}`);
+      };
+    /** Swap a method (or a setter, when `setter` is true) for one that throws. */
+    const block = (owner: object | undefined, key: string, what: string, setter = false): void => {
+      if (!owner) return;
+      const d = Object.getOwnPropertyDescriptor(owner, key);
+      if (!d || !d.configurable) return;
+      if (setter) {
+        if (!d.set) return;
+        Object.defineProperty(owner, key, { ...d, set: refuse(what) });
+      } else {
+        if (typeof d.value !== "function") return;
+        Object.defineProperty(owner, key, { ...d, value: refuse(what) });
+      }
+      restore.push(() => Object.defineProperty(owner, key, d));
+    };
+    const g = globalThis as unknown as Record<string, { prototype?: object } | undefined>;
+    const proto = (name: string): object | undefined => g[name]?.prototype;
+
+    const methods: Array<[string, string[]]> = [
+      ["EventTarget", ["dispatchEvent"]],
+      ["HTMLElement", ["click", "focus", "blur", "showPopover", "hidePopover", "togglePopover"]],
+      ["Element", ["scrollIntoView", "scroll", "scrollTo", "scrollBy", "requestFullscreen", "requestPointerLock"]],
+      ["HTMLFormElement", ["submit", "requestSubmit", "reset"]],
+      ["XMLHttpRequest", ["open", "send"]],
+      ["WebSocket", ["send"]],
+      ["Navigator", ["sendBeacon"]],
+      ["Storage", ["setItem", "removeItem", "clear"]],
+      ["History", ["pushState", "replaceState", "back", "forward", "go"]],
+      ["HTMLMediaElement", ["play", "pause"]],
+      ["HTMLDialogElement", ["show", "showModal", "close"]],
+      ["IDBFactory", ["open", "deleteDatabase"]],
+      ["CacheStorage", ["open", "delete"]],
+      ["CookieStore", ["set", "delete"]],
+      ["MessagePort", ["postMessage"]],
+      ["Promise", ["then", "catch", "finally"]],
+    ];
+    for (const [cls, keys] of methods) for (const k of keys) block(proto(cls), k, `${cls}.${k}()`);
+    for (const k of [
+      "fetch", "open", "scroll", "scrollTo", "scrollBy", "alert", "confirm", "prompt", "print", "postMessage",
+      "setTimeout", "setInterval", "requestAnimationFrame", "requestIdleCallback", "queueMicrotask",
+    ])
+      block(window, k, `window.${k}()`);
+    const setters: Array<[string, string[]]> = [
+      ["Element", ["scrollTop", "scrollLeft"]],
+      ["HTMLInputElement", ["value", "checked", "indeterminate", "files"]],
+      ["HTMLTextAreaElement", ["value"]],
+      ["HTMLSelectElement", ["value", "selectedIndex"]],
+      ["HTMLOptionElement", ["selected"]],
+      ["Document", ["cookie"]],
+    ];
+    for (const [cls, keys] of setters) for (const k of keys) block(proto(cls), k, `setting ${cls}.${k}`, true);
+
+    // `localStorage.k = 1` writes through a named property, not setItem: hand
+    // out a view of each storage that refuses property writes.
+    for (const name of ["localStorage", "sessionStorage"]) {
+      const d = Object.getOwnPropertyDescriptor(window, name);
+      if (!d?.get || !d.configurable) continue;
+      let real: Storage;
+      try {
+        real = d.get.call(window) as Storage;
+      } catch {
+        continue; // opaque origin: no storage to protect
+      }
+      const view = new Proxy(real, {
+        get: (t, k) => {
+          const v = Reflect.get(t, k, t);
+          return typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(t) : v;
+        },
+        set: refuse(`writing ${name}`),
+        deleteProperty: refuse(`deleting from ${name}`),
+        defineProperty: refuse(`writing ${name}`),
+      });
+      Object.defineProperty(window, name, { ...d, get: () => view });
+      restore.push(() => Object.defineProperty(window, name, d));
+    }
+
+    // Navigation starts synchronously with a `navigate` event even when it is
+    // begun through `location`, whose properties cannot be swapped.
+    const navigation = (window as unknown as { navigation?: EventTarget }).navigation;
+    let navigatedTo: string | null = null;
+    const onNavigate = (e: Event) => {
+      const ev = e as Event & { destination?: { url?: string } };
+      navigatedTo = ev.destination?.url ?? "another page";
+      if (ev.cancelable) ev.preventDefault();
+    };
+    navigation?.addEventListener("navigate", onNavigate);
+    restore.push(() => navigation?.removeEventListener("navigate", onNavigate));
+
+    const observer = new MutationObserver(() => {});
+    observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+    try {
+      const value = fn();
+      if (navigatedTo) throw new Error(`evalCheck is read-only: navigating to ${navigatedTo} is not allowed — ${HINT}`);
+      if (value && typeof (value as { then?: unknown }).then === "function")
+        throw new Error(`evalCheck must return its result synchronously, not a Promise — ${HINT}`);
+      const changes = observer.takeRecords();
+      if (changes.length) {
+        const first = changes[0]!.target;
+        const where = first instanceof Element ? first.tagName.toLowerCase() : first.nodeName.toLowerCase();
+        throw new Error(`evalCheck is read-only but changed the page (${changes.length} DOM change(s), first on <${where}>) — ${HINT}`);
+      }
+      return value;
+    } finally {
+      observer.disconnect();
+      for (let i = restore.length - 1; i >= 0; i--) restore[i]!();
+    }
+  };
+}

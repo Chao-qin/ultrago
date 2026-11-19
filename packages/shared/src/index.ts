@@ -86,8 +86,14 @@
  * with one difference worth naming: a stale extension fails here as
  * `bcpDom.setFiles is not a function`, INSIDE a book's own try/catch, on the
  * step that uploads a CSV to a live shop. That reads as "抖店 rejected the
- * file", not as "your extension is old". Reject at the handshake. */
-export const PROTOCOL_VERSION = 10;
+ * file", not as "your extension is old". Reject at the handshake.
+ *
+ * v11: `browser.eval` takes `readOnly`, which the plan runner sets for every
+ * `evalCheck` so the page side runs it under bcpReadOnlyGuard. A stale
+ * extension ignores the flag and runs the check unguarded — the check still
+ * passes or fails, so nothing would ever show that the guard is missing.
+ * Reject at the handshake. */
+export const PROTOCOL_VERSION = 11;
 export const DEFAULT_PORT = 8787;
 
 /** JSON-compatible value used by cross-package event contracts. */
@@ -392,8 +398,10 @@ export interface RpcContracts {
   [RpcMethod.Eval]: {
     /** Runs in the page's MAIN world — an MV3 extension's CSP forbids eval/new Function
      *  in the isolated world, so page context is the only place arbitrary code can run.
-     *  frameId targets a same-origin frame; omit for the top frame. */
-    params: TabTarget & { code: string; frameId?: number };
+     *  frameId targets one frame (the number before "_" in a frame-prefixed ref); omit for the top frame.
+     *  readOnly runs the code synchronously under bcpReadOnlyGuard — the plan runner's evalCheck — so any
+     *  page effect or a Promise result is refused instead of performed. */
+    params: TabTarget & { code: string; frameId?: number; readOnly?: boolean };
     /** JSON-serializable return value of the evaluated expression (or null).
      *  truncated is set when the serialized result exceeded the size cap. */
     result: { value: unknown; truncated?: boolean };
@@ -900,11 +908,21 @@ export interface StepVerify {
   /** Run a JS expression in the page (MAIN world) and gate on its value — the
    * runner runs it ITSELF, so this is runner-verified (stronger than `assert`),
    * with arbitrary expressiveness for what the structured predicates can't say
-   * (a computed value, JS state, a canvas value via a page API). READ-only — do
-   * NOT mutate (that would forge the very evidence). Refused when the backend runs with BCP_EVAL=off; a
+   * (a computed value, JS state, a canvas value via a page API). Read-only and
+   * synchronous, enforced: it runs under bcpReadOnlyGuard, which fails the check
+   * on any DOM change, input, event, scroll, navigation, network, storage or
+   * history call, on async/await or work scheduled for later, or a Promise
+   * result — a check that changed the page would forge the very
+   * evidence it reports. Refused when the backend runs with BCP_EVAL=off; a
    * strict page CSP can block it. `equals` → String(value) === equals; omit
    * `equals` → the value must be truthy. */
   evalCheck?: { code: string; equals?: string };
+  /** Page JS that may ACT (click, scroll, wait with bcpWait) and is gated the
+   * same way as `evalCheck`. It runs on every advance and every retry, so a
+   * step can drive a page forward one round per attempt until the code
+   * reports done — keep it safe to repeat. Not read-only and not behind the
+   * confirm gate. Evaluated right after `evalCheck`, last of all predicates. */
+  evalUntil?: { code: string; equals?: string };
   /** page_state.errorCount === 0. */
   noErrors?: boolean;
   /** page_state.loading === false (the page has settled/hydrated). */

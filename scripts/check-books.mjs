@@ -25,6 +25,7 @@
 import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { dirname, resolve, basename } from "node:path";
 import { fileURLToPath } from "node:url";
+import { verifySideEffect } from "./lib/verify-effects.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -123,6 +124,8 @@ const evalSites = (pb, file) => {
     }
     const vc = step.verify?.evalCheck?.code;
     if (typeof vc === "string") out.push({ file, step: i + 1, where: "verify.evalCheck", code: vc });
+    const vu = step.verify?.evalUntil?.code;
+    if (typeof vu === "string") out.push({ file, step: i + 1, where: "verify.evalUntil", code: vu });
   });
   return out;
 };
@@ -189,6 +192,20 @@ for (const f of bookFiles) {
       `eval 代码不是合法 JS：${syntaxErr}。常见原因是代码里写了 // 注释又被压成单行 —— 用 /* */ 或把注释放到生成脚本里`,
     );
     if (syntaxErr) continue;
+
+    // ── evalCheck 只读 ──
+    // verify 里的 evalCheck 是证据：它改了页面，证明的就是它自己造出来的状态。运行时
+    // 有 bcpReadOnlyGuard 拦截，这里在 book 提交前就拦下同样的写法，外加运行时看不见的
+    // `window.__x = …` 页面状态写入。真要边验证边推进（点击、滚动、等待）的，写进
+    // verify.evalUntil —— 那是明确允许动手、每次重试都会再跑一遍的字段。
+    if (site.where === "verify.evalCheck") {
+      const effect = verifySideEffect(probe);
+      check(
+        `${site.file} step ${site.step} (${site.where}) · 只读`,
+        effect === null,
+        effect ? `evalCheck 必须只读且同步，这里有${effect.what}（\`${effect.snippet}\`）—— 需要动手或等待的检查改用 verify.evalUntil` : "",
+      );
+    }
 
     // ── 自己声明 bcpDeadline / bcpWait 会让注入静默失效 ──
     // 运行时按【参数最多 → 最少】的阶梯编译：先试 (bcpDeadline, bcpWait)，

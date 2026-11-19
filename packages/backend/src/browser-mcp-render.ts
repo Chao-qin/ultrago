@@ -418,6 +418,8 @@ export function describeVerify(v: StepVerify): string {
     );
   if (v.evalCheck != null)
     parts.push(`eval \`${v.evalCheck.code}\` ${v.evalCheck.equals != null ? `= "${v.evalCheck.equals}"` : "truthy"}`);
+  if (v.evalUntil != null)
+    parts.push(`eval-until (acts each try) \`${v.evalUntil.code}\` ${v.evalUntil.equals != null ? `= "${v.evalUntil.equals}"` : "truthy"}`);
   if (v.noErrors) parts.push("no page errors");
   if (v.settled) parts.push("page settled");
   if (v.dialogOpen) parts.push("a dialog is open");

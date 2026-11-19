@@ -16,6 +16,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
+import { verifySideEffect } from "./lib/verify-effects.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BOOKS_DIR = resolve(ROOT, "resource/playbooks");
@@ -44,7 +45,6 @@ const R = {
   setTimeout: /setTimeout\s*\(/g,
   bcpWait: /bcpWait\.(\w+)/g,
   // 赋值：排除 == / ===，否则只读比较会被算成写
-  sideEffect: /\.click\s*\(|scrollTop\s*=(?!=)|scrollIntoView|window\.__\w+\s*=(?!=)/,
   winState: /window\.__\w+\s*=(?!=)/g,
   dataModule: /\[data-module[=~|^$*]?=?/g,
   classSel: /querySelector(?:All)?\s*\(\s*['"`][^'"`]*\./g,
@@ -57,7 +57,7 @@ const stats = {
   books: files.length, steps: 0, evalSites: 0,
   actions: {}, verbs: {}, weakVerify: 0, verifiedSteps: 0,
   handPoll: 0, infLoopWithClock: 0, setTimeout: 0, bcpWait: {},
-  sideEffectVerify: 0, evalCheckSegs: 0,
+  sideEffectVerify: 0, evalCheckSegs: 0, evalUntilSegs: 0,
   winStateWrites: 0, riskConfirm: 0,
   navStepsWithWaitVerify: 0, navSteps: 0,
   querySel: 0, dataModule: 0, classSel: 0, roleSel: 0,
@@ -98,11 +98,17 @@ for (const f of files) {
     if (typeof vc === "string") {
       codes.push(["verify.evalCheck", vc]);
       stats.evalCheckSegs++;
-      if (R.sideEffect.test(vc)) {
+      const effect = verifySideEffect(vc);
+      if (effect) {
         stats.sideEffectVerify++;
         if (samples.sideEffect.length < 4)
-          samples.sideEffect.push(`${name} step ${i + 1} · ${vc.match(R.sideEffect)[0]}`);
+          samples.sideEffect.push(`${name} step ${i + 1} · ${effect.snippet}`);
       }
+    }
+    const vu = step.verify?.evalUntil?.code;
+    if (typeof vu === "string") {
+      codes.push(["verify.evalUntil", vu]);
+      stats.evalUntilSegs++;
     }
     for (const [where, code] of codes) {
       stats.evalSites++;
@@ -141,7 +147,8 @@ console.log("\n规则 → 违规存量 → 执法者");
 row("§3 手写轮询（循环头带钟）", stats.handPoll, "check:books · HAND_POLL");
 row("§3 无限循环+钟", stats.infLoopWithClock, "check:books · HAND_POLL_INF");
 row("§3 裸 setTimeout", stats.setTimeout, "（未单独执法）");
-row("§4 verify 带副作用", `${stats.sideEffectVerify}/${stats.evalCheckSegs}`, "无 —— 靠自觉");
+row("§4 evalCheck 带副作用", `${stats.sideEffectVerify}/${stats.evalCheckSegs}`, "check:books · 只读 + 运行时 bcpReadOnlyGuard");
+row("§4 evalUntil（明确允许动手的 verify）", stats.evalUntilSegs, "—");
 row("§5 verify 只含弱谓词", `${stats.weakVerify}/${stats.verifiedSteps}`, "check:books · WEAK_VERIFY");
 row("§5.5 开窗步骤 verify 含等待判据", `${stats.navStepsWithWaitVerify}/${stats.navSteps}`, "无 —— 靠 review");
 row("§8 写 window.__ 跨步骤状态", stats.winStateWrites, "无");

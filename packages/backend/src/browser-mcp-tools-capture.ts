@@ -92,7 +92,7 @@ export interface CaptureToolDeps {
   server: McpServer;
   call: BrowserCall;
   deltaKey: string;
-  drainEvents: (onTab?: number) => string;
+  drainEvents: () => string;
   /** Screenshot behind the per-browser foreground lease (switch → shoot → restore). */
   captureWithLease: (tabIdParam: number | undefined) => Promise<RpcContracts[typeof RpcMethod.Screenshot]["result"]>;
   readDumps: PageReadDumpStore;
@@ -104,6 +104,7 @@ export function registerCaptureTools({ server, call, deltaKey, drainEvents, capt
   server.registerTool(
     "analyze_page",
     {
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
       description:
         "Everything about a tab in one call, for an unfamiliar, visual or confusing page: open tabs, page_state in detail, snapshot (paged on large pages — the reply says how to continue), a text dump manifest (as read_content: read the chunks you need before your next browser tool call) and a screenshot. If one part fails, such as the screenshot in manual mode, the rest is still returned. It is the most expensive read; when one question needs answering, page_state, snapshot or screenshot is cheaper.",
       inputSchema: {
@@ -178,7 +179,7 @@ export function registerCaptureTools({ server, call, deltaKey, drainEvents, capt
             content: [
               {
                 type: "text" as const,
-                text: `## Open tabs\n${tabLines}${stateSection}\n\n## Accessibility snapshot\n${snapshotText}\n\n## Visible text content\n${visibleText}\n\n## Screenshot\n(skipped: ${shotOrErr.msg})${drainEvents(tabId)}`,
+                text: `## Open tabs\n${tabLines}${stateSection}\n\n## Accessibility snapshot\n${snapshotText}\n\n## Visible text content\n${visibleText}\n\n## Screenshot\n(skipped: ${shotOrErr.msg})${drainEvents()}`,
               },
             ],
           };
@@ -204,7 +205,7 @@ export function registerCaptureTools({ server, call, deltaKey, drainEvents, capt
 
         return {
           content: [
-            { type: "text" as const, text: `## Open tabs\n${tabLines}${stateSection}\n\n## Accessibility snapshot\n${snapshotText}\n\n## Visible text content\n${visibleText}${shot.warning ? `\n\nWARNING: ${shot.warning}` : ""}${activationNote(shot) && !saveScreenshot ? `\n\n${activationNote(shot)}` : ""}${drainEvents(tabId)}` },
+            { type: "text" as const, text: `## Open tabs\n${tabLines}${stateSection}\n\n## Accessibility snapshot\n${snapshotText}\n\n## Visible text content\n${visibleText}${shot.warning ? `\n\nWARNING: ${shot.warning}` : ""}${activationNote(shot) && !saveScreenshot ? `\n\n${activationNote(shot)}` : ""}${drainEvents()}` },
             screenshotContent,
           ],
         };

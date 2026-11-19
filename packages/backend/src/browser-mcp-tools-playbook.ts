@@ -12,7 +12,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { LocalMethod, MCP_TOOL_INSTRUCTIONS, RpcMethod, validateBookV2, type BrowserTarget, type ParamMap, type PickOptionParams, type Playbook, type PlanStep } from "@bcp/shared";
+import { LocalMethod, MCP_TOOL_INSTRUCTIONS, RpcMethod, validateBookV2, type BrowserTarget, type ParamMap, type PickOptionParams, type Playbook, type PlanStep, TOOL_HINTS } from "@bcp/shared";
 import { config, EVAL_DISABLED, LOCAL_EVAL_DISABLED } from "./config.js";
 import { applyParamDefaults, instantiateSteps, listPlaybooks, loadPlaybook, savePlaybook, validatePlaybookParams } from "./playbook.js";
 import { materializePlaybookUpload } from "./playbook-upload.js";
@@ -56,6 +56,7 @@ export function registerPlaybookTools({
   server.registerTool(
     "local_eval",
     {
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
       description:
         "Run JavaScript in the backend process — not the page (that is eval) — over `results`, the values of this plan's finished steps, to build an artifact such as a report; save it with write_file in the next step. `results` has one {index, goal, method, value} per finished step that performed exactly one action; an eval step's data is at .value.value. A single expression is returned; otherwise use `return`. Call advance afterwards. While recording, it becomes the step's action and run_playbook replays it. Refused when the backend runs with BCP_LOCAL_EVAL=off or the desktop client's 「允许本机脚本」 is off.",
       inputSchema: {
@@ -80,6 +81,7 @@ export function registerPlaybookTools({
   server.registerTool(
     "write_file",
     {
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
       description:
         "Write the previous step's value (usually local_eval output; anything but a string is written as JSON) to reports/<path> in the backend's working directory. A path outside reports/ is refused, and so is a previous step without a single value. Call advance afterwards. While recording, it becomes the step's action and run_playbook replays it.",
       inputSchema: {
@@ -102,6 +104,7 @@ export function registerPlaybookTools({
   server.registerTool(
     "list_playbooks",
     {
+      annotations: TOOL_HINTS.read,
       description:
         "List the saved playbooks: name, goal, the {{slot}} params each expects, and step count. Check here before driving or recording a repeated task from scratch; run_playbook needs the exact name and those params.",
       inputSchema: {},
@@ -124,6 +127,7 @@ export function registerPlaybookTools({
   server.registerTool(
     "run_playbook",
     {
+      annotations: TOOL_HINTS.pageAction,
       description:
         'Run a saved playbook, filling its {{slot}} params. mode "assisted" (default) loads it as a plan: you perform each step (the reply gives the tool and arguments) and advance checks it. mode "auto" runs it without you and pauses only at a risk:"confirm" step (before acting, on every run), an assert / visualAssert (a screenshot is attached for a visual one), or a step with neither a recorded action nor a wait; do what the pause asks, then call again with resumePlanId. A step whose verify still fails after its retries ends the run: it cannot be resumed and its tabs are closed (kept when the backend runs with BCP_KEEP_FAILED_TABS=1) — fix the cause and start again.',
       inputSchema: {

@@ -8,7 +8,7 @@
  */
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { RpcMethod, WAIT_FOR_DEFAULT_MS, WAIT_FOR_MAX_MS, type PageState, type SnapshotElement } from "@bcp/shared";
+import { RpcMethod, WAIT_FOR_DEFAULT_MS, WAIT_FOR_MAX_MS, type PageState, type SnapshotElement, TOOL_HINTS } from "@bcp/shared";
 import { config, EVAL_DISABLED } from "./config.js";
 import type { BrowserCall, ReadSnapshot } from "./browser-mcp-types.js";
 import { deltaGate, describeTarget, fail, gateNote, renderDelta, renderHistoryNav, renderPageState, renderReadDump, text } from "./browser-mcp-render.js";
@@ -20,7 +20,7 @@ export interface DomToolDeps {
   server: McpServer;
   call: BrowserCall;
   deltaKey: string;
-  drainEvents: (onTab?: number) => string;
+  drainEvents: () => string;
   readDumps: PageReadDumpStore;
   readSnapshot: ReadSnapshot;
 }
@@ -41,7 +41,7 @@ export function registerDomTools({ server, call, deltaKey, drainEvents, readDump
       try {
         const r = await readSnapshot(tabId, { query, viewportOnly, limit, after });
         const more = r.moreBelow ? "\n\n↓ more content below the fold — use scroll to load/see it" : "";
-        return text(`# ${r.title}\n${r.url}\n\n${r.text}${more}${drainEvents(tabId)}`);
+        return text(`# ${r.title}\n${r.url}\n\n${r.text}${more}${drainEvents()}`);
       } catch (e) {
         return fail(e);
       }
@@ -59,7 +59,7 @@ export function registerDomTools({ server, call, deltaKey, drainEvents, readDump
     async ({ tabId, verbosity, resetDelta }) => {
       try {
         const s = await call(RpcMethod.PageState, { tabId, verbosity, resetDelta, deltaKey });
-        return text(renderPageState(s) + drainEvents(s.tabId));
+        return text(renderPageState(s) + drainEvents());
       } catch (e) {
         return fail(e);
       }
@@ -134,7 +134,7 @@ export function registerDomTools({ server, call, deltaKey, drainEvents, readDump
           overview: r.overview,
           maxChars,
         });
-        return text(`# ${r.title}\n${r.url}\n\n${renderReadDump(dump)}${drainEvents(tabId)}`);
+        return text(`# ${r.title}\n${r.url}\n\n${renderReadDump(dump)}${drainEvents()}`);
       } catch (e) {
         return fail(e);
       }
@@ -144,6 +144,7 @@ export function registerDomTools({ server, call, deltaKey, drainEvents, readDump
   server.registerTool(
     "read_content_dump",
     {
+      annotations: TOOL_HINTS.read,
       description:
         "Read one file of the current read_content / analyze_page text dump, for when your own file reader cannot reach the backend host. Start with the manifest path from the reply, then read only the chunks you need. Only paths inside the current dump are accepted. This call does not delete the dump; your next browser tool call does.",
       inputSchema: {

@@ -178,7 +178,7 @@ test("注入消失 + 本次宣告 + 确有提交 → 判定为「动作导致了
     throw new Error("Frame with ID 0 was removed");
   });
   const r = await h.dispatch(RpcMethod.Click, { ref: "e1" });
-  assert.deepEqual(r, { ok: true, delta: { urlChanged: "https://after/" } });
+  assert.deepEqual(r, { ok: true, delta: { urlChanged: "https://after/" }, tabId: 1 });
 });
 
 test("宣告了但没有提交 → 不许判成功（取消的导航也会宣告）", async () => {
@@ -303,11 +303,18 @@ test("DOM op 返回 error 时抛出带诊断的错误", async () => {
 test("resolved 挂在结果旁边，而不是另开一个协议字段", async () => {
   const h = harness();
   h.setExec(async () => [{ frameId: 0, result: { value: { ok: true }, resolved: { ref: "e1" } } }]);
-  assert.deepEqual(await h.dispatch(RpcMethod.Click, { ref: "e1" }), { ok: true, resolved: { ref: "e1" } });
+  assert.deepEqual(await h.dispatch(RpcMethod.Click, { ref: "e1" }), { ok: true, resolved: { ref: "e1" }, tabId: 1 });
 });
 
 test("没有 resolved 时原样返回 value", async () => {
   const h = harness();
   h.setExec(async () => [{ frameId: 0, result: { value: "plain" } }]);
   assert.equal(await h.dispatch(RpcMethod.Click, { ref: "e1" }), "plain");
+});
+
+test("每个 DOM 操作都报回它实际操作的标签页 —— 后端据此决定回复附带哪个标签页的事件", async () => {
+  const h = harness();
+  h.setExec(async () => [{ frameId: 0, result: { value: { ok: true } } }]);
+  assert.equal((await h.dispatch(RpcMethod.Click, { ref: "e1" }) as { tabId?: number }).tabId, 1, "不传 tabId：报回当时解析出的活动页");
+  assert.equal((await h.dispatch(RpcMethod.Click, { ref: "e1", tabId: 7 }) as { tabId?: number }).tabId, 7, "传了 tabId：报回所传的那个");
 });

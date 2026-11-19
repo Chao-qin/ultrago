@@ -205,7 +205,7 @@
     {
       "goal": "条件门1:标题模块到位(页面已渲染),并初始化采集暂存",
       "verify": {
-        "evalCheck": {
+        "evalUntil": {
           "code": [
             "(() => {",
             "  const st = (window.__bcp1688 = window.__bcp1688 || {});",
@@ -249,7 +249,7 @@
     {
       "goal": "条件门2:通用 SKU 采集——末位维度卡片取价格/库存,前置维度逐个点击遍历(每次重试点一个),直到所有维度值走完且数量不再增长;没有 SKU 模块则记空放行",
       "verify": {
-        "evalCheck": {
+        "evalUntil": {
           "code": [
             "(() => {",
             "  const vis = bcpDom.visible;",
@@ -441,7 +441,7 @@
     {
       "goal": "展开已售罄 SKU:逐个切换前置规格值并展开页面折叠的售罄 SKU 卡",
       "verify": {
-        "evalCheck": {
+        "evalUntil": {
           "code": [
             "(async () => {",
             "  const vis = bcpDom.visible;",
@@ -513,7 +513,7 @@
     {
       "goal": "SKU 加载预热:逐个选择前置规格值并等待末级 SKU 卡渲染，避免切换后的空 DOM 被误判为无货",
       "verify": {
-        "evalCheck": {
+        "evalUntil": {
           "code": [
             "(async () => {",
             "  const vis = bcpDom.visible;",
@@ -587,7 +587,7 @@
     {
       "goal": "SKU 覆盖校验:遍历每个前置规格组合并读取末级 SKU 卡，未访问或无卡片的组合均不放行",
       "verify": {
-        "evalCheck": {
+        "evalUntil": {
           "code": [
             "(() => {",
             "  const vis = bcpDom.visible;",
@@ -771,7 +771,7 @@
     {
       "goal": "条件门3:滚动累积主图(排掉 url(undefined) 幻影图),直到两次不再增长",
       "verify": {
-        "evalCheck": {
+        "evalUntil": {
           "code": [
             "(() => {",
             "  const vis = bcpDom.visible;",
@@ -881,7 +881,7 @@
     {
       "goal": "条件门4:将详情宿主(V-DETAIL-*)滚入视口触发懒加载,累积 shadowRoot 内 #detail img,直到两次不再增长;没有详情模块则记空放行",
       "verify": {
-        "evalCheck": {
+        "evalUntil": {
           "code": [
             "(() => {",
             "  const st = window.__bcp1688;",

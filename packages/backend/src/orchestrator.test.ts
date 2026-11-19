@@ -95,6 +95,51 @@ test("evalCheck 验证不算作这一步的动作 —— 出参步必须留在 r
   assert.equal(trace[1].phase, "verify", "verify 的 eval 必须标出来，否则排障时分不清");
 });
 
+// ── evalCheck 只读 / evalUntil 可动手 ──────────────────────────────────
+// evalCheck 是证据，页面侧以只读方式执行（readOnly: true 交给 bcpReadOnlyGuard）；
+// evalUntil 明确允许动手，必须以非只读方式执行，并且排在所有判据之后 —— 其余判据
+// 读的是它动手之前的页面。两个字段的 readOnly 标志一旦传反，一个会把证据变成动作，
+// 另一个会把内置剧本的推进循环全部拦死。
+test("evalCheck 以只读方式求值，evalUntil 可动手且最后执行", async () => {
+  const calls: Array<{ code: string; readOnly: boolean }> = [];
+  const runner = new PlanRunner({
+    ...evidence,
+    evalJs: async (_planId, code, readOnly) => {
+      calls.push({ code, readOnly });
+      return { value: true };
+    },
+  } satisfies EvidenceReader);
+  const { planId } = await runner.create("g", [{
+    goal: "s",
+    verify: { evalUntil: { code: "act()" }, evalCheck: { code: "read()" } },
+  }]);
+  const result = await runner.advance(planId);
+  assert.equal(result.kind, "complete");
+  assert.deepEqual(calls, [
+    { code: "read()", readOnly: true },
+    { code: "act()", readOnly: false },
+  ]);
+});
+
+test("evalUntil 不成立时报出字段名，并按 onFail 重试", async () => {
+  let round = 0;
+  const runner = new PlanRunner({
+    ...evidence,
+    evalJs: async () => ({ value: ++round >= 2 }),
+  } satisfies EvidenceReader);
+  const { planId } = await runner.create("g", [{ goal: "s", verify: { evalUntil: { code: "step()" } }, onFail: "retry", maxRetries: 3 }]);
+  const first = await runner.advance(planId);
+  assert.equal(first.kind, "retry");
+  assert.match(JSON.stringify(first), /evalUntil failed/);
+  assert.equal((await runner.advance(planId)).kind, "complete");
+});
+
+test("只有 evalUntil 的 verify 是有效判据，空 code 不是", async () => {
+  const runner = new PlanRunner(evidence);
+  await assert.doesNotReject(runner.create("g", [{ goal: "s", verify: { evalUntil: { code: "x()" } } }]));
+  await assert.rejects(runner.create("g", [{ goal: "s", verify: { evalUntil: { code: " " } } }]));
+});
+
 // ── textPresent 的归一化 ────────────────────────────────────────────────
 // 真实事故（2026-09-14）：doudian-image-text-publish step 12 把正文 paste 进抖店的
 // editor-kit 编辑器，内容一字不差地落地了，它自己的 verify.textPresent 却报

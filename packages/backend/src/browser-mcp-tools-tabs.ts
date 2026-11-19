@@ -26,7 +26,7 @@ export interface TabsToolDeps {
   setClaimed: (next: Claim) => void;
   /** Live read — NOT a value, or closing the claimed tab would consult a stale one. */
   getClaimed: () => Claim;
-  drainEvents: (onTab?: number) => string;
+  drainEvents: () => string;
 }
 
 /** Registers navigate / new_tab / close_tab / new_window / close_window / list_windows. */
@@ -59,7 +59,7 @@ export function registerTabsTools({ server, call, resolvedTarget, claimFor, setC
         } catch {
           /* a URL the parser rejects is the caller's problem, not a redirect */
         }
-        return text(`Navigated to ${r.url} (tab ${r.tabId}) — "${r.title}"${landed}${gateNote("navigated to a new page")}${drainEvents(r.tabId)}`);
+        return text(`Navigated to ${r.url} (tab ${r.tabId}) — "${r.title}"${landed}${gateNote("navigated to a new page")}${drainEvents()}`);
       } catch (e) {
         return fail(e);
       }
@@ -144,7 +144,6 @@ export function registerTabsTools({ server, call, resolvedTarget, claimFor, setC
         return fail(e);
       }
     },
-    { openWorldHint: true },
   );
 
   registerRpcTool(
