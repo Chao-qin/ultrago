@@ -7,6 +7,7 @@ import { Coordinator } from './coordinator.mjs';
 import { applicationPaths } from './paths.mjs';
 import { agentSetup, checkMcpStdio, connectAgent, detectAgents } from './agent-setup.mjs';
 import { createShellControls } from './shell-controls.mjs';
+import { OLLAMA_DOWNLOAD } from './local-model.mjs';
 
 if (process.argv.includes('--mcp-stdio')) {
   app.whenReady().then(async () => {
@@ -120,9 +121,9 @@ else {
       tray: () => { if (!tray || tray.isDestroyed()) throw new Error('系统托盘不可用，请使用窗口最小化。'); hideToTray(); },
       quit: () => app.quit(), zoomIn: () => zoom(.1), zoomOut: () => zoom(-.1), zoomReset: () => window.webContents.setZoomFactor(1),
       canTray: () => !!tray && !tray.isDestroyed(),
-      canWorkbench: () => coordinator?.phase === 'ready' && !!coordinator?.snapshot().browserReady,
+      canWorkbench: () => coordinator?.phase === 'ready',
       savePosition: async (position) => { await initialized; if (initializationError) throw initializationError; return coordinator.saveShellPosition(position); },
-    });
+    }, setupUrl.href);
     await showSetup();
     try {
       const paths = applicationPaths(app.getPath('userData'), process.resourcesPath, app.isPackaged);
@@ -160,6 +161,11 @@ else {
         prepare: async () => { await coordinator.prepare(); return coordinator.snapshot(); },
         selectBrowser: async (input) => { await coordinator.chooseBrowser(input); return coordinator.snapshot(); },
         saveModel: async (input) => { await coordinator.saveModel(input); return coordinator.snapshot(); },
+        detectLocalModel: async () => { await coordinator.detectLocalModel(); return coordinator.snapshot(); },
+        startLocalModel: async () => { await coordinator.startLocalModel(); return coordinator.snapshot(); },
+        pullLocalModel: async () => { await coordinator.pullLocalModel(); return coordinator.snapshot(); },
+        cancelLocalPull: () => { coordinator.cancelLocalPull(); return coordinator.snapshot(); },
+        ollamaDownload: () => shell.openExternal(OLLAMA_DOWNLOAD),
         demo: async () => { await coordinator.runDemo(); return coordinator.snapshot(); },
         repairBridge: async () => { await coordinator.prepareBridge(); return coordinator.snapshot(); },
         extensionFolder: () => shell.openPath(paths.extension),
@@ -230,7 +236,8 @@ else {
         },
         workbench: async (destination) => {
           await coordinator.refreshBrowsers();
-          if (coordinator.phase !== 'ready' || !coordinator.snapshot().browserReady || !coordinator.supervisor?.endpoints.console) throw new Error('请先完成工作台准备并确认浏览器连接。');
+          // Chrome is not required: records and reports are readable without it, and a run without one says so itself.
+          if (coordinator.phase !== 'ready' || !coordinator.supervisor?.endpoints.console) throw new Error('请先完成工作台准备。');
           coordinator.supervisor.activate();
           await window.loadURL(coordinator.ingress.origin + (destination === 'books' ? '/#/books' : ''));
           await coordinator.completeSetup();

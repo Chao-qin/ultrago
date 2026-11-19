@@ -2,7 +2,8 @@ import { WebContentsView, ipcMain } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { floatingBounds, nearestDock, normalizeDock } from './floating-position.mjs';
 
-export async function createShellControls(window, actions) {
+/** The floating menu belongs to the workbench; the setup page at `setupUrl` already offers everything it does. */
+export async function createShellControls(window, actions, setupUrl) {
   const url = new URL('../ui/shell.html', import.meta.url).href;
   const view = new WebContentsView({ webPreferences: {
     preload: fileURLToPath(new URL('./shell-preload.cjs', import.meta.url)),
@@ -17,6 +18,8 @@ export async function createShellControls(window, actions) {
   window.contentView.addChildView(view);
   const layout = () => {
     if (disposed || window.isDestroyed()) return;
+    const page = window.webContents.getURL();
+    view.setVisible(!!page && page !== setupUrl);
     const [width, height] = window.getContentSize();
     placement = floatingBounds(position, width, height, expanded, dragging?.center);
     view.setBounds(placement.bounds);
@@ -61,6 +64,8 @@ export async function createShellControls(window, actions) {
     view.webContents.send('shell:collapse');
   };
   window.on('resize', layout);
+  const navigated = () => { dragging = undefined; collapse(); };
+  window.webContents.on('did-navigate', navigated);
   window.webContents.on('focus', collapse);
   const outsideClick = (_event, input) => { if (input.type === 'mouseDown') collapse(); };
   window.webContents.on('before-mouse-event', outsideClick);
@@ -69,6 +74,7 @@ export async function createShellControls(window, actions) {
     disposed = true;
     ipcMain.removeHandler('desktop:shell');
     window.off('resize', layout);
+    window.webContents.off('did-navigate', navigated);
     window.webContents.off('focus', collapse);
     window.webContents.off('before-mouse-event', outsideClick);
     if (!window.isDestroyed()) window.contentView.removeChildView(view);

@@ -6,61 +6,118 @@ let displayedPhase;
 let checkingMcp = false;
 let mcpCheckGeneration = 0;
 let activeStep = 0;
-let returnStep = 0;
 let stepInitialized = false;
-const stepIds = ['environment', 'browser', 'model', 'experience', 'agents'];
-const primarySteps = [0, 1, 3];
-const optional = (step) => step === 2 || step === 4;
+// One fixed order. Model and assistants can be skipped but still sit in line, so nobody has to find them.
+const stepIds = ['environment', 'browser', 'model', 'agents', 'experience'];
+const stepNames = ['准备工作台', '连接 Chrome', 'AI 模型', '接入 AI 助手', '开始使用'];
+const LAST = stepIds.length - 1;
+const optional = (step) => step === 2 || step === 3;
+const reachable = (state) => state.phase === 'ready' ? state.browserReady ? LAST : 1 : 0;
+const onlineAssistants = (state) => (state.connections?.assistants || []).filter((client) => client.state === 'connected');
+const modelReady = (state) => state.modelMode === 'local' ? !!state.localModel?.configured : state.modelMode === 'cloud' && !!state.modelConfigured;
+function stepDone(step, state) {
+  if (step === 0) return state.phase === 'ready';
+  if (step === 1) return state.phase === 'ready' && !!state.browserReady;
+  if (step === 2) return modelReady(state);
+  if (step === 3) return onlineAssistants(state).length > 0;
+  return false;
+}
 
 function showStep(index, focus = true) {
-  activeStep = Math.max(0, Math.min(4, index));
-  const available = current.phase === 'ready' ? current.browserReady ? 3 : 1 : 0;
-  if (!optional(activeStep) && activeStep > available) activeStep = available;
-  if (!optional(activeStep)) returnStep = activeStep;
+  activeStep = Math.max(0, Math.min(LAST, index, reachable(current)));
   sessionStorage.setItem('setupStep', String(activeStep));
   renderWizard();
+  if (activeStep === 2) void refreshLocalModel();
   if (focus) $(stepIds[activeStep]).querySelector('h2').focus({ preventScroll: true });
 }
 
 function renderWizard() {
   const ready = current.phase === 'ready';
-  const available = ready ? current.browserReady ? 3 : 1 : 0;
-  const done = { 0: ready, 1: ready && current.browserReady };
+  const available = reachable(current);
   stepIds.forEach((id, index) => { $(id).hidden = index !== activeStep; });
-  document.querySelectorAll('.stepper [data-step-target]').forEach((button, index) => {
+  document.querySelectorAll('.stepper [data-step-target]').forEach((button) => {
     const step = Number(button.dataset.stepTarget);
+    const done = stepDone(step, current) && step !== activeStep;
     button.disabled = step > available;
-    button.classList.toggle('complete', !!done[step] && step !== activeStep);
-    button.querySelector('.step-dot').textContent = done[step] && step !== activeStep ? '✓' : index + 1;
-    if (step === (optional(activeStep) ? returnStep : activeStep)) button.setAttribute('aria-current', 'step');
+    button.classList.toggle('complete', done);
+    button.querySelector('.step-dot').textContent = done ? '✓' : step + 1;
+    if (step === activeStep) button.setAttribute('aria-current', 'step');
     else button.removeAttribute('aria-current');
   });
-  document.querySelectorAll('.setup-tools [data-step-target]').forEach((button) => {
-    button.disabled = Number(button.dataset.stepTarget) === 2 && !!current.busy;
-    button.setAttribute('aria-pressed', String(Number(button.dataset.stepTarget) === activeStep));
-  });
-  $('previous-step').disabled = activeStep === 0;
-  $('previous-step').textContent = optional(activeStep) ? '← 返回' : '← 上一步';
-  $('next-step').hidden = optional(activeStep) || activeStep === 3;
-  $('workbench').hidden = activeStep !== 3;
-  $('next-step').disabled = !!current.busy || activeStep === 0 && !ready || activeStep === 1 && !current.browserReady;
-  $('next-step').textContent = activeStep === 0 ? '连接浏览器 →' : '开始使用 →';
-  $('step-help').textContent = activeStep === 2 && editingModel ? '配置尚未保存' : activeStep === 3 ? '示例可跳过，随时进入工作台。' : '';
-  $('model-summary').textContent = current.modelMode === 'cloud' ? '云 API' : '未启用';
+  const next = activeStep + 1;
+  $('previous-step').hidden = activeStep === 0;
+  $('next-step').hidden = activeStep === LAST;
+  $('next-step').disabled = !!current.busy || next > available;
+  $('next-step').textContent = optional(activeStep) && !stepDone(activeStep, current) ? `跳过，下一步：${stepNames[next]} →` : `下一步：${stepNames[next]} →`;
+  $('workbench').hidden = activeStep !== LAST;
+  // Entering the workbench never waits for the last step: once the services run it is one click away on every step.
+  $('header-workbench').hidden = !ready || activeStep === LAST;
+  $('header-workbench').title = current.browserReady ? '' : 'Chrome 尚未连接：可以查看数据和报告，任务要连接后才能运行。';
+  $('step-help').textContent = activeStep === 0 ? (ready ? '' : '准备完成后进入下一步。')
+    : activeStep === 1 ? (current.browserReady ? '' : '确认 Chrome 后进入下一步。')
+    : activeStep === 2 && editingModel ? '设置尚未保存，跳过将不使用这次的修改。'
+    : optional(activeStep) ? '可跳过，之后随时从上方步骤回来设置。'
+    : current.browserReady ? '示例可跳过，直接进入工作台即可开始。' : '';
 }
 const phaseNames = { waiting: '等待准备', checking: '检查中', initializing: '初始化中', starting: '启动中', registering: '检查模板', ready: '工作台已启动', failed: '准备失败' };
-const services = { backend: '浏览器服务', console: '工作台', llm: '云 API 网关', migrate: '数据库初始化', desktop: '客户端' };
+const services = { backend: '浏览器服务', console: '工作台', llm: '模型网关', migrate: '数据库初始化', desktop: '客户端' };
+
+const selectedMode = () => document.querySelector('input[name="mode"]:checked').value;
+const formatSize = (bytes) => `${(bytes / 1024 ** 3).toFixed(bytes >= 1024 ** 3 ? 1 : 2)} GB`;
 
 function renderModelMode(mode) {
-  const skip = mode === 'skip';
-  $('cloud-fields').hidden = skip;
-  $('cloud-fields').querySelectorAll('input').forEach((input) => { input.disabled = skip; });
-  $('model-hint').textContent = skip
-    ? '不使用模型，直接运行基础模板。'
-    : '填写你自己的服务地址、模型和 API Key。';
-  if (editingModel) $('model-status').textContent = `未保存 · ${skip ? '稍后设置' : '云 API'}`;
+  const local = current.localModel || {};
+  const localReady = !!local.running && !!local.hasModel;
+  $('cloud-fields').hidden = mode !== 'cloud';
+  $('cloud-fields').querySelectorAll('input').forEach((input) => { input.disabled = mode !== 'cloud'; });
+  $('local-setup').hidden = mode !== 'local';
+  $('model-hint').textContent = mode === 'skip' ? '不使用模型：任务卡在验证码时不会提醒，其他功能照常使用。'
+    : mode === 'cloud' ? '填写你自己的服务地址、模型和 API Key。'
+    : localReady ? (current.modelMode === 'local' && !editingModel ? '本机模型已启用。' : '本机模型已就绪，点击下方按钮启用。') : '完成上面两项后即可启用。';
+  $('model-save').textContent = mode === 'local' ? '使用本机模型' : mode === 'cloud' ? '保存云 API' : '保存：不使用模型';
+  // Nothing to save when the choice is the saved one; a cloud form can still be resubmitted to change its key.
+  $('model-save').hidden = !editingModel && mode === current.modelMode && mode !== 'cloud';
+  $('model-save').disabled = !!current.busy || mode === 'local' && !localReady;
+  if (editingModel) $('model-status').textContent = `未保存 · ${({ local: '本机模型', cloud: '云 API', skip: '暂不设置' })[mode]}`;
+  renderLocalModel(local);
 }
 
+/** The two things a local model needs, each with the one action that moves it forward. */
+function renderLocalModel(local) {
+  const pull = local.pull;
+  const ollamaDone = !!local.running;
+  $('check-ollama').classList.toggle('complete', ollamaDone);
+  $('check-ollama').querySelector('.check-dot').textContent = ollamaDone ? '✓' : '1';
+  $('ollama-state').textContent = !local.checked ? '正在检测…'
+    : local.running ? `已安装并在运行${local.version && local.version !== 'unknown' ? `（版本 ${local.version}）` : ''}。`
+    : local.installed ? '已安装，但还没有运行。点击启动，或从开始菜单打开 Ollama。'
+    : '这台电脑还没有 Ollama。下载安装（不需要管理员权限）后回到这里，会自动检测到。';
+  $('ollama-download').hidden = !local.checked || local.installed;
+  $('ollama-start').hidden = !local.installed || local.running || !local.executable;
+  const modelDone = !!local.hasModel;
+  $('check-model').classList.toggle('complete', modelDone);
+  $('check-model').querySelector('.check-dot').textContent = modelDone ? '✓' : '2';
+  const downloading = pull?.status === 'running';
+  $('pull-progress').hidden = !downloading;
+  if (downloading) { $('pull-progress').max = pull.total || 1; $('pull-progress').value = pull.completed || 0; }
+  $('pull-state').textContent = modelDone ? '已下载。'
+    : downloading ? (pull.total ? `正在下载 ${formatSize(pull.completed)} / ${formatSize(pull.total)}（${Math.floor(pull.completed / pull.total * 100)}%），可以先去做别的步骤。` : '正在连接下载源…')
+    : pull?.status === 'failed' ? `下载没有完成：${pull.error}。点击重新下载，已下载的部分会保留。`
+    : local.running ? '约 3.4 GB，下载时显示实际大小。只在你点击后开始下载。' : '先完成第 1 项。';
+  $('pull-start').hidden = modelDone || downloading;
+  $('pull-start').disabled = !local.running;
+  $('pull-start').textContent = pull?.status === 'failed' ? '重新下载' : '下载模型';
+  $('pull-cancel').hidden = !downloading;
+  $('local-redetect-row').hidden = !!local.running;
+}
+
+let localCheck;
+/** Re-checks Ollama while the local option is open and not finished, so installing it in another window is noticed. */
+async function refreshLocalModel() {
+  if (!bridge || localCheck) return;
+  localCheck = action('detectLocalModel', undefined, true);
+  try { await localCheck; } finally { localCheck = undefined; }
+}
 function renderPreparation(state) {
   const completed = state.preparationStep ?? ({ checking: 0, initializing: 1, starting: 2, registering: 3, ready: 4 }[state.phase] || 0);
   $('prepare-progress').value = completed;
@@ -85,6 +142,39 @@ function renderClock() {
   $('prepare-elapsed').textContent = state.phase === 'failed'
     ? '准备已停止，请查看上方错误及下方日志；修复后可点击“重试准备”。'
     : `已等待 ${elapsed} 秒${state.phase === 'initializing' ? ' · 初始化最长 120 秒' : ''}`;
+}
+
+function modelLabel(state) {
+  if (state.modelMode === 'local') return state.localModel?.configured ? `本机 · ${state.localModel.model}` : '等待配置';
+  if (state.modelMode === 'cloud') return state.modelConfigured ? `云 API · ${state.model || ''}` : '等待配置';
+  return '未设置';
+}
+
+/** The last step lists every setting, so a skipped one is visible and one click away. */
+function renderSummary(state) {
+  const online = onlineAssistants(state);
+  const rows = [
+    ['工作台', state.phase === 'ready' ? '已启动' : '未启动', state.phase === 'ready', 0, '去准备'],
+    ['Chrome', state.browserReady ? '已连接' : '未连接，任务要连接后才能运行', !!state.browserReady, 1, '去连接'],
+    ['AI 模型', modelReady(state) ? modelLabel(state) : '未设置：任务卡在验证码时不会提醒', modelReady(state), 2, modelReady(state) ? '修改' : '去设置'],
+    ['AI 助手', online.length ? online.map((client) => client.name).join('、') : '未接入：Claude、Cursor 等助手还不能使用这台电脑的浏览器', online.length > 0, 3, online.length ? '管理' : '去接入'],
+  ];
+  $('setup-summary').replaceChildren(...rows.map(([label, value, ok, step, verb]) => {
+    const item = document.createElement('li');
+    item.className = ok ? 'ok' : '';
+    const mark = document.createElement('span'); mark.className = 'summary-mark'; mark.textContent = ok ? '✓' : '·'; mark.setAttribute('aria-hidden', 'true');
+    const text = document.createElement('span'); text.className = 'summary-text';
+    const title = document.createElement('strong'); title.textContent = label;
+    const detail = document.createElement('small'); detail.textContent = value;
+    text.append(title, detail);
+    item.append(mark, text);
+    if (!ok || step >= 2) {
+      const go = document.createElement('button'); go.type = 'button'; go.className = 'secondary'; go.textContent = verb;
+      go.addEventListener('click', () => showStep(step));
+      item.append(go);
+    }
+    return item;
+  }));
 }
 
 function render(state) {
@@ -121,23 +211,24 @@ function render(state) {
   $('bridge-repair').hidden = !state.bridgeError;
   $('bridge-status').textContent = state.bridgeError || '';
   $('repair-bridge').disabled = !!state.bridgeBusy || !!state.busy;
-  $('model-status').textContent = state.modelMode === 'cloud' ? state.modelConfigured ? `云 API · ${state.model || ''}` : '等待配置' : '未启用';
+  $('model-status').textContent = modelLabel(state);
+  $('model-status').classList.toggle('ok', modelReady(state));
   $('model-status').title = $('model-status').textContent;
   if (!editingModel) {
-    const mode = state.modelMode === 'cloud' ? 'cloud' : 'skip';
+    const mode = ['cloud', 'local'].includes(state.modelMode) ? state.modelMode : 'skip';
     document.querySelector(`input[name="mode"][value="${mode}"]`).checked = true;
     renderModelMode(mode);
     if (state.modelConfigured) { $('api-model').value = state.model || ''; $('api-url').value = state.modelUrl || ''; }
   } else {
-    renderModelMode(document.querySelector('input[name="mode"]:checked').value);
+    renderModelMode(selectedMode());
   }
   $('demo').disabled = !!state.busy || !state.browserReady || state.phase !== 'ready';
-  document.querySelectorAll('[data-action="workbench"]').forEach((button) => { button.disabled = !!state.busy || !state.browserReady || state.phase !== 'ready'; });
+  document.querySelectorAll('[data-action="workbench"]').forEach((button) => { button.disabled = !!state.busy || state.phase !== 'ready'; });
   $('agent-check').disabled = checkingMcp || !!state.busy || !state.browserReady || state.phase !== 'ready';
   $('agent-status').textContent = state.phase === 'ready' && state.browserReady ? '可接入助手' : '请先准备并连接浏览器';
   const connections = state.connections;
   const assistants = connections?.assistants || [];
-  const online = assistants.filter((client) => client.state === 'connected');
+  const online = onlineAssistants(state);
   const summary = [
     ['本地服务', connections?.serviceReady ? '已就绪' : '未就绪'],
     ['Chrome', state.browserReady ? `已确认 · ${(state.browserId || '').slice(0, 8)}` : '未确认连接'],
@@ -172,23 +263,25 @@ function render(state) {
     if (content?.raw) { try { content = JSON.parse(content.raw); } catch { content = { text: content.raw }; } }
     $('result').textContent = run.error || content?.value?.text || content?.text || (run.status === 'success' ? '读取完成。你可以查看示例窗口中的商品清单。' : '任务需要处理，请查看当前步骤。');
   }
+  renderSummary(state);
   if (!stepInitialized) {
     stepInitialized = true;
-    const saved = Number(sessionStorage.getItem('setupStep') || 0);
-    activeStep = Number.isInteger(saved) && saved >= 0 && saved <= 4 ? saved : 0;
+    // Without a remembered step, open on the first one still to do rather than on a finished one.
+    const saved = Number(sessionStorage.getItem('setupStep') ?? NaN);
+    activeStep = Number.isInteger(saved) && saved >= 0 && saved <= LAST ? saved
+      : state.phase !== 'ready' ? 0 : !state.browserReady ? 1 : state.setupCompleted ? LAST : 2;
   }
-  const available = state.phase === 'ready' ? state.browserReady ? 3 : 1 : 0;
-  if (!optional(activeStep) && activeStep > available) activeStep = available;
-  if (state.setupCompleted && state.phase === 'ready' && previousPhase !== 'ready' && activeStep === 0) activeStep = state.browserReady ? 3 : 1;
-  // Confirming (or auto-confirming) the browser moves straight on; a page reload keeps the remembered step.
-  if (previousPhase && !previouslyConnected && state.browserReady && activeStep === 1) activeStep = 3;
-  if (!optional(activeStep)) returnStep = activeStep;
-  if (state.openPanel === 'agents') activeStep = 4;
+  if (state.setupCompleted && state.phase === 'ready' && previousPhase !== 'ready' && activeStep === 0) activeStep = state.browserReady ? LAST : 1;
+  // Confirming (or auto-confirming) the browser moves on to the next step in line; a page reload keeps the remembered step.
+  if (previousPhase && !previouslyConnected && state.browserReady && activeStep === 1) activeStep = state.setupCompleted ? LAST : 2;
+  if (state.openPanel === 'agents') activeStep = 3;
+  activeStep = Math.min(activeStep, reachable(state));
   renderWizard();
 }
 
-async function action(name, input) {
-  if (name !== 'state') $('error').hidden = true;
+async function action(name, input, background = name === 'state') {
+  // Background checks must not clear an error the user has not read yet.
+  if (!background) $('error').hidden = true;
   try {
     if (!bridge) throw new Error('此页面需要在 Electron 客户端内打开。');
     const result = await bridge.action(name, input);
@@ -208,20 +301,29 @@ $('chrome-shortcut').addEventListener('click', async () => {
   } catch (error) { $('error').textContent = error.message; $('error').hidden = false; }
 });
 document.querySelectorAll('[data-step-target]').forEach((button) => button.addEventListener('click', () => showStep(Number(button.dataset.stepTarget))));
-$('previous-step').addEventListener('click', () => showStep(optional(activeStep) ? returnStep : primarySteps[Math.max(0, primarySteps.indexOf(activeStep) - 1)]));
-$('next-step').addEventListener('click', () => showStep(primarySteps[primarySteps.indexOf(activeStep) + 1] ?? 3));
+$('previous-step').addEventListener('click', () => showStep(activeStep - 1));
+$('next-step').addEventListener('click', () => {
+  // Skipping drops an unsaved model edit, as the help line says; the saved setting stays.
+  if (activeStep === 2 && editingModel) { editingModel = false; render(current); }
+  showStep(activeStep + 1);
+});
 document.querySelectorAll('input[name="mode"]').forEach((radio) => radio.addEventListener('change', () => {
   editingModel = true;
-  renderModelMode(document.querySelector('input[name="mode"]:checked').value);
+  renderModelMode(selectedMode());
   renderWizard();
+  if (selectedMode() === 'local') void refreshLocalModel();
 }));
-$('cloud-form').addEventListener('input', () => { editingModel = true; renderModelMode(document.querySelector('input[name="mode"]:checked').value); renderWizard(); });
-$('cloud-form').addEventListener('submit', (event) => {
+$('model-form').addEventListener('input', () => { editingModel = true; renderModelMode(selectedMode()); renderWizard(); });
+$('model-form').addEventListener('submit', (event) => {
   event.preventDefault();
-  const input = { mode: document.querySelector('input[name="mode"]:checked').value, url: $('api-url').value, model: $('api-model').value, key: $('api-key').value };
+  const input = { mode: selectedMode(), url: $('api-url').value, model: $('api-model').value, key: $('api-key').value };
   $('api-key').value = '';
   void action('saveModel', input).then((saved) => { if (saved) { editingModel = false; render(current); if (current.phase !== 'ready') showStep(0); } });
 });
+$('local-redetect').addEventListener('click', () => void refreshLocalModel());
+$('ollama-start').addEventListener('click', () => void action('startLocalModel'));
+$('pull-start').addEventListener('click', () => void action('pullLocalModel'));
+$('pull-cancel').addEventListener('click', () => void action('cancelLocalPull'));
 let guideGeneration = 0;
 async function loadAgentGuide() {
   const generation = ++guideGeneration;
@@ -287,7 +389,7 @@ function renderAgents() {
     return item;
   }));
   const found = agents.filter((agent) => agent.detected && !agent.blocked).map((agent) => agent.name);
-  $('agent-summary').textContent = agentDetectError ? `检测助手失败：${agentDetectError}。可以在接入面板重新检测，或复制配置手动接入。`
+  $('agent-summary').textContent = agentDetectError ? `检测助手失败：${agentDetectError}。可以点击重新检测，或在下方复制配置手动接入。`
     : found.length ? `检测到 ${found.join('、')}，勾选后即可接入。` : '没有检测到常用助手，也可以复制配置手动接入其他助手。';
   $('agent-connect').disabled = connectingAgents || !selectedAgents.size;
 }
@@ -351,4 +453,9 @@ else {
   void bridge.action('autostartState').then((enabled) => { $('autostart').checked = enabled === true; }, () => { $('autostart').disabled = true; });
   void action('state');
   setInterval(() => { if (!document.hidden && !current.busy) void action('state'); }, 2500);
+  setInterval(() => {
+    const local = current.localModel || {};
+    const pending = !(local.running && local.hasModel) && local.pull?.status !== 'running';
+    if (!document.hidden && activeStep === 2 && selectedMode() === 'local' && pending) void refreshLocalModel();
+  }, 3000);
 }
