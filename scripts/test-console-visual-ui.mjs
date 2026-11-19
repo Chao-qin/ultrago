@@ -285,6 +285,25 @@ test('the embedded database theme follows the console without sending queries to
   });
 });
 
+test('toolbar refresh re-pulls a failed page and the sidebar has no theme toggle', async () => {
+  await withPage('/books', async page => {
+    assert.equal(await page.locator('.console-sidebar').getByRole('button', { name: /切换到|^日$|^夜$/ }).count(), 0);
+    await page.locator('.console-error-state').first().waitFor();
+    const refresh = page.locator('.console-toolbar').getByRole('button', { name: '刷新当前页数据', exact: true });
+    await refresh.click();
+    await page.locator('.ant-message').getByText('1 项数据刷新失败，原因见页面提示').waitFor();
+    await page.route('**/api/books', route => route.fulfill({ json: fixtures['/api/books'] }));
+    await refresh.click();
+    await page.locator('.ant-message').getByText('数据已刷新').waitFor();
+    await page.locator('.ant-table-row').first().waitFor();
+  }, { failed: ['/api/books'] });
+  await withPage('/database', async page => {
+    await page.locator('.console-studio-frame').waitFor();
+    await page.locator('.console-toolbar').getByRole('button', { name: '刷新当前页数据', exact: true }).click();
+    await page.locator('.ant-message').getByText('当前页面没有可刷新的数据').waitFor();
+  });
+});
+
 test('command search supports keyboard navigation and reports empty results', async () => {
   for (const width of [1440, 390]) await withPage('/books', async page => {
     assert.ok(await page.locator('.console-command-trigger .anticon').isVisible());

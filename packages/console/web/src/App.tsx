@@ -25,6 +25,7 @@ import { useTheme } from "./theme";
 import { UnsavedChangesProvider } from './components/unsaved-changes-guard';
 import { BorderBeam } from './components/magicui/border-beam';
 import { ConsoleCommandMenu } from './components/console-command-menu';
+import { ConsoleRefreshButton } from './components/console-refresh-button';
 
 const { Sider, Content } = Layout;
 const Dashboard = lazy(() => import('./pages/Dashboard').then((page) => ({ default: page.Dashboard })));
@@ -191,32 +192,6 @@ function AppContent() {
           items={collapsed ? menuItems.flatMap((group) => group.children) : expandedMenuItems}
           onClick={({ key }) => navigateTo(key)}
         />
-        {/* 日 / 夜切换 —— 底部独立于菜单滚动区，和收起按钮同一条带状布局
-            CSS 见 index.css 的 .theme-toggle-bar。 */}
-        {!collapsed && (
-          <div className="theme-toggle-bar">
-            <button
-              type="button"
-              className={`theme-toggle-btn ${mode === "dark" ? "active" : ""}`}
-              onClick={() => mode !== "dark" && toggleMode()}
-              aria-pressed={mode === "dark"}
-              title="切换到夜间模式"
-            >
-              <MoonOutlined />
-              <span>夜</span>
-            </button>
-            <button
-              type="button"
-              className={`theme-toggle-btn ${mode === "light" ? "active" : ""}`}
-              onClick={() => mode !== "light" && toggleMode()}
-              aria-pressed={mode === "light"}
-              title="切换到日间模式"
-            >
-              <SunOutlined />
-              <span>日</span>
-            </button>
-          </div>
-        )}
       </Sider>
       <Layout className="console-main">
         <header className="console-toolbar">
@@ -239,6 +214,7 @@ function AppContent() {
           </div>
           <div className="console-toolbar-actions">
             <button type="button" className="console-command-trigger" aria-label="搜索工作区" aria-keyshortcuts="Control+k Meta+k" onClick={() => setCommandOpen(true)}><SearchOutlined aria-hidden="true" /><span>前往工作区</span><kbd>⌘ / Ctrl K</kbd></button>
+            <ConsoleRefreshButton />
             <Tooltip title={mode === 'dark' ? '切换到日间模式' : '切换到夜间模式'}>
               <Button type="text" icon={mode === 'dark' ? <SunOutlined /> : <MoonOutlined />} onClick={toggleMode} aria-label={mode === 'dark' ? '切换到日间模式' : '切换到夜间模式'} />
             </Tooltip>
