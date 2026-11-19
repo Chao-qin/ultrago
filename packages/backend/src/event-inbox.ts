@@ -1,6 +1,11 @@
 import type { BrowserEvent } from "@bcp/shared";
 import type { EventStore } from "./event-store.js";
 
+/** What one tool call may treat as "recent": events after the previous call began. */
+export interface CallWindow {
+  previousStartSeq: number;
+}
+
 /**
  * Which buffered browser events one MCP session has been shown.
  *
@@ -12,22 +17,30 @@ import type { EventStore } from "./event-store.js";
  * advancing it re-shows everything.
  *
  * So the inbox records shown events by seq. `floor` keeps it bounded: every
- * seq at or below it is settled — shown, or already evicted from the store's
- * ring buffer — and only shown seqs above it are kept in the set.
+ * seq at or below it is settled — shown, from before the session began, or
+ * already evicted from the store's ring buffer — and only shown seqs above it
+ * are kept in the set.
+ *
+ * A session starts at the present: events from before it existed are not
+ * "unseen events of this session".
  */
 export class EventInbox {
-  private floor = 0;
+  private floor: number;
   private readonly shown = new Set<number>();
-  /** Latest store seq when the current tool call began, and the previous one. */
-  private callStartSeq = 0;
-  private previousCallStartSeq = 0;
+  /** Latest store seq when the most recently started tool call began. */
+  private lastStartSeq: number;
 
-  constructor(private readonly store: Pick<EventStore, "since" | "latestSeq">) {}
+  constructor(private readonly store: Pick<EventStore, "since" | "latestSeq">) {
+    this.floor = store.latestSeq();
+    this.lastStartSeq = this.floor;
+  }
 
-  /** Mark the start of a tool call (every tool of the session runs through this). */
-  beginCall(): void {
-    this.previousCallStartSeq = this.callStartSeq;
-    this.callStartSeq = this.store.latestSeq();
+  /** Open a tool call. Calls may overlap, so each gets its own window: what
+   *  arrived after the call that started before it. */
+  beginCall(): CallWindow {
+    const window = { previousStartSeq: this.lastStartSeq };
+    this.lastStartSeq = this.store.latestSeq();
+    return window;
   }
 
   /** Buffered events not yet shown that `match` accepts, oldest first. */
@@ -42,16 +55,16 @@ export class EventInbox {
     return events;
   }
 
-  /** The oldest unshown event `match` accepts that arrived after the previous
-   *  tool call began — the window an event caused by the agent's last action
-   *  falls in. Older unshown events are history, not something to wait on. */
-  recent(match: (e: BrowserEvent) => boolean): BrowserEvent | undefined {
-    return this.unshown((e) => e.seq! > this.previousCallStartSeq && match(e))[0];
+  /** The oldest unshown event `match` accepts within `window` — where an event
+   *  caused by the agent's last action falls. Older unshown events are
+   *  history, not something to wait on. */
+  recent(match: (e: BrowserEvent) => boolean, window: CallWindow): BrowserEvent | undefined {
+    return this.unshown((e) => e.seq! > window.previousStartSeq && match(e))[0];
   }
 
-  /** True when `e` happened before the previous tool call began. */
-  isEarlier(e: BrowserEvent): boolean {
-    return e.seq! <= this.previousCallStartSeq;
+  /** True when `e` happened before `window` opened. */
+  isEarlier(e: BrowserEvent, window: CallWindow): boolean {
+    return e.seq! <= window.previousStartSeq;
   }
 
   markShown(events: BrowserEvent[]): void {

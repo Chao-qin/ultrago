@@ -89,7 +89,8 @@ async function downloadUpload(url: string, deps: PublicFetchDeps): Promise<Publi
     try {
       const res = await fetchPublicUrl(
         url,
-        { headers: { Referer: new URL(url).origin + '/', 'User-Agent': UPLOAD_UA }, timeoutMs: DOWNLOAD_TIMEOUT_MS, maxBytes: UPLOAD_MAX_BYTES },
+        // A same-origin Referer on every hop, so hotlink checks pass on the host that serves the file.
+        { headers: (hop) => ({ Referer: hop.origin + '/', 'User-Agent': UPLOAD_UA }), timeoutMs: DOWNLOAD_TIMEOUT_MS, maxBytes: UPLOAD_MAX_BYTES },
         deps,
       );
       if (res.status < 200 || res.status >= 300) {

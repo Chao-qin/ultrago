@@ -33,7 +33,8 @@ import { EVAL_TIMEOUT_MS, NETWORK_LOG_PER_TAB, READ_DUMP_TTL_MS, WAIT_FOR_DEFAUL
  * MCP tool annotations, declared for every tool next to its text so a client
  * can tell reads from actions without parsing prose. All four are always set:
  * - readOnlyHint: changes nothing the user can see or keep — pages, browser
- *   state, files, recordings.
+ *   state, files, recordings. This session's own bookkeeping (which events it
+ *   has been shown) is not part of that.
  * - destructiveHint: may replace or discard something (an input value, the
  *   current page, a file, a recording) rather than only add.
  * - idempotentHint: repeating the call with the same arguments changes nothing more.

@@ -18,7 +18,7 @@ import { locatorShape, looseBool, tabId } from "./browser-mcp-shapes.js";
 export interface BatchToolDeps {
   server: McpServer;
   call: BrowserCall;
-  drainEvents: (onTab?: number) => string;
+  drainEvents: () => string;
 }
 
 const fieldLocator = {
@@ -103,7 +103,7 @@ export function registerBatchTools({ server, call, drainEvents }: BatchToolDeps)
           return text(`Batch stopped at step ${i + 1}/${steps.length}:\n${results.join("\n")}${gateNote(gate)}`);
         }
       }
-      return text(`Batch done (${steps.length} steps):\n${results.join("\n")}${gateNote(gate)}${drainEvents(tabId)}`);
+      return text(`Batch done (${steps.length} steps):\n${results.join("\n")}${gateNote(gate)}${drainEvents()}`);
     },
   );
 }

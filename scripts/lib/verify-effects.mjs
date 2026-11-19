@@ -16,10 +16,10 @@ const SHAPES = [
   ["scrolling", /scroll(IntoView|To|By)?\s*\(|scroll(Top|Left)\s*=(?!=)/],
   ["dispatching events", /dispatchEvent\s*\(/],
   ["DOM writes", /\.(value|checked|selected|selectedIndex|textContent|innerHTML|innerText|outerHTML|className|src|href|hidden|disabled)\s*=(?!=)|\.style\.\w+\s*=(?!=)|(set|remove|toggle)Attribute\s*\(|classList\.(add|remove|toggle|replace)\s*\(|\.(append|prepend|appendChild|removeChild|insertBefore|replaceChild|replaceWith|insertAdjacent\w*)\s*\(|\.remove\s*\(\s*\)/],
-  ["forms, network and storage", /\.(submit|requestSubmit)\s*\(|\bfetch\s*\(|XMLHttpRequest|sendBeacon|\.(setItem|removeItem)\s*\(|document\.cookie\s*=(?!=)/],
+  ["forms, network and storage", /\.(submit|requestSubmit)\s*\(|\bfetch\s*\(|XMLHttpRequest|sendBeacon|\.(setItem|removeItem)\s*\(|document\.cookie\s*=(?!=)|(local|session)Storage\.\w+\s*=(?!=)|indexedDB\.|caches\.(open|delete)/],
   ["navigation and windows", /history\.(push|replace)State|location\.(assign|replace|reload)\s*\(|location(\.href)?\s*=(?!=)|window\.open\s*\(/],
   ["page state writes", /window\.__\w+\s*=(?!=)/],
-  ["waiting", /\bawait\b|\.then\s*\(|bcpWait\./],
+  ["waiting or scheduling", /\b(async|await)\b|\.then\s*\(|bcpWait\.|\b(setTimeout|setInterval|requestAnimationFrame|requestIdleCallback|queueMicrotask)\s*\(/],
 ];
 
 /** The first side effect `code` shows, as `{ what, snippet }`, or null when it reads only. */

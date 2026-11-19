@@ -51,7 +51,7 @@ export const verifyShape = z
         equals: z.string().optional().describe("Expected result, compared as a string; omit to require a truthy result"),
       })
       .optional()
-      .describe("The runner evaluates read-only page JavaScript and checks the result. The check fails if the code changes the DOM, focuses, scrolls, sets an input value, fires events, sends requests, writes storage or returns a Promise. Refused when the backend runs with BCP_EVAL=off"),
+      .describe("The runner evaluates read-only page JavaScript and checks the result. The check fails if the code changes the DOM, focuses, scrolls, sets an input value, fires events, navigates, sends requests, writes storage, uses async/await, schedules work for later (timers, promise callbacks) or returns a Promise. Refused when the backend runs with BCP_EVAL=off"),
     evalUntil: z
       .object({
         code: z.string().min(1).describe("Page JavaScript that may act (click, scroll, await bcpWait) and returns whether the step is done"),

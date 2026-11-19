@@ -92,7 +92,7 @@ export interface CaptureToolDeps {
   server: McpServer;
   call: BrowserCall;
   deltaKey: string;
-  drainEvents: (onTab?: number) => string;
+  drainEvents: () => string;
   /** Screenshot behind the per-browser foreground lease (switch → shoot → restore). */
   captureWithLease: (tabIdParam: number | undefined) => Promise<RpcContracts[typeof RpcMethod.Screenshot]["result"]>;
   readDumps: PageReadDumpStore;
@@ -179,7 +179,7 @@ export function registerCaptureTools({ server, call, deltaKey, drainEvents, capt
             content: [
               {
                 type: "text" as const,
-                text: `## Open tabs\n${tabLines}${stateSection}\n\n## Accessibility snapshot\n${snapshotText}\n\n## Visible text content\n${visibleText}\n\n## Screenshot\n(skipped: ${shotOrErr.msg})${drainEvents(tabId)}`,
+                text: `## Open tabs\n${tabLines}${stateSection}\n\n## Accessibility snapshot\n${snapshotText}\n\n## Visible text content\n${visibleText}\n\n## Screenshot\n(skipped: ${shotOrErr.msg})${drainEvents()}`,
               },
             ],
           };
@@ -205,7 +205,7 @@ export function registerCaptureTools({ server, call, deltaKey, drainEvents, capt
 
         return {
           content: [
-            { type: "text" as const, text: `## Open tabs\n${tabLines}${stateSection}\n\n## Accessibility snapshot\n${snapshotText}\n\n## Visible text content\n${visibleText}${shot.warning ? `\n\nWARNING: ${shot.warning}` : ""}${activationNote(shot) && !saveScreenshot ? `\n\n${activationNote(shot)}` : ""}${drainEvents(tabId)}` },
+            { type: "text" as const, text: `## Open tabs\n${tabLines}${stateSection}\n\n## Accessibility snapshot\n${snapshotText}\n\n## Visible text content\n${visibleText}${shot.warning ? `\n\nWARNING: ${shot.warning}` : ""}${activationNote(shot) && !saveScreenshot ? `\n\n${activationNote(shot)}` : ""}${drainEvents()}` },
             screenshotContent,
           ],
         };

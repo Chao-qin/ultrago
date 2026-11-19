@@ -78,10 +78,37 @@ test("a body over the cap is refused while it streams, with or without content-l
   });
 });
 
+test("an error status is reported as the status, whatever the size of its body", async () => {
+  await withServer((_req, res) => res.writeHead(404, { "content-length": "4096" }).end(Buffer.alloc(4096)), async (port) => {
+    const res = await fetchPublicUrl(`http://cdn.test:${port}/gone.png`, OPTS, deps({ "cdn.test": ["127.0.0.1"] }));
+    assert.equal(res.status, 404);
+    assert.equal(res.body.length, 0);
+  });
+});
+
+test("each hop gets its own headers, and the timeout covers redirects and the body", async () => {
+  const referers: string[] = [];
+  await withServer((req, res) => {
+    referers.push(String(req.headers.referer));
+    if (req.url === "/start") return void res.writeHead(302, { location: `http://img.test:${(req.socket.localPort)}/stall` }).end();
+    res.writeHead(200);
+    res.write("partial"); // and never ends
+  }, async (port) => {
+    const d = deps({ "cdn.test": ["127.0.0.1"], "img.test": ["127.0.0.1"] });
+    const started = Date.now();
+    await assert.rejects(
+      fetchPublicUrl(`http://cdn.test:${port}/start`, { ...OPTS, timeoutMs: 400, headers: (u) => ({ Referer: `${u.origin}/` }) }, d),
+    );
+    assert.ok(Date.now() - started < 2000, "the stalled body is cut off by the request's own timeout");
+    assert.deepEqual(referers, [`http://cdn.test:${port}/`, `http://img.test:${port}/`]);
+  });
+});
+
 test("special-purpose addresses, including IPv4 carried inside IPv6", () => {
   for (const ip of ["127.0.0.1", "10.0.0.1", "172.16.5.4", "192.168.0.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "224.0.0.1",
-    "::1", "::", "fe80::1", "fd00::1", "::ffff:127.0.0.1", "::ffff:7f00:1", "::ffff:a00:1", "64:ff9b::a00:1", "64:ff9b::7f00:1", "not-an-ip"])
+    "::1", "::", "fe80::1", "fd00::1", "fec0::1", "::127.0.0.1", "::ffff:127.0.0.1", "::ffff:7f00:1", "::ffff:a00:1",
+    "::ffff:0:7f00:1", "64:ff9b::a00:1", "64:ff9b::7f00:1", "2002:7f00:1::", "2002:c0a8:101::1", "not-an-ip"])
     assert.equal(isSpecialPurposeAddress(ip), true, `${ip} is refused`);
-  for (const ip of ["8.8.8.8", "93.184.216.34", "2606:4700:4700::1111", "::ffff:8.8.8.8", "64:ff9b::808:808"])
+  for (const ip of ["8.8.8.8", "93.184.216.34", "2606:4700:4700::1111", "::ffff:8.8.8.8", "64:ff9b::808:808", "2002:808:808::1"])
     assert.equal(isSpecialPurposeAddress(ip), false, `${ip} is public`);
 });

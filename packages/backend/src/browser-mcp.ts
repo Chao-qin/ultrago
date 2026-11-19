@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { writeFile, mkdir, readFile } from "node:fs/promises";
 import { resolve, dirname, relative, isAbsolute } from "node:path";
@@ -18,7 +19,7 @@ import { MUTATING, RECORDABLE_READS, TAB_SCOPED } from "./recordable-methods.js"
 import { extractArtifacts, extractOutputs, instantiateDeliveries } from "./delivery-executor.js";
 import type { DeliverySink } from "./console-delivery-client.js";
 import type { EventStore, RunFinishedEvent } from "./event-store.js";
-import { EventInbox } from "./event-inbox.js";
+import { EventInbox, type CallWindow } from "./event-inbox.js";
 import type { BrowserDispatcher } from "./browser-dispatcher.js";
 import type { BrowserSetupService } from "./browser-setup-service.js";
 import type { BrowserCall, BrowserLifecycle, BrowserRegistry, RawBrowserCall, ReadSnapshot } from "./browser-mcp-types.js";
@@ -55,16 +56,17 @@ export function createBrowserMcpServer(
   const server = new McpServer({ name: "browser", version: "0.1.0" }, { instructions: BROWSER_INSTRUCTIONS });
   const readDumps = new PageReadDumpStore();
 
-  // Which events this session has been shown. Every tool registered below runs
-  // through this wrapper, so "since your previous tool call" means the same
-  // thing in every reply and in wait_for_event.
+  // Which events this session has been shown, and the context of each tool
+  // call. Every tool registered below runs through this wrapper, so "since
+  // your previous call" and "the tab this call acted on" have one meaning in
+  // every reply and in wait_for_event. The context rides AsyncLocalStorage, so
+  // tool calls that overlap in one session never read each other's.
   const inbox = new EventInbox(events);
+  const toolCall = new AsyncLocalStorage<{ window: CallWindow; actedTab?: number }>();
   const registerTool = server.registerTool.bind(server);
   server.registerTool = ((name: string, toolConfig: unknown, cb: (...args: unknown[]) => unknown) =>
-    registerTool(name, toolConfig as never, ((...args: unknown[]) => {
-      inbox.beginCall();
-      return cb(...args);
-    }) as never)) as typeof server.registerTool;
+    registerTool(name, toolConfig as never, ((...args: unknown[]) =>
+      toolCall.run({ window: inbox.beginCall() }, () => cb(...args))) as never)) as typeof server.registerTool;
 
   // ── Per-MCP-session routing state (this closure IS the session) ──────────
   /** Target this session drives; null = follow the backend's global default. */
@@ -269,6 +271,19 @@ export function createBrowserMcpServer(
       ? () => withForegroundLease(leaseKey, run)
       : run;
     const result = injectedClaim ? healDeadClaim(claimTab!, exec()) : exec();
+    // The tab this call ran in — what the extension resolved when no tabId was
+    // sent — is the tab this tool call's reply reports events for.
+    const ctx = toolCall.getStore();
+    if (ctx && TAB_SCOPED.has(method)) {
+      result.then(
+        (value) => {
+          const ran = (value as { tabId?: unknown } | null | undefined)?.tabId;
+          if (typeof ran === "number") ctx.actedTab = ran;
+          else if (typeof p.tabId === "number") ctx.actedTab = p.tabId;
+        },
+        () => {},
+      );
+    }
     if (MUTATING.has(method) || RECORDABLE_READS.has(method)) {
       // Record the ORIGINAL params (pre claim-injection) — a playbook step
       // that omitted tabId should stay omitted, so replay in a different
@@ -333,19 +348,23 @@ export function createBrowserMcpServer(
       !isAgentHiddenEvent(e.kind) &&
       (isTopologyEvent(e.kind) || tgt == null || e.browser == null || e.browser === tgt.instanceId);
   };
-  /** The unseen events a reply about `onTab` carries, marked seen. Narrowed to
-   * that tab: filtering by browser alone meant every unrelated tab in the same
-   * Chrome poured its navigations into every reply (a measured session carried
-   * 21-22 events per page_state, all from a scratchpad file in another tab).
-   * Tab-less events (-1) are worker-level and stay. Events of other tabs stay
-   * unseen until a reply about their tab, read_events or wait_for_event. */
-  const drainEvents = (onTab?: number): string => {
+  /** The unseen events this tool call's reply carries, marked seen: the
+   * events of the tab the call acted on, plus tab-less (-1, worker-level) and
+   * topology events. Narrowed to that tab: filtering by browser alone meant
+   * every unrelated tab in the same Chrome poured its navigations into every
+   * reply (a measured session carried 21-22 events per page_state, all from a
+   * scratchpad file in another tab). When the call acted on no known tab,
+   * only the tab-less ones. Other tabs' events stay unseen until a reply about
+   * their tab, read_events or wait_for_event. */
+  const drainEvents = (): string => {
+    const ctx = toolCall.getStore();
+    const tab = ctx?.actedTab;
     const sees = sessionSees();
-    const mine = inbox.take((e) => sees(e) && (onTab == null || isTopologyEvent(e.kind) || e.tabId < 0 || e.tabId === onTab));
+    const mine = inbox.take((e) => sees(e) && (isTopologyEvent(e.kind) || e.tabId < 0 || (tab != null && e.tabId === tab)));
     if (!mine.length) return "";
     const now = Date.now();
     const line = (e: BrowserEvent) =>
-      `  • ${evLine(e)}${inbox.isEarlier(e) ? ` (earlier, ${Math.max(0, Math.round((now - e.ts) / 1000))}s ago)` : ""}`;
+      `  • ${evLine(e)}${ctx && inbox.isEarlier(e, ctx.window) ? ` (earlier, ${Math.max(0, Math.round((now - e.ts) / 1000))}s ago)` : ""}`;
     return `\n⚠ ${mine.length} unseen event(s):\n${mine.map(line).join("\n")}`;
   };
 
@@ -374,7 +393,7 @@ export function createBrowserMcpServer(
   registerDomTools({ server, call, deltaKey, drainEvents, readDumps, readSnapshot });
   registerCaptureTools({ server, call, deltaKey, drainEvents, captureWithLease, readDumps, readSnapshot });
   registerIoTools({
-    server, call, events, evLine, inbox, sessionSees, deltaKey,
+    server, call, events, evLine, inbox, sessionSees, callWindow: () => toolCall.getStore()?.window, deltaKey,
     recordAsOne: (action, run) => (planRunner ? planRunner.asOneAction(action, run) : run()),
   });
 

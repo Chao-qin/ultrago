@@ -9,7 +9,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { LocalMethod, RpcMethod, isTopologyEvent, type BrowserEvent, type PlaybookStepAction, TOOL_HINTS } from "@bcp/shared";
-import type { EventInbox } from "./event-inbox.js";
+import type { CallWindow, EventInbox } from "./event-inbox.js";
 import { config, domainAllowed } from "./config.js";
 import { resolveUploadSources } from "./upload-source.js";
 import type { EventStore } from "./event-store.js";
@@ -35,6 +35,8 @@ export interface IoToolDeps {
   inbox: EventInbox;
   /** The events this session may see at all (target browser + topology, minus agent-hidden kinds). */
   sessionSees: () => (e: BrowserEvent) => boolean;
+  /** The running tool call's window (what counts as recent for it). */
+  callWindow: () => CallWindow | undefined;
   /** This session's snapshot-baseline key (pick_option derives a private one from it). */
   deltaKey: string;
   /** Run a composite so the current plan step records it as ONE action. */
@@ -44,7 +46,7 @@ export interface IoToolDeps {
 /** Registers switch_tab / download / upload_file / pick_option / drag /
  *  read_network / set_network_capture / read_events /
  *  wait_for_event / right_click / double_click / paste_text / hover. */
-export function registerIoTools({ server, call, events, evLine, inbox, sessionSees, deltaKey, recordAsOne }: IoToolDeps): void {
+export function registerIoTools({ server, call, events, evLine, inbox, sessionSees, callWindow, deltaKey, recordAsOne }: IoToolDeps): void {
   registerRpcTool(
     server,
     RpcMethod.SwitchTab,
@@ -312,7 +314,8 @@ export function registerIoTools({ server, call, events, evLine, inbox, sessionSe
         // popup its last click opened, a browser that came online 2s ago — and
         // waitFor only sees FUTURE pushes. So first take an unseen match from
         // since the previous tool call began.
-        const already = inbox.recent(pred);
+        const window = callWindow();
+        const already = window ? inbox.recent(pred, window) : undefined;
         const hit = already ?? (await events.waitFor(pred, cap));
         if (!hit) return text(`Timed out after ${cap}ms waiting for ${kinds.join("/")}.`);
         inbox.markShown([hit]);

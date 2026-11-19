@@ -27,8 +27,9 @@ const SPECIAL_PURPOSE = (() => {
     ["198.18.0.0", 15], ["198.51.100.0", 24], ["203.0.113.0", 24], ["224.0.0.0", 4], ["240.0.0.0", 4],
   ] as const) list.addSubnet(net, prefix, "ipv4");
   for (const [net, prefix] of [
-    ["::", 128], ["::1", 128], ["64:ff9b:1::", 48], ["100::", 64], ["2001::", 23],
-    ["2001:db8::", 32], ["fc00::", 7], ["fe80::", 10], ["ff00::", 8],
+    // ::/96 covers ::, ::1 and the deprecated IPv4-compatible form; fec0::/10 is deprecated site-local.
+    ["::", 96], ["64:ff9b:1::", 48], ["100::", 64], ["2001::", 23],
+    ["2001:db8::", 32], ["fc00::", 7], ["fe80::", 10], ["fec0::", 10], ["ff00::", 8],
   ] as const) list.addSubnet(net, prefix, "ipv6");
   return list;
 })();
@@ -48,17 +49,27 @@ function v6Groups(ip: string): number[] {
   return tail === undefined ? left : [...left, ...Array(8 - left.length - right.length).fill(0), ...right];
 }
 
+/** The IPv4 address an IPv6 one carries, for every form that routes to it:
+ *  IPv4-mapped `::ffff:a.b.c.d`, IPv4-translated (SIIT) `::ffff:0:a.b.c.d`,
+ *  the NAT64 well-known prefix `64:ff9b::a.b.c.d`, and 6to4 `2002:AABB:CCDD::`. */
+function embeddedIpv4(g: number[]): string | null {
+  const v4 = (hi: number, lo: number) => `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+  const zero = (from: number, to: number) => g.slice(from, to).every((x) => x === 0);
+  if (zero(0, 5) && g[5] === 0xffff) return v4(g[6]!, g[7]!);
+  if (zero(0, 4) && g[4] === 0xffff && g[5] === 0) return v4(g[6]!, g[7]!);
+  if (g[0] === 0x64 && g[1] === 0xff9b && zero(2, 6)) return v4(g[6]!, g[7]!);
+  if (g[0] === 0x2002) return v4(g[1]!, g[2]!);
+  return null;
+}
+
 /** True for an address no public URL may reach. An IPv6 address that carries
- *  an IPv4 one — IPv4-mapped (`::ffff:127.0.0.1`) or the NAT64 well-known
- *  prefix (`64:ff9b::a00:1`) — is judged as that IPv4 address. */
+ *  an IPv4 one is judged as that IPv4 address. */
 export function isSpecialPurposeAddress(ip: string): boolean {
   const family = isIP(ip);
   if (family === 4) return SPECIAL_PURPOSE.check(ip, "ipv4");
   if (family !== 6) return true;
-  const g = v6Groups(ip);
-  const mapped = g.slice(0, 5).every((x) => x === 0) && g[5] === 0xffff;
-  const nat64 = g[0] === 0x64 && g[1] === 0xff9b && g.slice(2, 6).every((x) => x === 0);
-  if (mapped || nat64) return SPECIAL_PURPOSE.check(`${g[6]! >> 8}.${g[6]! & 255}.${g[7]! >> 8}.${g[7]! & 255}`, "ipv4");
+  const carried = embeddedIpv4(v6Groups(ip));
+  if (carried) return SPECIAL_PURPOSE.check(carried, "ipv4");
   return SPECIAL_PURPOSE.check(ip, "ipv6");
 }
 
@@ -70,7 +81,8 @@ export interface PublicFetchDeps {
 }
 
 export interface PublicFetchOptions {
-  headers?: Record<string, string>;
+  /** Request headers for each hop, given that hop's URL (a Referer, say, belongs to the host it is sent to). */
+  headers?: (url: URL) => Record<string, string>;
   /** Budget for the whole request, redirects included. */
   timeoutMs: number;
   /** Refuse a body larger than this many bytes (checked as it streams). */
@@ -100,7 +112,7 @@ export async function fetchPublicUrl(rawUrl: string, opts: PublicFetchOptions, d
   let url = rawUrl;
   for (let hop = 0; ; hop++) {
     const target = checkUrl(url, blocked);
-    const res = await get(target, opts.headers ?? {}, signal, guardedLookup(resolveAll, blocked));
+    const res = await get(target, opts.headers?.(target) ?? {}, signal, guardedLookup(resolveAll, blocked));
     const location = res.headers.location;
     if (REDIRECT.has(res.statusCode ?? 0) && location) {
       res.resume();
@@ -108,8 +120,14 @@ export async function fetchPublicUrl(rawUrl: string, opts: PublicFetchOptions, d
       url = new URL(location, target).href;
       continue;
     }
-    const body = await readBody(res, opts.maxBytes);
-    return { status: res.statusCode ?? 0, headers: res.headers, url, body };
+    const status = res.statusCode ?? 0;
+    // Only a 2xx body is content; an error page is not read, so its size can
+    // never hide the status behind a "too large".
+    if (status < 200 || status >= 300) {
+      res.resume();
+      return { status, headers: res.headers, url, body: Buffer.alloc(0) };
+    }
+    return { status, headers: res.headers, url, body: await readBody(res, opts.maxBytes) };
   }
 }
 

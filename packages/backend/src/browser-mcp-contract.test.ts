@@ -620,7 +620,8 @@ test("batch 的每一步接受与单个工具相同的定位参数", async () =>
  * event, including the other tabs' events it filtered out. The popup a click
  * opened in tab 2 was then invisible to wait_for_event({tabId: 2}), which sat
  * until its timeout for something that had already happened. */
-test("回复只展示本标签页的事件时，别的标签页的事件仍能被 wait_for_event 立即拿到", async () => {
+for (const [label, readArgs] of [["显式传 tabId", { tabId: 1 }], ["省略 tabId（用活动 / 认领标签页）", {}]] as const)
+test(`回复只展示本标签页的事件时，别的标签页的事件仍能被 wait_for_event 立即拿到 —— ${label}`, async () => {
   const events = new EventStore();
   const pageState = {
     url: "https://x/", title: "t", readyState: "complete", loading: false, interactableCount: 1,
@@ -640,7 +641,8 @@ test("回复只展示本标签页的事件时，别的标签页的事件仍能�
   const client = new Client({ name: "contract-test", version: "0" });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
 
-  const first = await client.callTool({ name: "page_state", arguments: { tabId: 1 } });
+  // The extension reports the tab it actually read (tabId 1) even when none was sent.
+  const first = await client.callTool({ name: "page_state", arguments: readArgs });
   assert.doesNotMatch(JSON.stringify(first.content), /tab 2/, "a reply about tab 1 does not show tab 2's event");
 
   const started = Date.now();

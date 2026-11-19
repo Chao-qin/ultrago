@@ -20,7 +20,7 @@ export interface DomToolDeps {
   server: McpServer;
   call: BrowserCall;
   deltaKey: string;
-  drainEvents: (onTab?: number) => string;
+  drainEvents: () => string;
   readDumps: PageReadDumpStore;
   readSnapshot: ReadSnapshot;
 }
@@ -41,7 +41,7 @@ export function registerDomTools({ server, call, deltaKey, drainEvents, readDump
       try {
         const r = await readSnapshot(tabId, { query, viewportOnly, limit, after });
         const more = r.moreBelow ? "\n\n↓ more content below the fold — use scroll to load/see it" : "";
-        return text(`# ${r.title}\n${r.url}\n\n${r.text}${more}${drainEvents(tabId)}`);
+        return text(`# ${r.title}\n${r.url}\n\n${r.text}${more}${drainEvents()}`);
       } catch (e) {
         return fail(e);
       }
@@ -59,7 +59,7 @@ export function registerDomTools({ server, call, deltaKey, drainEvents, readDump
     async ({ tabId, verbosity, resetDelta }) => {
       try {
         const s = await call(RpcMethod.PageState, { tabId, verbosity, resetDelta, deltaKey });
-        return text(renderPageState(s) + drainEvents(s.tabId));
+        return text(renderPageState(s) + drainEvents());
       } catch (e) {
         return fail(e);
       }
@@ -134,7 +134,7 @@ export function registerDomTools({ server, call, deltaKey, drainEvents, readDump
           overview: r.overview,
           maxChars,
         });
-        return text(`# ${r.title}\n${r.url}\n\n${renderReadDump(dump)}${drainEvents(tabId)}`);
+        return text(`# ${r.title}\n${r.url}\n\n${renderReadDump(dump)}${drainEvents()}`);
       } catch (e) {
         return fail(e);
       }

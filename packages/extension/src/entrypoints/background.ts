@@ -765,8 +765,8 @@ export default defineBackground(() => {
               // inside bcpReadOnlyGuard, which refuses every page effect and
               // any Promise result; everything else may act and is awaited.
               if (readOnlyGuardSrc != null) {
-                const runReadOnly = (new Function(`return (${readOnlyGuardSrc})`)() as () => (f: () => unknown) => unknown)();
-                return runReadOnly(() => fn!(...args));
+                const runReadOnly = (new Function(`return (${readOnlyGuardSrc})`)() as () => (f: () => unknown, source: string) => unknown)();
+                return runReadOnly(() => fn!(...args), src);
               }
               let v: unknown = fn(...args);
               if (v && typeof (v as { then?: unknown }).then === "function") v = await v; // await promises

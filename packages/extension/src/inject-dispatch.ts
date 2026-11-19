@@ -251,7 +251,7 @@ export function createInjectDispatch(deps: InjectDeps) {
       // wrong success is cached by persistResult and replayed on every resend of
       // this RPC id.
       if ((execErr || !res) && announcedDuringAction && navCommittedUrl) {
-        return { ok: true, delta: { urlChanged: navCommittedUrl } };
+        return { ok: true, delta: { urlChanged: navCommittedUrl }, tabId };
       }
     }
 
@@ -284,8 +284,12 @@ export function createInjectDispatch(deps: InjectDeps) {
     // means widening what `p.resolve()` hands back — and that is every RPC
     // caller's return type, for a fact only replay cares about. It sits next to
     // `delta`, which is metadata of the same kind.
+    // `tabId` rides along the same way: it is the tab this op actually ran in
+    // — the one resolveTab picked when the caller sent none — so the backend
+    // can tell which tab a reply is about without guessing.
     const v = r?.value;
-    return r?.resolved && v && typeof v === "object" ? { ...v, resolved: r.resolved } : v;
+    if (!v || typeof v !== "object" || Array.isArray(v)) return v;
+    return { ...v, ...(r?.resolved ? { resolved: r.resolved } : {}), tabId: (v as { tabId?: number }).tabId ?? tabId };
 }
 
     return dispatch;

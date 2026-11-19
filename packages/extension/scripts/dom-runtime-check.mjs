@@ -2300,7 +2300,7 @@ async function main() {
         const run = (body) => page.evaluate(([src, body]) => {
           const guard = new Function(`return (${src})`)()();
           try {
-            return { value: guard(new Function(body)) };
+            return { value: guard(new Function(body), body) };
           } catch (e) {
             return { error: String(e instanceof Error ? e.message : e) };
           }
@@ -2334,6 +2334,32 @@ async function main() {
         eq(after.attr, "1", "R13 the guard reports a DOM write; it does not undo it");
         eq(after.fetchIsNative, true, "R13 window.fetch restored");
         eq((await run("window.__probe = 1; return window.__probe")).value, 1, "R14 JS heap state is outside the guard (documented boundary)");
+
+        // Nothing may outlive the guarded window: deferred code would run after the APIs are restored.
+        await page.evaluate(() => { window.__lateClicks = 0; document.getElementById("b").addEventListener("click", () => window.__lateClicks++); });
+        match((await run("(async () => { await 0; document.getElementById('b').click(); })(); return true")).error ?? "(no error)",
+          /async \/ await is not allowed/, "R15 async code is refused before it runs");
+        const deferred = [
+          ["setTimeout(() => document.getElementById('b').click(), 0); return true", /window\.setTimeout\(\) is not allowed/, "R16 setTimeout"],
+          ["queueMicrotask(() => document.getElementById('b').click()); return true", /window\.queueMicrotask\(\) is not allowed/, "R17 queueMicrotask"],
+          ["Promise.resolve().then(() => document.getElementById('b').click()); return true", /Promise\.then\(\) is not allowed/, "R18 a promise callback"],
+          ["requestAnimationFrame(() => document.getElementById('b').click()); return true", /requestAnimationFrame\(\) is not allowed/, "R19 requestAnimationFrame"],
+        ];
+        for (const [body, want, label] of deferred) match((await run(body)).error ?? "(no error)", want, `${label} is refused by the read-only guard`);
+        await page.waitForTimeout(50);
+        eq(await page.evaluate(() => window.__lateClicks), 0, "R20 no deferred click ever happened");
+        eq((await run("return 'await approval'.length")).value, 14, "R21 'await' inside a string is not mistaken for async code");
+
+        const before = await page.evaluate(() => location.href);
+        match((await run("location.hash = 'x'; return true")).error ?? "(no error)", /navigating to .*#x is not allowed/, "R22 location.hash navigation is refused");
+        match((await run("location.assign('/elsewhere'); return true")).error ?? "(no error)", /navigating to .*\/elsewhere is not allowed/, "R23 location.assign is refused");
+        await page.waitForTimeout(200);
+        eq(await page.evaluate(() => location.href), before, "R24 a refused navigation did not happen");
+        match((await run("localStorage.k = '1'; return true")).error ?? "(no error)", /writing localStorage is not allowed/, "R25 a storage property write is refused");
+        eq(await page.evaluate(() => localStorage.getItem("k")), null, "R25 nothing was stored");
+        match((await run("indexedDB.open('x'); return true")).error ?? "(no error)", /IDBFactory\.open\(\) is not allowed/, "R26 IndexedDB is refused");
+        eq((await run("return localStorage.getItem('missing') === null && sessionStorage.length >= 0")).value, true, "R27 storage reads still work");
+        eq(await page.evaluate(() => new Promise((r) => setTimeout(() => r("ran"), 0))), "ran", "R28 timers work again after the check");
       },
       "https://guard.test/",
     );

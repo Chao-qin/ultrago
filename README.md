@@ -275,7 +275,8 @@ WeClaw sidecar 在线时，`wec_status` / `wec_send_text` / `wec_send_image` 出
 `plan` 注册一个有序计划，每步自带 `verify`（结构化断言：url 含 X、文本存在 / 不存在、某个可交互元素的
 名字 / 勾选 / 可用 / 取值、自本步开始以来某 URL 的 2xx、无页面错误、页面已静默、对话框已开、表单可提交，
 以及 `evalCheck` 与 `evalUntil`）与 `onFail`（retry / rescan / escalate，默认 escalate）。
-`evalCheck` 是只读检查：同步返回，执行期间改 DOM、聚焦、滚动、改输入值、派发事件、发请求、写存储都会让检查失败；
+`evalCheck` 是只读检查：必须同步返回、不能用 async / await，执行期间改 DOM、聚焦、滚动、改输入值、派发事件、跳转页面、发请求、写存储、
+用定时器或 Promise 回调安排延后执行，都会让检查失败；
 需要边检查边推进（点击、滚动、等待）的写成 `evalUntil`，它每次 advance 和重试都会再执行一遍，所以必须可重复执行。
 `advance` **自己重新读页面**判定，验不过就不放行。它只判不做，动作仍由 agent 执行。
 

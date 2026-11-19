@@ -910,8 +910,9 @@ export interface StepVerify {
    * with arbitrary expressiveness for what the structured predicates can't say
    * (a computed value, JS state, a canvas value via a page API). Read-only and
    * synchronous, enforced: it runs under bcpReadOnlyGuard, which fails the check
-   * on any DOM change, input, event, scroll, network, storage or history call,
-   * or a Promise result — a check that changed the page would forge the very
+   * on any DOM change, input, event, scroll, navigation, network, storage or
+   * history call, on async/await or work scheduled for later, or a Promise
+   * result — a check that changed the page would forge the very
    * evidence it reports. Refused when the backend runs with BCP_EVAL=off; a
    * strict page CSP can block it. `equals` → String(value) === equals; omit
    * `equals` → the value must be truthy. */
