@@ -92,6 +92,14 @@ test('in the desktop build the gateway answers only the desktop token, and never
       assert.equal((await realFetch(`${base}/v1/models`)).status, 401);
       assert.equal((await realFetch(`${base}/v1/models`, { headers: { Authorization: 'Bearer wrong-token' } })).status, 401);
       assert.equal((await realFetch(`${base}/v1/models`, { headers: { Authorization: 'Bearer desktop-token-fixture' } })).status, 200);
+      assert.equal((await realFetch(`${base}/v1/models`, { headers: { Authorization: 'Bearer desktop-token-fixturE' } })).status, 401, '同长度、只差一位也拒绝');
+      // The desktop client configures channels and keys itself; a caller holding its token still may not.
+      const auth = { Authorization: 'Bearer desktop-token-fixture', 'Content-Type': 'application/json' };
+      for (const [method, path] of [['POST', '/admin/keys'], ['PUT', '/admin/channels'], ['DELETE', '/admin/keys/k1'], ['POST', '/ADMIN/keys']]) {
+        const response = await realFetch(`${base}${path}`, { method, headers: auth, body: method === 'DELETE' ? undefined : '{}' });
+        assert.equal(response.status, 409, `${method} ${path} 应被拒绝`);
+      }
+      assert.equal((await realFetch(`${base}/admin/runtime`, { headers: auth })).status, 200, '只读的管理接口照常可用');
     });
   } finally {
     for (const [key, value] of [['BCP_DESKTOP', saved.desktop], ['BCP_DESKTOP_TOKEN', saved.token]] as const) {

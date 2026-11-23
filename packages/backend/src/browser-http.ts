@@ -71,7 +71,10 @@ export function createBrowserHttpRouter(setup: BrowserSetupService, dispatcher: 
   router.post('/policy', (req, res) => {
     const expected = process.env.BCP_POLICY_TOKEN;
     const given = req.headers['x-bcp-policy-token'];
-    if (!expected || typeof given !== 'string' || given.length !== expected.length || !timingSafeEqual(Buffer.from(given), Buffer.from(expected))) {
+    // Byte lengths, not string lengths: timingSafeEqual throws on buffers of different sizes, and a non-ASCII
+    // header of the right string length would otherwise come back as a 500 instead of a refusal.
+    const givenBytes = Buffer.from(typeof given === 'string' ? given : '');
+    if (!expected || typeof given !== 'string' || givenBytes.length !== Buffer.byteLength(expected) || !timingSafeEqual(givenBytes, Buffer.from(expected))) {
       res.status(403).json({ error: 'browser-tool policy is managed by the desktop client' }); return;
     }
     const { eval: allowEval, localEval, screenshotDir, cloudCaptcha } = req.body ?? {};

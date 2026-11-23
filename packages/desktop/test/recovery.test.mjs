@@ -10,8 +10,11 @@ import { Supervisor } from '../src/supervisor.mjs';
 
 const settle = () => new Promise((done) => setImmediate(done));
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
-async function until(condition, label) {
-  for (let attempt = 0; attempt < 500 && !condition(); attempt++) await sleep(2);
+// A real-time deadline rather than a count of polls: on a loaded machine each poll takes longer, and a fixed count ran
+// out before the stand-in services forked. performance.now(), because some tests mock Date.
+async function until(condition, label, timeoutMs = 15_000) {
+  const deadline = performance.now() + timeoutMs;
+  while (!condition() && performance.now() < deadline) await sleep(2);
   assert.ok(condition(), label);
 }
 

@@ -322,8 +322,9 @@ export class Coordinator extends EventEmitter {
       // Services reach each other through the ingress only on demand, so none waits for another to start.
       await Promise.all([
         // Browser-tool policy reaches the backend through ONE channel, pushPolicy(), right after the services start
-        // and on every change. Its token goes to the backend alone: the only service that checks it, and the one
-        // switch a script escaping the workbench or the gateway must not be able to flip.
+        // and on every change. Its token goes to the backend alone, the only service that checks it, so the workbench,
+        // the gateway and the scripts they start no longer inherit it. It is not a boundary against code running as
+        // the same OS user, which can still read another process's environment.
         this.supervisor.start('backend', this.paths.entries.backend, { BCP_POLICY_TOKEN: this.policyToken }),
         this.supervisor.start('console', this.paths.entries.console),
         ...(model ? [this.supervisor.start('llm', this.paths.entries.llm, model.key ? { BCP_DESKTOP_UPSTREAM_KEY: model.key } : {})] : []),
