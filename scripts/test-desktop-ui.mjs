@@ -37,7 +37,7 @@ try {
             ? { client, ok: false, message: 'fixture: Cursor 没有响应安装链接' }
             : { client, ok: true, message: '已加入 Claude Code 的用户配置，重新打开 Claude Code 后可用。' });
           if (name === 'autostartState') return false;
-          if (name === 'policy') state = { ...state, ...(input.allowEval !== undefined ? { allowEval: input.allowEval } : {}), ...(input.allowLocalEval !== undefined ? { allowLocalEval: input.allowLocalEval } : {}), ...(input.screenshotDir !== undefined ? { screenshotDir: input.screenshotDir || '' } : {}) };
+          if (name === 'policy') state = { ...state, ...(input.allowEval !== undefined ? { allowEval: input.allowEval } : {}), ...(input.allowLocalEval !== undefined ? { allowLocalEval: input.allowLocalEval } : {}), ...(input.screenshotDir !== undefined ? { screenshotDir: input.screenshotDir || '' } : {}), ...(input.allowCloudCaptcha !== undefined ? { allowCloudCaptcha: input.allowCloudCaptcha } : {}) };
           if (name === 'chooseScreenshotDir') state = { ...state, screenshotDir: 'C:\\Users\\卖家\\Desktop\\agent工作区' };
           if (name === 'autostart') {
             if (window.autostartFixture === 'throw') throw new Error('fixture: 开机启动写入失败');
@@ -62,7 +62,9 @@ try {
     await page.locator('#prepare-next').filter({ hasText: '点击准备工作台' }).waitFor();
     await page.locator('#agent-config').filter({ hasText: 'mcpServers' }).waitFor({ state: 'attached' });
     assert.equal(await page.locator('.wizard-panel:visible').count(), 1);
-    assert.equal(await page.locator('.stepper button').count(), 5, '五个步骤按固定顺序排列');
+    assert.equal(await page.locator('.checklist [data-step-target]').count(), 6, '五个步骤加权限与偏好，按固定顺序排列');
+    assert.equal(await page.locator('[data-step-target="5"]').isDisabled(), false, '权限与偏好不必等服务启动');
+    assert.match(await page.locator('[data-step-target="0"]').getAttribute('class'), /attention/, '还没做的必需项要突出');
     assert.equal(await page.locator('#next-step').isDisabled(), true);
     assert.equal(await page.locator('[data-step-target="1"]').isDisabled(), true);
     assert.equal(await page.locator('#preparation-log').evaluate((node) => node.open), false);
@@ -90,6 +92,8 @@ try {
     await page.locator('#next-step').click();
     assert.equal(await page.locator('#browser').isVisible(), true);
     assert.equal(await page.locator('#bridge-repair').isVisible(), false, '自动注册成功时不应显示额外注册入口');
+    assert.equal(await page.locator('[data-step-target="1"] .step-status').textContent(), '等待确认 Chrome');
+    assert.match(await page.locator('[data-step-target="1"]').getAttribute('class'), /attention/, '服务就绪后待办转到连接 Chrome');
     await page.evaluate(() => window.setDesktopFixture({ bridgeReady: false, bridgeError: 'fixture: 当前用户注册失败' }));
     assert.equal(await page.locator('#bridge-repair').isVisible(), true);
     await page.locator('#repair-bridge').click();
@@ -120,6 +124,7 @@ try {
     assert.equal(await page.locator('#api-key').inputValue(), '');
     await page.locator('#prepare').click();
     assert.equal(await page.locator('#prepare-progress').evaluate((node) => node.value), 4);
+    assert.match(await page.locator('#service-list').textContent(), /浏览器服务运行中工作台运行中模型网关未启用/, '服务卡按客户端上报的服务显示');
     assert.match(await page.locator('#prepare-next').textContent(), /下一步.*Chrome/);
     await page.locator('#next-step').click();
     await page.locator('#select-browser').click();
@@ -154,11 +159,16 @@ try {
     assert.deepEqual(connectCalls, [['claude-code', 'cursor']], '只接入勾选的助手');
     assert.match(await page.locator('#agent-connect-result').textContent(), /1 个助手没有接入成功/);
     assert.equal(await page.locator('#agent-connect').isDisabled(), true, '接入后清空勾选');
+    assert.equal(await page.locator('#agent-manual').evaluate((node) => node.open), false, '手动接入默认收起');
+    await page.locator('#agent-manual > summary').click();
     await page.locator('#agent-select').selectOption('opencode');
     await page.locator('#agent-config').filter({ hasText: 'servers' }).waitFor({ state: 'attached' });
     assert.equal(await page.locator('#agent-download').isVisible(), true);
     await page.locator('#agent-copy').click();
     await page.locator('#agent-check-result').filter({ hasText: '配置已复制' }).waitFor();
+    await page.locator('[data-step-target="5"]').click();
+    assert.equal(await page.locator('#preferences').isVisible(), true);
+    assert.equal(await page.locator('#next-step').isVisible(), false, '权限与偏好不在线性步骤里');
     assert.equal(await page.locator('#allow-eval').isChecked(), true, '页面脚本默认开启');
     assert.equal(await page.locator('#allow-local-eval').isChecked(), true, '本机脚本默认开启');
     const policyCalls = () => page.evaluate(() => (window.__bridgeCalls ?? []).filter(([name]) => name === 'policy').map(([, input]) => JSON.stringify(input)));
@@ -168,6 +178,7 @@ try {
     assert.deepEqual(await policyCalls(), ['{"allowLocalEval":false}', '{"allowEval":false}'], '取消勾选真的把关闭发给客户端');
     await page.evaluate(() => window.setDesktopFixture({}));
     assert.equal(await page.locator('#allow-eval').isChecked(), false, '重新渲染后仍是客户端保存的状态');
+    assert.equal(await page.locator('[data-step-target="5"] .step-status').textContent(), '页面脚本关 · 本机脚本关', '清单上能看到开关的当前状态');
     await page.locator('#allow-local-eval').check();
     await page.locator('#allow-eval').check();
     await page.locator('#screenshot-dir').click();
@@ -175,7 +186,19 @@ try {
     assert.equal(await page.locator('#screenshot-dir-clear').isVisible(), true);
     await page.locator('#screenshot-dir-clear').click();
     await page.locator('#screenshot-dir-value').filter({ hasText: '截图保存位置：系统临时目录' }).waitFor();
-    await page.locator('[data-step-target="4"]').click();
+    assert.equal(await page.locator('#allow-cloud-captcha').isChecked(), false, '云端识别验证码默认关闭');
+    assert.match(await page.locator('#cloud-captcha-target').textContent(), /当前没有启用云 API/, '没有云 API 时说清楚开了也没处可发');
+    await page.locator('#allow-cloud-captcha').check();
+    await page.waitForFunction(() => (window.__bridgeCalls ?? []).some(([name, input]) => name === 'policy' && input?.allowCloudCaptcha === true));
+    await page.locator('[data-step-target="5"] .step-status').filter({ hasText: '云端识别验证码开' }).waitFor();
+    await page.evaluate(() => window.setDesktopFixture({ modelMode: 'cloud', modelConfigured: true, modelUrl: 'https://fixture.example', model: 'vision-fixture' }));
+    assert.equal(await page.locator('#cloud-captcha-target').textContent(), '开启后截图会发到：https://fixture.example（模型 vision-fixture）', '开关旁写明截图去向');
+    assert.match(await page.locator('#model-hint').textContent(), /验证码截图也会发到/, '在模型一步选云 API 时也提醒开关已开');
+    await page.evaluate(() => window.setDesktopFixture({ modelMode: 'local', localModel: { configured: true } }));
+    assert.match(await page.locator('#cloud-captcha-target').textContent(), /截图不会离开这台电脑/);
+    await page.locator('#allow-cloud-captcha').uncheck();
+    await page.waitForFunction(() => !document.getElementById('allow-cloud-captcha').checked);
+    await page.evaluate(() => window.setDesktopFixture({ modelMode: 'skip', modelConfigured: false, modelUrl: '', model: '' }));
     assert.equal(await page.locator('#autostart').isChecked(), false);
     await page.locator('#autostart').check();
     assert.equal(await page.locator('#autostart').isChecked(), true);
@@ -212,6 +235,7 @@ try {
     assert.equal(await page.locator('#workbench').isEnabled(), true);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${width} ${colorScheme} viewport overflow`);
     assert.deepEqual(errors, []);
+    await page.locator('[data-step-target="5"]').click();
     await page.evaluate(() => window.setDesktopFixture({ phase: 'waiting', setupCompleted: true, browserReady: false }));
     await page.evaluate(() => window.setDesktopFixture({ phase: 'ready' }));
     assert.equal(await page.locator('#browser').isVisible(), true, '已使用用户仅需恢复浏览器连接');

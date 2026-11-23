@@ -14,7 +14,8 @@ import { captureBrowserScreenshot } from './browser-screenshot.js';
  * one attempt, no queue, failures logged and dropped. Book-run deliveries keep
  * using the durable path, where "must eventually arrive" IS the requirement.
  *
- * CAPTCHA events are candidates until a local visual verifier confirms them.
+ * CAPTCHA events are candidates until a visual verifier confirms them (a local
+ * model, or a cloud one only if the user allowed it — see captcha-verifier.ts).
  * The event body stays intact, with the verified screenshot attached.
  */
 
@@ -67,7 +68,7 @@ export function createEventCapture(
   };
 }
 
-/** Only a candidate that the local visual verifier confirms is pushed — every
+/** Only a candidate that the visual verifier confirms is pushed — every
  *  `captcha_appeared` is a DOM estimate until then. The driving agent never
  *  sees these events at all (isAgentHiddenEvent). */
 export function shouldNotify(e: { kind: string }): boolean {

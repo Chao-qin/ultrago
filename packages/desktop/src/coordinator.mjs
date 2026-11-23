@@ -147,6 +147,7 @@ export class Coordinator extends EventEmitter {
       browserReady: this.pairedGeneration === this.generation && !!selectedBrowser(this.browsers, this.settings.browserId),
       modelMode: this.settings.modelMode, modelConfigured: !!this.settings.cloud, localModel: { ...this.localModel, model: LOCAL_MODEL, configured: !!this.settings.local },
       allowEval: this.settings.allowEval !== false, allowLocalEval: this.settings.allowLocalEval !== false, screenshotDir: this.settings.screenshotDir || '',
+      allowCloudCaptcha: this.settings.allowCloudCaptcha === true,
       model: this.settings.cloud?.model || '', dataDirectory: this.paths.userData,
       modelUrl: this.settings.cloud?.url || '',
       bridgeReady: this.bridgeReady || false, bridgeBusy: this.bridgeBusy || false,
@@ -570,12 +571,17 @@ export class Coordinator extends EventEmitter {
       if (typeof input.allowLocalEval !== 'boolean') throw new Error('本机脚本开关无效。');
       change.localEval = input.allowLocalEval;
     }
+    if (input?.allowCloudCaptcha !== undefined) {
+      if (typeof input.allowCloudCaptcha !== 'boolean') throw new Error('云端识别验证码开关无效。');
+      change.cloudCaptcha = input.allowCloudCaptcha;
+    }
     if (input?.screenshotDir !== undefined) {
       if (input.screenshotDir !== null && (typeof input.screenshotDir !== 'string' || !isAbsolute(input.screenshotDir))) throw new Error('截图目录必须是完整路径。');
       change.screenshotDir = input.screenshotDir;
     }
     if (change.eval !== undefined) this.settings.allowEval = change.eval;
     if (change.localEval !== undefined) this.settings.allowLocalEval = change.localEval;
+    if (change.cloudCaptcha !== undefined) this.settings.allowCloudCaptcha = change.cloudCaptcha;
     if (change.screenshotDir !== undefined) {
       if (change.screenshotDir) this.settings.screenshotDir = change.screenshotDir;
       else delete this.settings.screenshotDir;
@@ -583,13 +589,13 @@ export class Coordinator extends EventEmitter {
     await this.saveSettings();
     // A running backend reads these on every use, so the change applies without a restart — also mid-start.
     if (this.supervisor?.endpoints.backend) await this.pushPolicy();
-    this.recordLog({ service: 'desktop', text: `浏览器能力已更新：页面脚本${this.settings.allowEval === false ? '关闭' : '开启'}，本机脚本${this.settings.allowLocalEval === false ? '关闭' : '开启'}，截图目录${this.settings.screenshotDir || '为系统临时目录'}。` });
+    this.recordLog({ service: 'desktop', text: `浏览器能力已更新：页面脚本${this.settings.allowEval === false ? '关闭' : '开启'}，本机脚本${this.settings.allowLocalEval === false ? '关闭' : '开启'}，截图目录${this.settings.screenshotDir || '为系统临时目录'}，云端识别验证码${this.settings.allowCloudCaptcha === true ? '开启' : '关闭'}。` });
   }
 
   /** Sends the saved policy straight to the backend's internal port. Like every request to a desktop service it
    *  must pass the service's desktop guard (Authorization); the policy token on top is what only this coordinator holds. */
   async pushPolicy() {
-    await this.policyRequest({ eval: this.settings.allowEval !== false, localEval: this.settings.allowLocalEval !== false, screenshotDir: this.settings.screenshotDir || null });
+    await this.policyRequest({ eval: this.settings.allowEval !== false, localEval: this.settings.allowLocalEval !== false, screenshotDir: this.settings.screenshotDir || null, cloudCaptcha: this.settings.allowCloudCaptcha === true });
   }
 
   async policyRequest(body) {

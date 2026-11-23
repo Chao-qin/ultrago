@@ -55,6 +55,12 @@ export const config = {
    * BCP_LOCAL_EVAL=off to refuse it. Read on every call, so the desktop
    * client can switch it at runtime (see /internal/browsers/policy). */
   get localEvalEnabled(): boolean { return envFlagDefaultOn(process.env.BCP_LOCAL_EVAL); },
+  /** Let CAPTCHA verification fall back to a cloud model in the gateway when no
+   * local one is available. OFF by default: the screenshot is of a logged-in
+   * page, and sending it off the machine is the user's call (BCP_CLOUD_CAPTCHA=on,
+   * or the desktop client's 「允许云端模型识别验证码」). A local model is always
+   * preferred. Read on every call (see /internal/browsers/policy). */
+  get cloudCaptchaEnabled(): boolean { return envFlag(process.env.BCP_CLOUD_CAPTCHA); },
   /** When on (BCP_FORCE_PLAN=on), mutating browser actions are REFUSED unless the
    * session has an active plan — turning the opt-in plan/advance gate into a hard
    * requirement (you must declare a verifiable plan before you can change the
