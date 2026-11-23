@@ -8,13 +8,17 @@ let mcpCheckGeneration = 0;
 let activeStep = 0;
 let stepInitialized = false;
 // One fixed order. Model and assistants can be skipped but still sit in line, so nobody has to find them.
-const stepIds = ['environment', 'browser', 'model', 'agents', 'experience'];
+// Preferences sit outside the line: they are settings rather than a step, and saving them needs no running service.
+const stepIds = ['environment', 'browser', 'model', 'agents', 'experience', 'preferences'];
 const stepNames = ['准备工作台', '连接 Chrome', 'AI 模型', '接入 AI 助手', '开始使用'];
-const LAST = stepIds.length - 1;
+const LAST = 4;
+const PREFERENCES = 5;
 const optional = (step) => step === 2 || step === 3;
 const reachable = (state) => state.phase === 'ready' ? state.browserReady ? LAST : 1 : 0;
 // A failed preparation can be caused by the model settings, so the model step stays open to fix them.
-const canOpen = (step, state) => step <= reachable(state) || step === 2 && state.phase === 'failed';
+// Preferences open before the first preparation; a returning user whose services stopped is sent back to restart them.
+const canOpen = (step, state) => step === PREFERENCES ? !state.setupCompleted || state.phase === 'ready'
+  : step <= reachable(state) || step === 2 && state.phase === 'failed';
 const onlineAssistants = (state) => (state.connections?.assistants || []).filter((client) => client.state === 'connected');
 const modelReady = (state) => state.modelMode === 'local' ? !!state.localModel?.configured : state.modelMode === 'cloud' && !!state.modelConfigured;
 function stepDone(step, state) {
@@ -26,7 +30,7 @@ function stepDone(step, state) {
 }
 
 function showStep(index, focus = true) {
-  const step = Math.max(0, Math.min(LAST, index));
+  const step = Math.max(0, Math.min(PREFERENCES, index));
   activeStep = canOpen(step, current) ? step : Math.min(step, reachable(current));
   sessionStorage.setItem('setupStep', String(activeStep));
   renderWizard();
@@ -37,19 +41,31 @@ function showStep(index, focus = true) {
 function renderWizard() {
   const ready = current.phase === 'ready';
   const available = reachable(current);
+  const failed = current.phase === 'failed';
   stepIds.forEach((id, index) => { $(id).hidden = index !== activeStep; });
-  document.querySelectorAll('.stepper [data-step-target]').forEach((button) => {
+  // The required step still to do is the one the user is waiting on; it stands out wherever they are.
+  const pending = !ready ? 0 : current.browserReady ? -1 : 1;
+  document.querySelectorAll('.checklist [data-step-target]').forEach((button) => {
     const step = Number(button.dataset.stepTarget);
     const done = stepDone(step, current) && step !== activeStep;
     button.disabled = !canOpen(step, current);
     button.classList.toggle('complete', done);
-    button.querySelector('.step-dot').textContent = done ? '✓' : step + 1;
+    button.classList.toggle('failed', step === 0 && failed);
+    button.classList.toggle('attention', step === pending && !failed);
+    button.querySelector('.step-dot').textContent = done ? '✓' : step === PREFERENCES ? '⋯' : step + 1;
+    const status = button.querySelector('.step-status');
+    status.textContent = status.title = stepStatus(step, current);
     if (step === activeStep) button.setAttribute('aria-current', 'step');
     else button.removeAttribute('aria-current');
   });
+  $('checklist-title').textContent = failed ? '工作台没能启动' : !ready ? '先准备工作台' : !stepDone(1, current) ? '还差一步就能开始' : '一切就绪';
+  $('checklist-sub').textContent = failed ? '先看看日志，修好后重试；模型设置也可以先去检查。'
+    : !stepDone(1, current) ? '必需两项完成后即可运行任务，增强项可以以后再设。' : '随时回来改任何一项，进入工作台即可开始。';
   const next = activeStep + 1;
+  // Preferences are not a step: nothing comes before or after them.
+  document.querySelector('.wizard-footer').hidden = activeStep === PREFERENCES;
   $('previous-step').hidden = activeStep === 0;
-  $('next-step').hidden = activeStep === LAST;
+  $('next-step').hidden = activeStep >= LAST;
   $('next-step').disabled = !!current.busy || next > available;
   $('next-step').textContent = optional(activeStep) && !stepDone(activeStep, current) ? `跳过，下一步：${stepNames[next]} →` : `下一步：${stepNames[next]} →`;
   $('workbench').hidden = activeStep !== LAST;
@@ -59,8 +75,21 @@ function renderWizard() {
   $('step-help').textContent = activeStep === 0 ? (ready ? '' : '准备完成后进入下一步。')
     : activeStep === 1 ? (current.browserReady ? '' : '确认 Chrome 后进入下一步。')
     : activeStep === 2 && editingModel ? '设置尚未保存，跳过将不使用这次的修改。'
-    : optional(activeStep) ? '可跳过，之后随时从上方步骤回来设置。'
+    : optional(activeStep) ? '可跳过，之后随时从步骤清单回来设置。'
     : current.browserReady ? '示例可跳过，直接进入工作台即可开始。' : '';
+}
+
+/** One line per checklist item, so a skipped or pending setting is visible from every step. */
+function stepStatus(step, state) {
+  if (step === 0) return state.phase === 'ready' ? '已启动' : phaseNames[state.phase] || '等待准备';
+  if (step === 1) return stepDone(1, state) ? '已连接' : state.phase === 'ready' ? '等待确认 Chrome' : '准备完成后连接';
+  if (step === 2) return modelReady(state) ? modelLabel(state) : '未设置：任务卡在验证码时不会提醒';
+  if (step === 3) {
+    const online = onlineAssistants(state);
+    return online.length ? online.map((client) => client.name).join('、') : '未接入：助手还不能使用这台电脑的浏览器';
+  }
+  if (step === LAST) return state.browserReady ? '可以运行示例' : 'Chrome 连接后可运行示例';
+  return `页面脚本${state.allowEval === false ? '关' : '开'} · 本机脚本${state.allowLocalEval === false ? '关' : '开'}`;
 }
 const phaseNames = { waiting: '等待准备', checking: '检查中', initializing: '初始化中', starting: '启动中', registering: '检查模板', ready: '工作台已启动', failed: '准备失败' };
 const services = { backend: '浏览器服务', console: '工作台', llm: '模型网关', migrate: '数据库初始化', desktop: '客户端' };
@@ -153,33 +182,6 @@ function modelLabel(state) {
   return '未设置';
 }
 
-/** The last step lists every setting, so a skipped one is visible and one click away. */
-function renderSummary(state) {
-  const online = onlineAssistants(state);
-  const rows = [
-    ['工作台', state.phase === 'ready' ? '已启动' : '未启动', state.phase === 'ready', 0, '去准备'],
-    ['Chrome', state.browserReady ? '已连接' : '未连接，任务要连接后才能运行', !!state.browserReady, 1, '去连接'],
-    ['AI 模型', modelReady(state) ? modelLabel(state) : '未设置：任务卡在验证码时不会提醒', modelReady(state), 2, modelReady(state) ? '修改' : '去设置'],
-    ['AI 助手', online.length ? online.map((client) => client.name).join('、') : '未接入：Claude、Cursor 等助手还不能使用这台电脑的浏览器', online.length > 0, 3, online.length ? '管理' : '去接入'],
-  ];
-  $('setup-summary').replaceChildren(...rows.map(([label, value, ok, step, verb]) => {
-    const item = document.createElement('li');
-    item.className = ok ? 'ok' : '';
-    const mark = document.createElement('span'); mark.className = 'summary-mark'; mark.textContent = ok ? '✓' : '·'; mark.setAttribute('aria-hidden', 'true');
-    const text = document.createElement('span'); text.className = 'summary-text';
-    const title = document.createElement('strong'); title.textContent = label;
-    const detail = document.createElement('small'); detail.textContent = value;
-    text.append(title, detail);
-    item.append(mark, text);
-    if (!ok || step >= 2) {
-      const go = document.createElement('button'); go.type = 'button'; go.className = 'secondary'; go.textContent = verb;
-      go.addEventListener('click', () => showStep(step));
-      item.append(go);
-    }
-    return item;
-  }));
-}
-
 function render(state) {
   const previousPhase = current.phase;
   const previouslyConnected = current.browserReady;
@@ -190,7 +192,7 @@ function render(state) {
   }
   current = state;
   const resuming = state.setupCompleted && state.busy && !['ready', 'failed'].includes(state.phase);
-  document.querySelector('.stepper').hidden = !!resuming;
+  document.querySelector('.sidebar').hidden = !!resuming;
   $('environment-title').textContent = resuming ? '正在恢复工作台' : '准备工作台';
   $('overall').textContent = state.phase === 'ready' && !state.browserReady ? '下一步 · 连接 Chrome' : phaseNames[state.phase] || '等待准备';
   $('overall').classList.toggle('ok', state.phase === 'ready');
@@ -266,12 +268,11 @@ function render(state) {
     if (content?.raw) { try { content = JSON.parse(content.raw); } catch { content = { text: content.raw }; } }
     $('result').textContent = run.error || content?.value?.text || content?.text || (run.status === 'success' ? '读取完成。你可以查看示例窗口中的商品清单。' : '任务需要处理，请查看当前步骤。');
   }
-  renderSummary(state);
   if (!stepInitialized) {
     stepInitialized = true;
     // Without a remembered step, open on the first one still to do rather than on a finished one.
     const saved = Number(sessionStorage.getItem('setupStep') ?? NaN);
-    activeStep = Number.isInteger(saved) && saved >= 0 && saved <= LAST ? saved
+    activeStep = Number.isInteger(saved) && saved >= 0 && saved <= PREFERENCES ? saved
       : state.phase !== 'ready' ? 0 : !state.browserReady ? 1 : state.setupCompleted ? LAST : 2;
   }
   if (state.setupCompleted && state.phase === 'ready' && previousPhase !== 'ready' && activeStep === 0) activeStep = state.browserReady ? LAST : 1;

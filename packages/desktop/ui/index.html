@@ -4,14 +4,26 @@
 <body><div class="app">
   <header class="app-header"><div class="brand"><img class="brand-icon" src="app-icon.png" alt=""><strong>UltraGo</strong></div><div class="header-actions"><span id="overall" class="status">等待准备</span><button data-action="workbench" id="header-workbench" class="secondary" hidden>进入工作台 →</button></div></header>
   <main>
-    <nav class="stepper" aria-label="设置步骤">
-      <button type="button" data-step-target="0" aria-controls="environment"><span class="step-dot">1</span><span class="step-name"><strong>准备工作台</strong></span></button>
-      <button type="button" data-step-target="1" aria-controls="browser"><span class="step-dot">2</span><span class="step-name"><strong>连接 Chrome</strong></span></button>
-      <button type="button" data-step-target="2" aria-controls="model"><span class="step-dot">3</span><span class="step-name"><strong>AI 模型</strong><small>可跳过</small></span></button>
-      <button type="button" data-step-target="3" aria-controls="agents"><span class="step-dot">4</span><span class="step-name"><strong>接入 AI 助手</strong><small>可跳过</small></span></button>
-      <button type="button" data-step-target="4" aria-controls="experience"><span class="step-dot">5</span><span class="step-name"><strong>开始使用</strong></span></button>
-    </nav>
     <div id="error" role="alert" hidden></div>
+    <div class="layout">
+    <aside class="sidebar">
+      <div class="checklist-head"><h1 id="checklist-title">先准备工作台</h1><p id="checklist-sub"></p></div>
+      <nav class="checklist" aria-label="设置步骤">
+        <div class="checklist-group"><h2>必需 · 完成即可运行任务</h2>
+          <button type="button" data-step-target="0" aria-controls="environment"><span class="step-dot">1</span><span class="step-name"><strong>准备工作台</strong><small class="step-status"></small></span></button>
+          <button type="button" data-step-target="1" aria-controls="browser"><span class="step-dot">2</span><span class="step-name"><strong>连接 Chrome</strong><small class="step-status"></small></span></button>
+        </div>
+        <div class="checklist-group"><h2>增强 · 可跳过，随时回来</h2>
+          <button type="button" data-step-target="2" aria-controls="model"><span class="step-dot">3</span><span class="step-name"><strong>AI 模型</strong><small class="step-status"></small></span></button>
+          <button type="button" data-step-target="3" aria-controls="agents"><span class="step-dot">4</span><span class="step-name"><strong>接入 AI 助手</strong><small class="step-status"></small></span></button>
+        </div>
+        <div class="checklist-group"><h2>开始与偏好</h2>
+          <button type="button" data-step-target="4" aria-controls="experience"><span class="step-dot">5</span><span class="step-name"><strong>开始使用</strong><small class="step-status"></small></span></button>
+          <button type="button" data-step-target="5" aria-controls="preferences"><span class="step-dot">⋯</span><span class="step-name"><strong>权限与偏好</strong><small class="step-status"></small></span></button>
+        </div>
+      </nav>
+      <p class="sidebar-foot">最小化或关闭窗口后在托盘（macOS 为菜单栏）继续运行 · 内测版</p>
+    </aside>
     <div class="workspace">
       <section id="environment" class="wizard-panel" aria-labelledby="environment-title">
         <div class="section-head"><h2 id="environment-title" tabindex="-1">准备工作台</h2><p>运行环境已内置，无需另装 Node.js 或 Python。</p></div>
@@ -51,16 +63,20 @@
         <div class="agent-detect"><h3>本机检测到的助手</h3><p id="agent-summary" class="agent-summary"></p><p class="muted">勾选要接入的助手。带安装确认的助手会打开它自己的确认页，其余直接写入它的配置。</p><ul id="agent-list" aria-label="可接入的助手"></ul><div class="actions"><button id="agent-connect" disabled>接入所选助手</button><button id="agent-redetect" class="secondary">重新检测</button></div><p id="agent-connect-result" role="status"></p></div>
         <h3 class="agent-manual-title">手动接入其他助手</h3>
         <div class="actions"><select id="agent-select" aria-label="选择 AI 助手"><option value="generic">其他支持 MCP 的助手</option><option value="claude">Claude Desktop</option><option value="cursor">Cursor</option><option value="opencode1">OpenCode 1.x</option><option value="opencode">OpenCode 2.x</option></select><button id="agent-download" class="secondary" hidden>下载安装</button><button id="agent-docs" class="text">接入说明 ↗</button></div>
-        <dl id="connection-summary" class="connection-summary" aria-label="实时连接状态"></dl><p id="connection-error" class="inline-error" role="status" hidden></p><ol id="agent-steps"></ol><details class="config-details"><summary>查看配置</summary><p id="agent-command" class="muted"></p><pre id="agent-config">正在生成本机配置…</pre></details><div class="actions"><button id="agent-copy">复制配置</button><button id="agent-check" class="secondary" disabled>检查助手启动链路</button></div><p id="agent-check-result" role="status"></p><div class="actions"><button data-action="copyDiagnostics" class="secondary">复制连接诊断</button><button data-action="logFolder" class="secondary">打开日志目录</button></div><div class="capabilities"><label class="capability"><input id="allow-eval" type="checkbox"><strong>允许页面脚本（eval）</strong></label><small>助手可在你已登录的页面里执行任意脚本，用于读取页面数值和做计算校验，风险较高。默认开启，可随时关闭，立即生效。</small><label class="capability"><input id="allow-local-eval" type="checkbox"><strong>允许本机脚本（local eval）</strong></label><small>模板和助手可在本机后台运行脚本，整理采集结果（生成表格、报告）。脚本运行在独立沙箱里，只拿得到采集结果，接触不到本机文件和进程；但 Node 官方不把这类沙箱当作严格的安全边界，风险仍高于页面脚本。默认开启，可随时关闭，立即生效。</small><div class="actions"><button id="screenshot-dir" class="secondary">选择截图保存目录</button><button id="screenshot-dir-clear" class="secondary" hidden>恢复默认</button></div><small id="screenshot-dir-value"></small></div><p class="muted">使用时保持客户端运行，收起到托盘可继续连接。客户端重启后助手会自动重连；重启前已发出的调用需要重新发起。</p>
+        <dl id="connection-summary" class="connection-summary" aria-label="实时连接状态"></dl><p id="connection-error" class="inline-error" role="status" hidden></p><ol id="agent-steps"></ol><details class="config-details"><summary>查看配置</summary><p id="agent-command" class="muted"></p><pre id="agent-config">正在生成本机配置…</pre></details><div class="actions"><button id="agent-copy">复制配置</button><button id="agent-check" class="secondary" disabled>检查助手启动链路</button></div><p id="agent-check-result" role="status"></p><div class="actions"><button data-action="copyDiagnostics" class="secondary">复制连接诊断</button><button data-action="logFolder" class="secondary">打开日志目录</button></div><p class="muted">使用时保持客户端运行，收起到托盘可继续连接。客户端重启后助手会自动重连；重启前已发出的调用需要重新发起。页面脚本、本机脚本的开关在「权限与偏好」。</p>
       </section>
       <section id="experience" class="wizard-panel" aria-labelledby="experience-title" hidden>
-        <div class="section-head"><div class="title-row"><h2 id="experience-title" tabindex="-1">一切就绪</h2><span id="demo-status" class="status">待体验</span></div><p>核对一下各项设置，然后进入工作台。跳过的步骤随时可以从上方回去设置。</p></div>
-        <ul id="setup-summary" class="setup-summary" aria-label="设置概览"></ul>
+        <div class="section-head"><div class="title-row"><h2 id="experience-title" tabindex="-1">一切就绪</h2><span id="demo-status" class="status">待体验</span></div><p>跑一次示例确认链路是通的，或直接进入工作台。跳过的项随时可以从步骤清单回去设置。</p></div>
         <div class="demo-row"><div><h3>第一次自动化</h3><p>读取虚构商品清单，无需登录店铺。</p></div><button data-action="demo" id="demo" class="secondary" disabled>运行示例</button></div><div id="demo-progress" hidden><progress id="progress" max="2" value="0" aria-label="示例运行进度"></progress><p id="current-goal" role="status"></p></div><pre id="result" hidden></pre>
         <div class="starter-books"><h3>内置模板</h3><div class="book-grid"><article><h4>百度热搜</h4><p>热搜、民生、财经三榜 → Markdown 报告</p></article><article><h4>1688 商品采集</h4><p>规格、价格、库存、图片 → 商品数据</p></article></div><button data-action="workbench" data-input="books" class="secondary" disabled>查看全部模板 →</button><small>1688 可能需要登录或验证码。</small></div>
+      </section>
+      <section id="preferences" class="wizard-panel" aria-labelledby="preferences-title" hidden>
+        <div class="section-head"><h2 id="preferences-title" tabindex="-1">权限与偏好</h2><p>改动立即生效，不需要重启；服务未启动时也可以先改。</p></div>
+        <div class="capabilities"><label class="capability"><input id="allow-eval" type="checkbox"><strong>允许页面脚本（eval）</strong><span class="risk">风险较高</span></label><small>助手可在你已登录的页面里执行任意脚本，用于读取页面数值和做计算校验。默认开启，可随时关闭，立即生效。</small><label class="capability"><input id="allow-local-eval" type="checkbox"><strong>允许本机脚本（local eval）</strong><span class="risk">风险较高</span></label><small>模板和助手可在本机后台运行脚本，整理采集结果（生成表格、报告）。脚本运行在独立沙箱里，只拿得到采集结果，接触不到本机文件和进程；但 Node 官方不把这类沙箱当作严格的安全边界，风险仍高于页面脚本。默认开启，可随时关闭，立即生效。</small><div class="actions"><button id="screenshot-dir" class="secondary">选择截图保存目录</button><button id="screenshot-dir-clear" class="secondary" hidden>恢复默认</button></div><small id="screenshot-dir-value"></small></div>
         <label class="autostart"><input id="autostart" type="checkbox">开机时在托盘自动恢复</label>
       </section>
       <footer class="wizard-footer"><button id="previous-step" class="secondary" hidden>← 上一步</button><p id="step-help" role="status"></p><button id="next-step" disabled>下一步 →</button><button data-action="workbench" id="workbench" hidden disabled>进入工作台 →</button></footer>
     </div>
-  </main><div class="app-foot">最小化或关闭窗口后在托盘（macOS 为菜单栏）继续运行 · 内测版</div>
+    </div>
+  </main>
 </div><script type="module" src="setup.mjs"></script></body></html>

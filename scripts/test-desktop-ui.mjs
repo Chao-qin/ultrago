@@ -62,7 +62,9 @@ try {
     await page.locator('#prepare-next').filter({ hasText: '点击准备工作台' }).waitFor();
     await page.locator('#agent-config').filter({ hasText: 'mcpServers' }).waitFor({ state: 'attached' });
     assert.equal(await page.locator('.wizard-panel:visible').count(), 1);
-    assert.equal(await page.locator('.stepper button').count(), 5, '五个步骤按固定顺序排列');
+    assert.equal(await page.locator('.checklist [data-step-target]').count(), 6, '五个步骤加权限与偏好，按固定顺序排列');
+    assert.equal(await page.locator('[data-step-target="5"]').isDisabled(), false, '权限与偏好不必等服务启动');
+    assert.match(await page.locator('[data-step-target="0"]').getAttribute('class'), /attention/, '还没做的必需项要突出');
     assert.equal(await page.locator('#next-step').isDisabled(), true);
     assert.equal(await page.locator('[data-step-target="1"]').isDisabled(), true);
     assert.equal(await page.locator('#preparation-log').evaluate((node) => node.open), false);
@@ -90,6 +92,8 @@ try {
     await page.locator('#next-step').click();
     assert.equal(await page.locator('#browser').isVisible(), true);
     assert.equal(await page.locator('#bridge-repair').isVisible(), false, '自动注册成功时不应显示额外注册入口');
+    assert.equal(await page.locator('[data-step-target="1"] .step-status').textContent(), '等待确认 Chrome');
+    assert.match(await page.locator('[data-step-target="1"]').getAttribute('class'), /attention/, '服务就绪后待办转到连接 Chrome');
     await page.evaluate(() => window.setDesktopFixture({ bridgeReady: false, bridgeError: 'fixture: 当前用户注册失败' }));
     assert.equal(await page.locator('#bridge-repair').isVisible(), true);
     await page.locator('#repair-bridge').click();
@@ -159,6 +163,9 @@ try {
     assert.equal(await page.locator('#agent-download').isVisible(), true);
     await page.locator('#agent-copy').click();
     await page.locator('#agent-check-result').filter({ hasText: '配置已复制' }).waitFor();
+    await page.locator('[data-step-target="5"]').click();
+    assert.equal(await page.locator('#preferences').isVisible(), true);
+    assert.equal(await page.locator('#next-step').isVisible(), false, '权限与偏好不在线性步骤里');
     assert.equal(await page.locator('#allow-eval').isChecked(), true, '页面脚本默认开启');
     assert.equal(await page.locator('#allow-local-eval').isChecked(), true, '本机脚本默认开启');
     const policyCalls = () => page.evaluate(() => (window.__bridgeCalls ?? []).filter(([name]) => name === 'policy').map(([, input]) => JSON.stringify(input)));
@@ -168,6 +175,7 @@ try {
     assert.deepEqual(await policyCalls(), ['{"allowLocalEval":false}', '{"allowEval":false}'], '取消勾选真的把关闭发给客户端');
     await page.evaluate(() => window.setDesktopFixture({}));
     assert.equal(await page.locator('#allow-eval').isChecked(), false, '重新渲染后仍是客户端保存的状态');
+    assert.equal(await page.locator('[data-step-target="5"] .step-status').textContent(), '页面脚本关 · 本机脚本关', '清单上能看到开关的当前状态');
     await page.locator('#allow-local-eval').check();
     await page.locator('#allow-eval').check();
     await page.locator('#screenshot-dir').click();
@@ -175,7 +183,6 @@ try {
     assert.equal(await page.locator('#screenshot-dir-clear').isVisible(), true);
     await page.locator('#screenshot-dir-clear').click();
     await page.locator('#screenshot-dir-value').filter({ hasText: '截图保存位置：系统临时目录' }).waitFor();
-    await page.locator('[data-step-target="4"]').click();
     assert.equal(await page.locator('#autostart').isChecked(), false);
     await page.locator('#autostart').check();
     assert.equal(await page.locator('#autostart').isChecked(), true);
@@ -212,6 +219,7 @@ try {
     assert.equal(await page.locator('#workbench').isEnabled(), true);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${width} ${colorScheme} viewport overflow`);
     assert.deepEqual(errors, []);
+    await page.locator('[data-step-target="5"]').click();
     await page.evaluate(() => window.setDesktopFixture({ phase: 'waiting', setupCompleted: true, browserReady: false }));
     await page.evaluate(() => window.setDesktopFixture({ phase: 'ready' }));
     assert.equal(await page.locator('#browser').isVisible(), true, '已使用用户仅需恢复浏览器连接');
