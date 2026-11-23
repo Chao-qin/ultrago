@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# @bcp/comfyui — ComfyUI (CPU) + FlexAI remote-model node lifecycle.
+# @bcp/comfyui — ComfyUI with automatic device selection + FlexAI remote-model node.
 #
 # ComfyUI itself is NOT committed: `setup` clones the pinned upstream commits
 # into ./ComfyUI (git-ignored). Generation runs on a remote OpenAI-compatible
@@ -8,7 +8,7 @@
 #
 # Commands:
 #   setup    idempotent: clone pinned ComfyUI + FlexAI, create venv, install
-#            CPU torch + requirements, link .env / flexai_models.json and
+#            device-specific torch + requirements, link .env / flexai_models.json and
 #            the local nodes (../nodes/bcp), download the 2x upscale model,
 #            copy ../workflows/*.json into ComfyUI (never overwriting),
 #            install ComfyUI-Manager (pip package) + rgthree-comfy + ComfyUI-RMBG
@@ -25,7 +25,8 @@ set -euo pipefail
 PKG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMFY_DIR="$PKG_DIR/ComfyUI"
 FLEXAI_DIR="$COMFY_DIR/custom_nodes/Comfyui-flexai"
-PY="$COMFY_DIR/.venv/bin/python"
+source "$(dirname "${BASH_SOURCE[0]}")/device.sh"
+PY="$(venv_python_path "$(uname -s)" "$COMFY_DIR/.venv")"
 PID_FILE="$COMFY_DIR/.comfyui.pid"
 LOG_FILE="$COMFY_DIR/comfyui.log"
 
@@ -43,6 +44,63 @@ COMFYUI_LISTEN="${COMFYUI_LISTEN:-0.0.0.0}"
 COMFYUI_PORT="${COMFYUI_PORT:-8188}"
 
 report() { echo "[comfyui] $*" >&2; }
+
+selected_backend() {
+  local nvidia="no" gpu_names
+  detect_nvidia_gpu && nvidia="yes"
+  gpu_names="$(detect_platform_gpus)"
+  detect_backend "$(uname -s)" "$(uname -m)" "$nvidia" "$gpu_names"
+}
+
+install_torch() {
+  local backend="$1"
+  report "installing PyTorch backend: $backend"
+  case "$backend" in
+    cuda)
+      uv pip install -q --python "$PY" torch torchvision torchaudio \
+        --index-url https://download.pytorch.org/whl/cu128
+      ;;
+    mps)
+      uv pip install -q --python "$PY" torch torchvision torchaudio
+      ;;
+    directml)
+      uv pip install -q --python "$PY" torch-directml
+      ;;
+    unsupported)
+      report "a GPU was detected, but this device has no supported PyTorch backend"
+      return 1
+      ;;
+    cpu)
+      uv pip install -q --python "$PY" torch torchvision torchaudio \
+        --index-url https://download.pytorch.org/whl/cpu
+      ;;
+    *)
+      report "unsupported device backend: $backend"
+      return 1
+      ;;
+  esac
+}
+
+verify_torch_backend() {
+  local backend="$1"
+  "$PY" -c '
+import sys
+backend = sys.argv[1]
+if backend == "cuda":
+    import torch
+    ok = torch.cuda.is_available()
+elif backend == "mps":
+    import torch
+    ok = torch.backends.mps.is_available()
+elif backend == "directml":
+    import torch_directml
+    ok = torch_directml.device_count() > 0
+else:
+    ok = True
+if not ok:
+    raise SystemExit(f"Detected {backend} GPU, but its PyTorch backend is unavailable")
+' "$backend"
+}
 
 # Clone $1 into $3 at commit $2; leave an existing checkout untouched.
 checkout_pinned() {
@@ -66,14 +124,16 @@ setup() {
   checkout_pinned "$RMBG_REPO" "$RMBG_REF" "$COMFY_DIR/custom_nodes/ComfyUI-RMBG"
   # 上游 bug：加载失败时打印了未定义的 module_name，任何一个节点文件缺依赖（如 SAM3 要 triton）
   # 都会让整个包加载失败。改成打印 file.stem，出错的文件被跳过，其余节点照常加载。
-  sed -i 's/Error loading {module_name}: {e}/Error loading {file.stem}: {e}/' \
+  perl -pi -e 's/Error loading \{module_name\}: \{e\}/Error loading {file.stem}: {e}/' \
     "$COMFY_DIR/custom_nodes/ComfyUI-RMBG/__init__.py"
 
   [ -x "$PY" ] || uv venv -q --python 3.12 "$COMFY_DIR/.venv"
-  # CPU torch first, so requirements.txt does not pull the multi-GB CUDA build.
-  uv pip install -q --python "$PY" torch torchvision torchaudio \
-    --index-url https://download.pytorch.org/whl/cpu
-  uv pip install -q --python "$PY" -r "$COMFY_DIR/requirements.txt" \
+  local backend
+  backend="$(selected_backend)"
+  install_torch "$backend"
+  verify_torch_backend "$backend"
+  grep -vE '^[[:space:]]*(torch|torchvision|torchaudio)([[:space:]<=>~!;#]|$)' "$COMFY_DIR/requirements.txt" \
+    | uv pip install -q --python "$PY" -r /dev/stdin \
     -r "$FLEXAI_DIR/requirements.txt" -r "$COMFY_DIR/manager_requirements.txt"
   # RMBG 的依赖去掉三项：onnxruntime-gpu 是显卡版（会和 CPU 版 onnxruntime 冲突），
   # groundingdino-py 要编译，只有按文字分割的节点用它，抠图用不到；
@@ -81,6 +141,7 @@ setup() {
   # 而 SAM3 本来就缺依赖不加载
   grep -vE '^\s*(onnxruntime-gpu|groundingdino-py|decord)' "$COMFY_DIR/custom_nodes/ComfyUI-RMBG/requirements.txt" \
     | uv pip install -q --python "$PY" -r /dev/stdin
+  verify_torch_backend "$backend"
 
   [ -f "$PKG_DIR/.env" ] || { cp "$PKG_DIR/.env.example" "$PKG_DIR/.env"; chmod 600 "$PKG_DIR/.env"; }
   ln -sfn ../../../.env "$FLEXAI_DIR/.env"
@@ -106,8 +167,17 @@ running_pid() {
 start() {
   [ -x "$PY" ] || { report "not set up yet: pnpm --filter @bcp/comfyui run setup"; exit 1; }
   if pid="$(running_pid)"; then report "already running (pid $pid)"; return; fi
+  local backend
+  backend="$(selected_backend)"
+  verify_torch_backend "$backend"
+  local -a device_args=()
+  case "$backend" in
+    cpu) device_args=(--cpu) ;;
+    directml) device_args=(--directml) ;;
+  esac
+  report "starting with device backend: $backend"
   cd "$COMFY_DIR"
-  nohup "$PY" main.py --cpu --enable-manager --listen "$COMFYUI_LISTEN" --port "$COMFYUI_PORT" >"$LOG_FILE" 2>&1 &
+  nohup "$PY" main.py "${device_args[@]}" --enable-manager --listen "$COMFYUI_LISTEN" --port "$COMFYUI_PORT" >"$LOG_FILE" 2>&1 &
   echo $! >"$PID_FILE"
   for _ in $(seq 1 90); do
     if curl -fs -o /dev/null "http://127.0.0.1:$COMFYUI_PORT/system_stats"; then

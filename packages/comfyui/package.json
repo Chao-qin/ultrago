@@ -3,12 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
-  "description": "ComfyUI (CPU) with the FlexAI node, generating images through a remote OpenAI-compatible image API. ComfyUI itself is not committed — `pnpm run setup` clones the pinned upstream into ./ComfyUI. Reached over HTTP (default :8188).",
+  "description": "ComfyUI with automatic GPU/CPU selection and the FlexAI node, generating images through a remote OpenAI-compatible image API. ComfyUI itself is not committed — `pnpm run setup` clones the pinned upstream into ./ComfyUI. Reached over HTTP (default :8188).",
   "scripts": {
     "setup": "bash scripts/comfyui.sh setup",
     "start": "bash scripts/comfyui.sh start",
     "stop": "bash scripts/comfyui.sh stop",
     "status": "bash scripts/comfyui.sh status",
-    "check:nodes": "bash scripts/comfyui.sh check"
+    "check:nodes": "bash scripts/comfyui.sh check",
+    "check:device": "bash tests/test_device.sh"
   }
 }

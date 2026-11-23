@@ -1,6 +1,15 @@
 # @bcp/comfyui
 
-ComfyUI 运行在 CPU 上，通过 [Comfyui-flexai](https://github.com/Semonxue/Comfyui-flexai) 节点调用远端 OpenAI 兼容接口出图，本机不需要 GPU，也不需要本地模型。
+ComfyUI 自动检测设备并选择 PyTorch 后端，通过 [Comfyui-flexai](https://github.com/Semonxue/Comfyui-flexai) 节点调用远端 OpenAI 兼容接口出图。
+
+| 设备 | 后端 |
+|---|---|
+| Apple Silicon / 支持 Metal 的 AMD Mac | MPS |
+| NVIDIA GPU（Windows/Linux） | CUDA |
+| AMD / Intel GPU（Windows） | DirectML |
+| 未检测到 GPU | CPU |
+
+DirectML 是 ComfyUI 上游的实验性后端，兼容性和性能有限。检测到 GPU 但对应 PyTorch 后端不可用时，初始化或启动会报错，不会静默切换到 CPU。
 
 ComfyUI 本体不提交进仓库：`setup` 会把锁定版本的上游代码拉到 `./ComfyUI`（已被 git 忽略）。
 
@@ -12,12 +21,13 @@ ComfyUI 本体不提交进仓库：`setup` 会把锁定版本的上游代码拉�
 ## 使用
 
 ```bash
-pnpm --filter @bcp/comfyui run setup    # 幂等：拉代码、建 venv、装 CPU torch 和依赖
+pnpm --filter @bcp/comfyui run setup    # 幂等：拉代码、建 venv、检测设备并安装对应 torch 和依赖
 # 编辑 packages/comfyui/.env，填写 OPENAI_API_BASE / OPENAI_API_KEY
 pnpm --filter @bcp/comfyui start    # 后台启动，默认 http://0.0.0.0:8188
 pnpm --filter @bcp/comfyui status
 pnpm --filter @bcp/comfyui stop
 pnpm --filter @bcp/comfyui check:nodes    # nodes/bcp 的离线测试（不联网、不调接口），没 setup 时退出码 2
+pnpm --filter @bcp/comfyui check:device   # 设备后端检测测试（不需要 GPU）
 ```
 
 监听地址和端口可以用 `COMFYUI_LISTEN` / `COMFYUI_PORT` 修改。日志在 `ComfyUI/comfyui.log`。
