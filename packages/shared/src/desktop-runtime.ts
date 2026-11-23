@@ -35,13 +35,21 @@ export function desktopReady(service: string, endpoints: Record<string, string>)
   parent.postMessage({ type: 'ready', version: 1, generation: process.env.BCP_DESKTOP_GENERATION, service, endpoints });
 }
 
+/** Constant-time string comparison without node:crypto, which the extension that also loads this file lacks. */
+function sameSecret(actual: string | undefined, expected: string): boolean {
+  if (typeof actual !== 'string' || actual.length !== expected.length) return false;
+  let difference = 0;
+  for (let index = 0; index < expected.length; index++) difference |= actual.charCodeAt(index) ^ expected.charCodeAt(index);
+  return difference === 0;
+}
+
 export function desktopHttpGuard(
   req: { headers: { authorization?: string } },
   res: { statusCode: number; end(body: string): unknown },
   next: () => void,
 ): void {
   if (typeof process !== 'undefined' && process.env.BCP_DESKTOP === '1' && (
-    !process.env.BCP_DESKTOP_TOKEN || req.headers.authorization !== `Bearer ${process.env.BCP_DESKTOP_TOKEN}`
+    !process.env.BCP_DESKTOP_TOKEN || !sameSecret(req.headers.authorization, `Bearer ${process.env.BCP_DESKTOP_TOKEN}`)
   )) {
     res.statusCode = 401;
     res.end('Unauthorized');

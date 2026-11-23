@@ -203,6 +203,9 @@ test("the desktop client switches eval and the screenshot folder in a running ba
     assert.equal(proxied.status, 403, "经入口代理改策略一律拒绝");
     const direct = await fetch(`http://127.0.0.1:${address.port}/internal/browsers/policy`, { method: "POST", headers, body: '{"eval":false}' });
     assert.equal(direct.status, 403, "只有内部令牌、没有策略令牌也改不了");
+    const lookalike = `é${coordinator.policyToken.slice(1)}`;
+    const nonAscii = await fetch(`http://127.0.0.1:${address.port}/internal/browsers/policy`, { method: "POST", headers: { ...headers, "X-BCP-Policy-Token": lookalike }, body: '{"eval":false}' });
+    assert.equal(nonAscii.status, 403, "长度相同但含非 ASCII 字符的令牌是拒绝，不是 500");
     assert.equal(config.evalEnabled, true);
   } finally {
     restore();

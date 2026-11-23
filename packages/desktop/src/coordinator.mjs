@@ -284,9 +284,6 @@ export class Coordinator extends EventEmitter {
           BCP_EVENT_WEBHOOK: `${origin}/internal/browser-events/hook`,
           BCP_LLM_TELEMETRY_URL: `${origin}/internal/llm-calls/hook`,
           BCP_LLM_CHANNELS_PATH: join(llmDir, 'channels.json'), BCP_LLM_KEYS_PATH: join(llmDir, 'keys.json'),
-          // Browser-tool policy reaches the backend through ONE channel, pushPolicy(), right after the services
-          // start and on every change; an env copy taken here would go stale for a switch flipped mid-start.
-          BCP_POLICY_TOKEN: this.policyToken,
         },
       });
       supervisor.on('failure', (message) => {
@@ -324,7 +321,11 @@ export class Coordinator extends EventEmitter {
       this.update('starting', '正在启动浏览器连接与工作台服务…');
       // Services reach each other through the ingress only on demand, so none waits for another to start.
       await Promise.all([
-        this.supervisor.start('backend', this.paths.entries.backend),
+        // Browser-tool policy reaches the backend through ONE channel, pushPolicy(), right after the services start
+        // and on every change. Its token goes to the backend alone, the only service that checks it, so the workbench,
+        // the gateway and the scripts they start no longer inherit it. It is not a boundary against code running as
+        // the same OS user, which can still read another process's environment.
+        this.supervisor.start('backend', this.paths.entries.backend, { BCP_POLICY_TOKEN: this.policyToken }),
         this.supervisor.start('console', this.paths.entries.console),
         ...(model ? [this.supervisor.start('llm', this.paths.entries.llm, model.key ? { BCP_DESKTOP_UPSTREAM_KEY: model.key } : {})] : []),
       ]);

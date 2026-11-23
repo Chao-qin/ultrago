@@ -8,7 +8,7 @@
  *
  * Run it:  node dist/gateway.js --port 11435
  */
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 import { loadRegistry, type Registry } from "./adapters/index.js";
@@ -923,6 +923,13 @@ function validateLoaded(
   validateAliases(aliases, channels);
 }
 
+/** Compares a presented credential without leaking, through timing, how much of it matched. */
+function sameSecret(actual: string | undefined, expected: string): boolean {
+  const a = Buffer.from(actual ?? "");
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 export async function createGateway(options: GatewayOptions = {}): Promise<Server> {
   const channels = options.channels ?? loadChannels();
   const registry = options.registry ?? (await loadRegistry());
@@ -985,11 +992,18 @@ export async function createGateway(options: GatewayOptions = {}): Promise<Serve
   };
 
   return createServer((req, res) => {
-    if (process.env.BCP_DESKTOP === '1' && req.headers.authorization !== `Bearer ${process.env.BCP_DESKTOP_TOKEN}`) {
+    // An unset token must not turn "Bearer undefined" into the password (same rule as @bcp/shared's desktopHttpGuard).
+    if (process.env.BCP_DESKTOP === '1' && (!process.env.BCP_DESKTOP_TOKEN || !sameSecret(req.headers.authorization, `Bearer ${process.env.BCP_DESKTOP_TOKEN}`))) {
       res.writeHead(401).end('Unauthorized');
       return;
     }
     const path = (req.url ?? "").split("?")[0];
+    // The desktop client configures channels and keys itself; its ingress refuses admin writes, and so does this
+    // process for a caller that holds the desktop token (MCP clients do) and reaches this port directly.
+    if (process.env.BCP_DESKTOP === '1' && req.method !== 'GET' && path.toLowerCase().startsWith('/admin/')) {
+      res.writeHead(409, { 'Content-Type': 'application/json' }).end(JSON.stringify({ message: '请在客户端的模型方式中配置云 API。' }));
+      return;
+    }
     void (async () => {
       try {
         // 鉴权在所有路由之前，**包括管理面**：管理面能改渠道、能拿任意 baseUrl

@@ -10,8 +10,11 @@ import { Supervisor } from '../src/supervisor.mjs';
 
 const settle = () => new Promise((done) => setImmediate(done));
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
-async function until(condition, label) {
-  for (let attempt = 0; attempt < 500 && !condition(); attempt++) await sleep(2);
+// A real-time deadline rather than a count of polls: on a loaded machine each poll takes longer, and a fixed count ran
+// out before the stand-in services forked. performance.now(), because some tests mock Date.
+async function until(condition, label, timeoutMs = 15_000) {
+  const deadline = performance.now() + timeoutMs;
+  while (!condition() && performance.now() < deadline) await sleep(2);
   assert.ok(condition(), label);
 }
 
@@ -507,6 +510,7 @@ test('page and backend eval are on by default, reach the backend through one cha
     assert.deepEqual(policies.at(-1), { eval: false, localEval: false, screenshotDir: join(paths.userData, 'shots'), cloudCaptcha: false }, '服务起来后推送一次当前策略；云端识别验证码默认关闭');
     assert.ok(children.every((child) => !Object.hasOwn(child.env, 'BCP_EVAL') && !Object.hasOwn(child.env, 'BCP_LOCAL_EVAL')), '策略只走推送这一个通道，不再写进环境变量');
     assert.ok(live('backend').env.BCP_POLICY_TOKEN && live('backend').env.BCP_POLICY_TOKEN === coordinator.policyToken, '后端拿到客户端独有的策略令牌');
+    assert.deepEqual(children.filter((child) => Object.hasOwn(child.env, 'BCP_POLICY_TOKEN')).map((child) => child.service).filter((service) => service !== 'backend'), [], '策略令牌只给后端，工作台、网关等其他进程拿不到');
     assert.equal(coordinator.snapshot().allowEval, false);
     await coordinator.savePolicy({ allowEval: true });
     assert.deepEqual(policies.at(-1), { eval: true, localEval: false, screenshotDir: join(paths.userData, 'shots'), cloudCaptcha: false }, '运行中切换立即推送，不重启');

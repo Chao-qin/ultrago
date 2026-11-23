@@ -51,8 +51,17 @@ test('desktop direct HTTP access requires its current launch credential', () => 
     const res = { statusCode: 200, end: (_body: string) => {} };
     desktopHttpGuard({ headers: {} }, res, () => { called = true; });
     assert.equal(res.statusCode, 401); assert.equal(called, false);
+    for (const wrong of ['Bearer currenT', 'Bearer curren', 'Bearer current ', 'current', 'Bearer undefined']) {
+      res.statusCode = 200;
+      desktopHttpGuard({ headers: { authorization: wrong } }, res, () => { called = true; });
+      assert.equal(res.statusCode, 401, wrong); assert.equal(called, false, wrong);
+    }
     desktopHttpGuard({ headers: { authorization: 'Bearer current' } }, res, () => { called = true; });
     assert.equal(called, true);
+    delete process.env.BCP_DESKTOP_TOKEN;
+    called = false; res.statusCode = 200;
+    desktopHttpGuard({ headers: { authorization: 'Bearer undefined' } }, res, () => { called = true; });
+    assert.equal(res.statusCode, 401, '令牌没下发时 "Bearer undefined" 不是正确令牌'); assert.equal(called, false);
   } finally {
     if (oldMode === undefined) delete process.env.BCP_DESKTOP; else process.env.BCP_DESKTOP = oldMode;
     if (oldToken === undefined) delete process.env.BCP_DESKTOP_TOKEN; else process.env.BCP_DESKTOP_TOKEN = oldToken;
