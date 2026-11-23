@@ -37,7 +37,7 @@ try {
             ? { client, ok: false, message: 'fixture: Cursor 没有响应安装链接' }
             : { client, ok: true, message: '已加入 Claude Code 的用户配置，重新打开 Claude Code 后可用。' });
           if (name === 'autostartState') return false;
-          if (name === 'policy') state = { ...state, ...(input.allowEval !== undefined ? { allowEval: input.allowEval } : {}), ...(input.allowLocalEval !== undefined ? { allowLocalEval: input.allowLocalEval } : {}), ...(input.screenshotDir !== undefined ? { screenshotDir: input.screenshotDir || '' } : {}) };
+          if (name === 'policy') state = { ...state, ...(input.allowEval !== undefined ? { allowEval: input.allowEval } : {}), ...(input.allowLocalEval !== undefined ? { allowLocalEval: input.allowLocalEval } : {}), ...(input.screenshotDir !== undefined ? { screenshotDir: input.screenshotDir || '' } : {}), ...(input.allowCloudCaptcha !== undefined ? { allowCloudCaptcha: input.allowCloudCaptcha } : {}) };
           if (name === 'chooseScreenshotDir') state = { ...state, screenshotDir: 'C:\\Users\\卖家\\Desktop\\agent工作区' };
           if (name === 'autostart') {
             if (window.autostartFixture === 'throw') throw new Error('fixture: 开机启动写入失败');
@@ -183,6 +183,19 @@ try {
     assert.equal(await page.locator('#screenshot-dir-clear').isVisible(), true);
     await page.locator('#screenshot-dir-clear').click();
     await page.locator('#screenshot-dir-value').filter({ hasText: '截图保存位置：系统临时目录' }).waitFor();
+    assert.equal(await page.locator('#allow-cloud-captcha').isChecked(), false, '云端识别验证码默认关闭');
+    assert.match(await page.locator('#cloud-captcha-target').textContent(), /当前没有启用云 API/, '没有云 API 时说清楚开了也没处可发');
+    await page.locator('#allow-cloud-captcha').check();
+    await page.waitForFunction(() => (window.__bridgeCalls ?? []).some(([name, input]) => name === 'policy' && input?.allowCloudCaptcha === true));
+    await page.locator('[data-step-target="5"] .step-status').filter({ hasText: '云端识别验证码开' }).waitFor();
+    await page.evaluate(() => window.setDesktopFixture({ modelMode: 'cloud', modelConfigured: true, modelUrl: 'https://fixture.example', model: 'vision-fixture' }));
+    assert.equal(await page.locator('#cloud-captcha-target').textContent(), '开启后截图会发到：https://fixture.example（模型 vision-fixture）', '开关旁写明截图去向');
+    assert.match(await page.locator('#model-hint').textContent(), /验证码截图也会发到/, '在模型一步选云 API 时也提醒开关已开');
+    await page.evaluate(() => window.setDesktopFixture({ modelMode: 'local', localModel: { configured: true } }));
+    assert.match(await page.locator('#cloud-captcha-target').textContent(), /截图不会离开这台电脑/);
+    await page.locator('#allow-cloud-captcha').uncheck();
+    await page.waitForFunction(() => !document.getElementById('allow-cloud-captcha').checked);
+    await page.evaluate(() => window.setDesktopFixture({ modelMode: 'skip', modelConfigured: false, modelUrl: '', model: '' }));
     assert.equal(await page.locator('#autostart').isChecked(), false);
     await page.locator('#autostart').check();
     assert.equal(await page.locator('#autostart').isChecked(), true);

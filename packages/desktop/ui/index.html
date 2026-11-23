@@ -41,12 +41,12 @@
       <section id="model" class="wizard-panel" aria-labelledby="model-title" hidden>
         <div class="section-head"><div class="title-row"><h2 id="model-title" tabindex="-1">AI 模型</h2><span id="model-status" class="status">未设置</span></div><p>这一步可以跳过：连接浏览器、运行内置采集模板都不需要模型。</p></div>
         <div class="model-why">
-          <div><h3>模型用来做什么</h3><ul><li><strong>验证码提醒：</strong>任务被验证码或人机验证挡住时，客户端把页面截图交给本机模型确认，再在工作台「事件通知」里提醒你去处理。截图只交给本机模型，不会发到云端。</li><li><strong>模型接口：</strong>工作台「LLM 网关」把这里的模型提供给脚本和流程调用，并记录每次调用。</li></ul></div>
+          <div><h3>模型用来做什么</h3><ul><li><strong>验证码提醒：</strong>任务被验证码或人机验证挡住时，客户端把页面截图交给模型确认，再在工作台「事件通知」里提醒你去处理。默认只交给本机模型，不会发到云端；要用云 API 识别，在「权限与偏好」里允许。</li><li><strong>模型接口：</strong>工作台「LLM 网关」把这里的模型提供给脚本和流程调用，并记录每次调用。</li></ul></div>
           <div><h3>不设置会怎样</h3><ul><li>任务卡在验证码时不会提醒，需要你自己去任务窗口查看。</li><li>需要模型的脚本和流程无法运行。</li><li>不受影响：浏览器连接、采集模板，以及 Claude、Cursor 等 AI 助手（它们用自己的模型）。</li></ul></div>
         </div>
         <div class="model-options" role="radiogroup" aria-label="模型方式">
           <label><input name="mode" type="radio" value="local"><span><strong>本机模型 <em>推荐</em></strong><small>免费，数据不出本机，支持验证码提醒。使用 Ollama 运行 qwen3.5:4b，约需 3.4 GB 磁盘和 4 GB 内存。</small></span></label>
-          <label><input name="mode" type="radio" value="cloud"><span><strong>云 API</strong><small>填写你自己的服务地址和 Key，按服务商计费。不用于验证码提醒。</small></span></label>
+          <label><input name="mode" type="radio" value="cloud"><span><strong>云 API</strong><small>填写你自己的服务地址和 Key，按服务商计费。默认不用于验证码提醒（可在「权限与偏好」里允许）。</small></span></label>
           <label><input name="mode" type="radio" value="skip" checked><span><strong>暂不设置</strong><small>以后可以回到这一步再设置。</small></span></label>
         </div>
         <div id="local-setup" hidden>
@@ -72,7 +72,7 @@
       </section>
       <section id="preferences" class="wizard-panel" aria-labelledby="preferences-title" hidden>
         <div class="section-head"><h2 id="preferences-title" tabindex="-1">权限与偏好</h2><p>改动立即生效，不需要重启；服务未启动时也可以先改。</p></div>
-        <div class="capabilities"><label class="capability"><input id="allow-eval" type="checkbox"><strong>允许页面脚本（eval）</strong><span class="risk">风险较高</span></label><small>助手可在你已登录的页面里执行任意脚本，用于读取页面数值和做计算校验。默认开启，可随时关闭，立即生效。</small><label class="capability"><input id="allow-local-eval" type="checkbox"><strong>允许本机脚本（local eval）</strong><span class="risk">风险较高</span></label><small>模板和助手可在本机后台运行脚本，整理采集结果（生成表格、报告）。脚本运行在独立沙箱里，只拿得到采集结果，接触不到本机文件和进程；但 Node 官方不把这类沙箱当作严格的安全边界，风险仍高于页面脚本。默认开启，可随时关闭，立即生效。</small><div class="actions"><button id="screenshot-dir" class="secondary">选择截图保存目录</button><button id="screenshot-dir-clear" class="secondary" hidden>恢复默认</button></div><small id="screenshot-dir-value"></small></div>
+        <div class="capabilities"><label class="capability"><input id="allow-eval" type="checkbox"><strong>允许页面脚本（eval）</strong><span class="risk">风险较高</span></label><small>助手可在你已登录的页面里执行任意脚本，用于读取页面数值和做计算校验。默认开启，可随时关闭，立即生效。</small><label class="capability"><input id="allow-local-eval" type="checkbox"><strong>允许本机脚本（local eval）</strong><span class="risk">风险较高</span></label><small>模板和助手可在本机后台运行脚本，整理采集结果（生成表格、报告）。脚本运行在独立沙箱里，只拿得到采集结果，接触不到本机文件和进程；但 Node 官方不把这类沙箱当作严格的安全边界，风险仍高于页面脚本。默认开启，可随时关闭，立即生效。</small><label class="capability"><input id="allow-cloud-captcha" type="checkbox"><strong>允许云端模型识别验证码</strong><span class="risk">截图会离开本机</span></label><small>默认关闭。只在本机没有可用模型时使用：疑似验证码页面的截图会经本机网关发给你在「AI 模型」里配置的云 API，由它判断是否真的被验证码挡住。截图是你已登录的页面，可能带着订单、客户等信息。</small><small id="cloud-captcha-target" class="capability-target"></small><div class="actions"><button id="screenshot-dir" class="secondary">选择截图保存目录</button><button id="screenshot-dir-clear" class="secondary" hidden>恢复默认</button></div><small id="screenshot-dir-value"></small></div>
         <label class="autostart"><input id="autostart" type="checkbox">开机时在托盘自动恢复</label>
       </section>
       <footer class="wizard-footer"><button id="previous-step" class="secondary" hidden>← 上一步</button><p id="step-help" role="status"></p><button id="next-step" disabled>下一步 →</button><button data-action="workbench" id="workbench" hidden disabled>进入工作台 →</button></footer>

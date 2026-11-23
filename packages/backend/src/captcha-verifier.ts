@@ -1,3 +1,5 @@
+import { config } from './config.js';
+
 export type CaptchaVerdict = { isCaptcha: boolean; reason: string };
 export type CaptchaVerifier = (screenshot: string, signal: AbortSignal) => Promise<CaptchaVerdict>;
 
@@ -24,22 +26,40 @@ function isLocalUrl(value: unknown): value is string {
   }
 }
 
-function localModel(payload: unknown): { id: string; ollama: boolean } {
-  const models = isRecord(payload) && Array.isArray(payload.data) ? payload.data : [];
-  for (const model of models) {
-    if (!isRecord(model) || typeof model.id !== 'string' || !model.id || !isRecord(model.bcp)) continue;
-    const sources = model.bcp.sources;
-    // 同名模型会轮询来源，只检查第一条会把截图交给后续的远程来源。
-    if (Array.isArray(sources) && sources.length > 0 && sources.every((source) =>
-      isRecord(source)
-      && ['ollama', 'lmstudio'].includes(String(source.adapter))
-      && isLocalUrl(source.baseUrl),
-    )) return {
-      id: model.id,
-      ollama: sources.every((source) => isRecord(source) && source.adapter === 'ollama'),
-    };
+/** A screenshot may cross the network only encrypted; plain http is fine only on this machine. */
+function isReachableUrl(value: unknown): value is string {
+  if (isLocalUrl(value)) return true;
+  if (typeof value !== 'string') return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password;
+  } catch {
+    return false;
   }
-  throw new Error('No exclusively local Ollama / LM Studio model is available');
+}
+
+type Source = Record<string, unknown>;
+
+function pickModel(payload: unknown, allowCloud: boolean): { id: string; ollama: boolean } {
+  const models: Array<{ id: string; sources: Source[] }> = [];
+  for (const model of isRecord(payload) && Array.isArray(payload.data) ? payload.data : []) {
+    if (!isRecord(model) || typeof model.id !== 'string' || !model.id || !isRecord(model.bcp)) continue;
+    const sources: unknown = model.bcp.sources;
+    if (Array.isArray(sources) && sources.length > 0 && sources.every(isRecord)) models.push({ id: model.id, sources });
+  }
+  // 同名模型会轮询来源，只检查第一条会把截图交给后续的远程来源。
+  const pick = (accept: (source: Source) => boolean) => {
+    const model = models.find((candidate) => candidate.sources.every(accept));
+    return model && { id: model.id, ollama: model.sources.every((source) => source.adapter === 'ollama') };
+  };
+  const local = pick((source) => ['ollama', 'lmstudio'].includes(String(source.adapter)) && isLocalUrl(source.baseUrl));
+  if (local) return local;
+  if (!allowCloud) throw new Error('No exclusively local Ollama / LM Studio model is available');
+  // The user allowed cloud verification: any model the gateway reaches over HTTP may see the screenshot.
+  // A CLI-backed channel (opencode) has no image path, so it is still skipped.
+  const remote = pick((source) => ['openai', 'ollama', 'lmstudio'].includes(String(source.adapter)) && isReachableUrl(source.baseUrl));
+  if (remote) return remote;
+  throw new Error('No local or cloud model is available for CAPTCHA verification');
 }
 
 function parseVerdict(payload: unknown): CaptchaVerdict {
@@ -60,10 +80,13 @@ export function createCaptchaVerifier(options: {
   baseUrl?: string;
   timeoutMs?: number;
   fetch?: typeof fetch;
+  /** Asked on every verification, so the user's switch applies without a restart. */
+  allowCloud?: () => boolean;
 } = {}): CaptchaVerifier {
   const baseUrl = (options.baseUrl ?? (process.env.BCP_LLM_URL
     || `http://127.0.0.1:${process.env.BCP_LLM_PORT || '11435'}`)).replace(/\/+$/, '').replace(/\/v1$/, '');
   const request = options.fetch ?? fetch;
+  const allowCloud = options.allowCloud ?? (() => config.cloudCaptchaEnabled);
 
   return async (screenshot, signal) => {
     if (!isLocalUrl(baseUrl)) throw new Error('CAPTCHA verification requires a local LLM gateway');
@@ -78,7 +101,7 @@ export function createCaptchaVerifier(options: {
     try {
       const models = await request(`${baseUrl}/v1/models`, { signal: combined, redirect: 'error' });
       if (!models.ok) throw new Error(`Local LLM model discovery failed: HTTP ${models.status}`);
-      const model = localModel(await models.json());
+      const model = pickModel(await models.json(), allowCloud());
       combined.throwIfAborted();
       const response = await request(`${baseUrl}/v1/chat/completions`, {
         method: 'POST',

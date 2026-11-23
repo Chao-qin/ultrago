@@ -89,7 +89,7 @@ function stepStatus(step, state) {
     return online.length ? online.map((client) => client.name).join('、') : '未接入：助手还不能使用这台电脑的浏览器';
   }
   if (step === LAST) return state.browserReady ? '可以运行示例' : 'Chrome 连接后可运行示例';
-  return `页面脚本${state.allowEval === false ? '关' : '开'} · 本机脚本${state.allowLocalEval === false ? '关' : '开'}`;
+  return `页面脚本${state.allowEval === false ? '关' : '开'} · 本机脚本${state.allowLocalEval === false ? '关' : '开'}${state.allowCloudCaptcha === true ? ' · 云端识别验证码开' : ''}`;
 }
 const phaseNames = { waiting: '等待准备', checking: '检查中', initializing: '初始化中', starting: '启动中', registering: '检查模板', ready: '工作台已启动', failed: '准备失败' };
 const services = { backend: '浏览器服务', console: '工作台', llm: '模型网关', migrate: '数据库初始化', desktop: '客户端' };
@@ -104,7 +104,7 @@ function renderModelMode(mode) {
   $('cloud-fields').querySelectorAll('input').forEach((input) => { input.disabled = mode !== 'cloud'; });
   $('local-setup').hidden = mode !== 'local';
   $('model-hint').textContent = mode === 'skip' ? '不使用模型：任务卡在验证码时不会提醒，其他功能照常使用。'
-    : mode === 'cloud' ? '填写你自己的服务地址、模型和 API Key。'
+    : mode === 'cloud' ? (current.allowCloudCaptcha === true ? '已在「权限与偏好」允许云端识别验证码：保存后，验证码截图也会发到这里填写的地址。' : '填写你自己的服务地址、模型和 API Key。')
     : localReady ? (current.modelMode === 'local' && !editingModel ? '本机模型已启用。' : '本机模型已就绪，点击下方按钮启用。') : '完成上面两项后即可启用。';
   $('model-save').textContent = mode === 'local' ? '使用本机模型' : mode === 'cloud' ? '保存云 API' : '保存：不使用模型';
   // Nothing to save when the choice is the saved one; a cloud form can still be resubmitted to change its key.
@@ -246,6 +246,11 @@ function render(state) {
   $('directory').textContent = state.dataDirectory || '';
   $('allow-eval').checked = state.allowEval !== false;
   $('allow-local-eval').checked = state.allowLocalEval !== false;
+  $('allow-cloud-captcha').checked = state.allowCloudCaptcha === true;
+  // Say where the screenshot would go, so the switch is never flipped blind.
+  $('cloud-captcha-target').textContent = state.modelMode === 'local' ? '当前用的是本机模型，截图不会离开这台电脑。'
+    : state.modelMode === 'cloud' && state.modelConfigured ? `开启后截图会发到：${state.modelUrl}（模型 ${state.model}）`
+    : '当前没有启用云 API：开启后也没有可用的模型，验证码提醒仍不生效。';
   $('screenshot-dir-value').textContent = `截图保存位置：${state.screenshotDir || '系统临时目录'}（另可随时写入系统临时目录）`;
   $('screenshot-dir-clear').hidden = !state.screenshotDir;
   $('logs').textContent = (state.logs || []).map((entry) => `${entry.time ? new Date(entry.time).toLocaleTimeString() : ''} [${services[entry.service] || entry.service}] ${entry.text}`).join('\n') || '尚无准备日志。';
@@ -431,6 +436,7 @@ $('agent-connect').addEventListener('click', async () => {
 });
 $('allow-eval').addEventListener('change', () => void action('policy', { allowEval: $('allow-eval').checked }));
 $('allow-local-eval').addEventListener('change', () => void action('policy', { allowLocalEval: $('allow-local-eval').checked }));
+$('allow-cloud-captcha').addEventListener('change', () => void action('policy', { allowCloudCaptcha: $('allow-cloud-captcha').checked }));
 $('screenshot-dir').addEventListener('click', () => void action('chooseScreenshotDir'));
 $('screenshot-dir-clear').addEventListener('click', () => void action('policy', { screenshotDir: null }));
 $('autostart').addEventListener('change', async () => {

@@ -74,17 +74,19 @@ export function createBrowserHttpRouter(setup: BrowserSetupService, dispatcher: 
     if (!expected || typeof given !== 'string' || given.length !== expected.length || !timingSafeEqual(Buffer.from(given), Buffer.from(expected))) {
       res.status(403).json({ error: 'browser-tool policy is managed by the desktop client' }); return;
     }
-    const { eval: allowEval, localEval, screenshotDir } = req.body ?? {};
+    const { eval: allowEval, localEval, screenshotDir, cloudCaptcha } = req.body ?? {};
     if (allowEval !== undefined && typeof allowEval !== 'boolean') { res.status(400).json({ error: 'eval must be a boolean' }); return; }
     if (localEval !== undefined && typeof localEval !== 'boolean') { res.status(400).json({ error: 'localEval must be a boolean' }); return; }
+    if (cloudCaptcha !== undefined && typeof cloudCaptcha !== 'boolean') { res.status(400).json({ error: 'cloudCaptcha must be a boolean' }); return; }
     if (screenshotDir !== undefined && screenshotDir !== null && (typeof screenshotDir !== 'string' || !isAbsolute(screenshotDir))) {
       res.status(400).json({ error: 'screenshotDir must be an absolute path or null' }); return;
     }
     if (allowEval !== undefined) process.env.BCP_EVAL = allowEval ? 'on' : 'off';
     if (localEval !== undefined) process.env.BCP_LOCAL_EVAL = localEval ? 'on' : 'off';
+    if (cloudCaptcha !== undefined) process.env.BCP_CLOUD_CAPTCHA = cloudCaptcha ? 'on' : 'off';
     if (screenshotDir === null) delete process.env.BCP_SCREENSHOT_DIR;
     else if (screenshotDir !== undefined) process.env.BCP_SCREENSHOT_DIR = screenshotDir;
-    res.json({ eval: config.evalEnabled, localEval: config.localEvalEnabled, screenshotDir: process.env.BCP_SCREENSHOT_DIR ?? null });
+    res.json({ eval: config.evalEnabled, localEval: config.localEvalEnabled, screenshotDir: process.env.BCP_SCREENSHOT_DIR ?? null, cloudCaptcha: config.cloudCaptchaEnabled });
   });
 
   /** GET /internal/browsers/status?kind=&instanceId= — read-only. Must return
