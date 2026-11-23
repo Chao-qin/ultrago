@@ -124,6 +124,7 @@ try {
     assert.equal(await page.locator('#api-key').inputValue(), '');
     await page.locator('#prepare').click();
     assert.equal(await page.locator('#prepare-progress').evaluate((node) => node.value), 4);
+    assert.match(await page.locator('#service-list').textContent(), /浏览器服务运行中工作台运行中模型网关未启用/, '服务卡按客户端上报的服务显示');
     assert.match(await page.locator('#prepare-next').textContent(), /下一步.*Chrome/);
     await page.locator('#next-step').click();
     await page.locator('#select-browser').click();
@@ -158,6 +159,8 @@ try {
     assert.deepEqual(connectCalls, [['claude-code', 'cursor']], '只接入勾选的助手');
     assert.match(await page.locator('#agent-connect-result').textContent(), /1 个助手没有接入成功/);
     assert.equal(await page.locator('#agent-connect').isDisabled(), true, '接入后清空勾选');
+    assert.equal(await page.locator('#agent-manual').evaluate((node) => node.open), false, '手动接入默认收起');
+    await page.locator('#agent-manual > summary').click();
     await page.locator('#agent-select').selectOption('opencode');
     await page.locator('#agent-config').filter({ hasText: 'servers' }).waitFor({ state: 'attached' });
     assert.equal(await page.locator('#agent-download').isVisible(), true);

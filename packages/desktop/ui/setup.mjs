@@ -195,7 +195,9 @@ function render(state) {
   document.querySelector('.sidebar').hidden = !!resuming;
   $('environment-title').textContent = resuming ? '正在恢复工作台' : '准备工作台';
   $('overall').textContent = state.phase === 'ready' && !state.browserReady ? '下一步 · 连接 Chrome' : phaseNames[state.phase] || '等待准备';
-  $('overall').classList.toggle('ok', state.phase === 'ready');
+  $('overall').classList.toggle('ok', state.phase === 'ready' && !!state.browserReady);
+  $('overall').classList.toggle('warn', state.phase === 'ready' && !state.browserReady);
+  $('overall').classList.toggle('failed', state.phase === 'failed');
   if (state.phase === 'failed') { $('error').textContent = state.detail || '工作台准备失败，请查看日志。'; $('error').hidden = false; }
   else if (previousPhase === 'failed') $('error').hidden = true;
   $('prepare').disabled = !!state.busy;
@@ -203,6 +205,7 @@ function render(state) {
   $('prepare').textContent = state.phase === 'failed' ? '重试准备' : state.phase === 'ready' ? '恢复本地服务' : '准备工作台';
   $('browser-status').textContent = state.browserReady ? '已确认连接' : state.browserId ? '所选浏览器离线' : '等待确认';
   $('browser-status').classList.toggle('ok', !!state.browserReady);
+  $('browser-status').classList.toggle('warn', state.phase === 'ready' && !state.browserReady);
   const browsers = (state.browsers || []).filter((b) => b.kind === 'chrome' && b.ready);
   const selection = $('browser-select').value || state.browserId;
   $('browser-select').replaceChildren(...(browsers.length ? browsers.map((browser, index) => {
@@ -213,6 +216,19 @@ function render(state) {
   if (browsers.some((b) => b.instanceId === selection)) $('browser-select').value = selection;
   $('select-browser').disabled = !!state.busy || browsers.length === 0;
   if (!previouslyConnected && state.browserReady) $('install-guide').open = false;
+  document.querySelector('.connection-box').classList.toggle('waiting', state.phase === 'ready' && !state.browserReady);
+  document.querySelector('.connection-box').classList.toggle('ok', !!state.browserReady);
+  // One card per long-running service, from the services the client reports as up.
+  const running = new Set(state.services || []);
+  $('service-list').replaceChildren(...['backend', 'console', 'llm'].map((id) => {
+    const item = document.createElement('li');
+    item.className = running.has(id) ? 'ok' : state.phase === 'failed' ? 'failed' : '';
+    const name = document.createElement('small'); name.textContent = services[id];
+    const value = document.createElement('strong');
+    value.textContent = running.has(id) ? '运行中' : state.busy ? '启动中' : id === 'llm' && state.phase === 'ready' ? '未启用（没有设置模型）' : '未启动';
+    item.append(name, value);
+    return item;
+  }));
   $('bridge-repair').hidden = !state.bridgeError;
   $('bridge-status').textContent = state.bridgeError || '';
   $('repair-bridge').disabled = !!state.bridgeBusy || !!state.busy;
@@ -239,7 +255,7 @@ function render(state) {
     ['Chrome', state.browserReady ? `已确认 · ${(state.browserId || '').slice(0, 8)}` : '未确认连接'],
     ['MCP 助手', online.length ? online.map((client) => `${client.name}${client.toolCount ? ` · ${client.toolCount} 工具` : ' · 已握手'}`).join('、') : assistants.some((client) => client.state === 'connecting') ? '正在握手' : '尚无助手连接'],
   ];
-  $('connection-summary').replaceChildren(...summary.flatMap(([label, value]) => { const term = document.createElement('dt'); term.textContent = label; const detail = document.createElement('dd'); detail.textContent = value; return [term, detail]; }));
+  $('connection-summary').replaceChildren(...summary.map(([label, value]) => { const row = document.createElement('div'); const term = document.createElement('dt'); term.textContent = label; const detail = document.createElement('dd'); detail.textContent = value; row.append(term, detail); return row; }));
   const connectionError = connections?.lastError;
   $('connection-error').hidden = !connectionError;
   $('connection-error').textContent = connectionError || '';
