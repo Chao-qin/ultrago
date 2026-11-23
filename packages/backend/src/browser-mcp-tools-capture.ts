@@ -175,6 +175,7 @@ export function registerCaptureTools({ server, call, deltaKey, drainEvents, capt
           : `# ${content.title}\n${content.url}\n\n(no visible text after waiting for the DOM to settle — the page may still be loading slowly, be behind a login/consent wall, or render inside a canvas/iframe. Try wait_for a known element, or inspect the screenshot.)`;
 
         if (!shotOrErr.ok) {
+          snapshot.commit();
           return {
             content: [
               {
@@ -203,6 +204,7 @@ export function registerCaptureTools({ server, call, deltaKey, drainEvents, capt
           screenshotContent = { type: "image" as const, data: base64, mimeType: "image/png" };
         }
 
+        snapshot.commit();
         return {
           content: [
             { type: "text" as const, text: `## Open tabs\n${tabLines}${stateSection}\n\n## Accessibility snapshot\n${snapshotText}\n\n## Visible text content\n${visibleText}${shot.warning ? `\n\nWARNING: ${shot.warning}` : ""}${activationNote(shot) && !saveScreenshot ? `\n\n${activationNote(shot)}` : ""}${drainEvents()}` },

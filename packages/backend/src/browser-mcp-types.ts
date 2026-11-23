@@ -17,12 +17,14 @@ export type BrowserCall = <M extends RpcMethod>(
   target?: BrowserTarget,
 ) => Promise<RpcContracts[M]["result"]>;
 
-/** The agent's own snapshot read, rendered for the reply (see readSnapshot in browser-mcp.ts). */
+/** The agent's own snapshot read, rendered for the reply (see readSnapshot in browser-mcp.ts). Call `commit` once
+ *  the reply carrying `text` is built: until then its refs do not count as shown to the agent, so a tool that fails
+ *  after reading never makes the next snapshot claim the agent saw them. */
 export type ReadSnapshot = (
   tabId: number | undefined,
   view: SnapshotView,
   tool?: "snapshot" | "analyze_page",
-) => Promise<RpcContracts[typeof RpcMethod.Snapshot]["result"] & { text: string }>;
+) => Promise<RpcContracts[typeof RpcMethod.Snapshot]["result"] & { text: string; commit(): void }>;
 
 /** The injected dispatcher call — target REQUIRED (the readiness gate lives
  * in the dispatcher; callers must resolve the target first). */

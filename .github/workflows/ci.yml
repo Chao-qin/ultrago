@@ -117,3 +117,9 @@ jobs:
       # check:convergence 2026-08-28 之前一样：防线写了，执法面没接，等于没写。
       - name: Books
         run: pnpm check:books
+
+      # 快照回复的体积护栏：用后端真实的渲染器（上面已构建）渲染 bench/snapshots/ 里提交的公开页面原始快照，
+      # 默认回复比 bench/snapshot-census.json 记录的基线大 5% 以上、或要翻更多页就失败。体积有意变大时，
+      # 用 --write 重写基线并和改动一起提交。纯 node，无浏览器无网络；缺数据或缺构建时 exit 2。
+      - name: Snapshot census
+        run: pnpm check:snapshot

@@ -39,7 +39,7 @@ import { desktopHttpGuard, runtimePort } from '@bcp/shared';
 import { PlanRunner, type EvidenceReader, type PlaybackStepResult } from "./orchestrator.js";
 import { applyParamDefaults, instantiateSteps, loadPlaybook, savePlaybook, validatePlaybookParams } from "./playbook.js";
 import { resolveUploadSources } from "./upload-source.js";
-import { pickOption, pickOptionDeltaKey } from "./pick-option.js";
+import { pickOption } from "./pick-option.js";
 import { materializePlaybookUpload } from "./playbook-upload.js";
 import { runAutoPlayback, type AutoPlaybackResult, type RunFinishInfo } from "./playback.js";
 import { RunBrowserContext } from "./run-browser-context.js";
@@ -472,7 +472,7 @@ export class InternalRunner {
       // only the composite, so the step stays replayable.
       const runner = this.runners.get(planId);
       const inner = (m: RpcMethod, p: Record<string, unknown>) => this.call(planId, m, p, priorResults, opts);
-      const pick = () => pickOption(inner, params as unknown as PickOptionParams, pickOptionDeltaKey(`run:${planId}`));
+      const pick = () => pickOption(inner, params as unknown as PickOptionParams);
       return runner ? runner.asOneAction({ method: LocalMethod.PickOption, params }, pick) : pick();
     }
 

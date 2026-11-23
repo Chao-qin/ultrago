@@ -261,8 +261,10 @@ WeClaw sidecar 在线时，`wec_status` / `wec_send_text` / `wec_send_image` 出
 
 - **按最便宜的读法选工具**：`page_state`（就绪 / 焦点 / 表单可提交性 / 对话框 / 滚动锁 / 自上次以来的 `changed`）→
   `snapshot`（带 `[ref]` 的可操作元素树）→ `analyze_page`（全量：状态 + 树 + 可见文本 + 截图 + 标签页，贵，页面陌生或连续两三次动作没反应时才升级）。
-- **快照元素带状态与视觉层**：`[hidden]` `[disabled]` `[clickable]` `[invalid: …]` `(scrollable)`，
+- **快照元素带状态与视觉层**：`[disabled]` `[clickable]` `[invalid: …]` `(scrollable)`，
   以及 `@dialog:<名>` / `@fixed-top` 等层标记——DOM 嵌套说不出「这个 modal 盖住了整屏」，层标记能。
+  隐藏元素收进末尾的「Hidden right now」摘要（关着的菜单一行），`snapshot({within})` 展开、`query` 可搜；
+  隐藏的 `input` / `select` 照常列出并标 `[hidden]`。每次快照还会指出对你是新的、状态变了的 ref。
 - **验证不能省**：变动类工具会追加一行 `↳ changed:`（URL 变化、元素增减、对话框打开、新错误、动作证据），
   出现 `⚠ Verify gate` 就必须在下一个动作前重新读页面。界面文字会骗人，确认「真的存到服务器了」要用
   `read_network` 看 2xx。

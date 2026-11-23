@@ -37,6 +37,7 @@
     "test": "pnpm -r test",
     "check:dom": "pnpm --filter @bcp/extension check:dom",
     "check:books": "node scripts/check-books.mjs",
+    "check:snapshot": "node scripts/snapshot-census.mjs --check",
     "check:convergence": "node scripts/check-convergence.mjs",
     "check:soft-delete": "node scripts/check-soft-delete.mjs",
     "lint": "node scripts/lint.mjs"

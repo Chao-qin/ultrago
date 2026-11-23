@@ -174,13 +174,15 @@ export const MCP_TOOL_INSTRUCTIONS = {
     name: "snapshot",
     annotations: TOOL_HINTS.read,
     description:
-      "List the page's interactable elements with [ref] handles, each with its state ([disabled], [hidden], [checked], [expanded], [invalid: …] …), viewport box (x,y w×h) and visual layer (@dialog:…, @fixed-…). Covers iframes (frame-prefixed refs; elements in cross-origin frames have no box) and open shadow roots. A ref stays valid while its element exists, and the reply lists the refs that are new since your last snapshot. Large pages are paged: narrow with query or viewportOnly, or continue with after. " +
+      "List the page's interactable elements with [ref] handles, each with its state ([disabled], [checked], [expanded], [invalid: …] …), viewport box (x,y w×h) and visual layer (@dialog:…, @fixed-…). Covers iframes (frame-prefixed refs; elements in cross-origin frames have no box) and open shadow roots. Hidden elements are summarised under \"Hidden right now\" (a closed menu is one line) instead of listed, except inputs and selects; expand one with within, search them with query, or list everything with full. A ref stays valid while its element exists, and the reply names the refs that are new to you or changed since your last snapshot, and says when the page became a new document. Large pages are paged: narrow with query or viewportOnly, or continue with after. " +
       "It has no page text (read_content), pixels (screenshot) or readiness and form state (page_state); analyze_page returns all of them.",
     params: {
       query: "Only elements whose role, name, value or options contain this text (case-insensitive), e.g. \"登录\" or \"textbox\"",
       viewportOnly: "Only elements inside the visible viewport",
       limit: "Maximum number of elements in this reply, after query/viewportOnly",
       after: "Continue a paged reply after this [ref] (the reply names it)",
+      within: "List only this [ref] and what is inside it or opened by it, hidden elements included — e.g. a group from the \"Hidden right now\" summary",
+      full: "List every element, hidden ones included, with no summary — e.g. after your context lost an earlier reply",
     },
   },
   [RpcMethod.Click]: {

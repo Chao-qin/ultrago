@@ -104,15 +104,15 @@ export function createInjectDispatch(deps: InjectDeps) {
       void injectEventProbes(tabId);
       const merged = {
         tabId, url: "", title: "", elements: [] as unknown[], moreBelow: false,
-        changed: undefined as { added: string[]; removed: number } | undefined,
+        docs: {} as Record<string, string>,
       };
       for (const res of results) {
         const r = res.result as
           | {
               value?: {
                 url: string; title: string; moreBelow: boolean;
-                elements: { ref: string; parentRef?: string }[];
-                changed?: { added: string[]; removed: number };
+                elements: { ref: string; parentRef?: string; controls?: string[] }[];
+                docId?: string;
               };
             }
           | undefined;
@@ -124,21 +124,17 @@ export function createInjectDispatch(deps: InjectDeps) {
         }
         merged.moreBelow ||= r.value.moreBelow; // any frame with more content below counts
         for (const el of r.value.elements) {
-          // Sub-frame refs are namespaced with the frameId; parentRef must be too.
+          // Sub-frame refs are namespaced with the frameId; every ref an element names (parentRef, controls) must be too.
           merged.elements.push(
             res.frameId === 0
               ? el
-              : { ...el, ref: pfx(el.ref), parentRef: el.parentRef ? pfx(el.parentRef) : undefined },
+              : { ...el, ref: pfx(el.ref), parentRef: el.parentRef ? pfx(el.parentRef) : undefined, ...(el.controls && { controls: el.controls.map(pfx) }) },
           );
         }
-        // Each frame keeps its own baseline, so the diffs sum — and the added refs
-        // must carry the same frame prefix as the elements they name, or they
-        // would point at a ref that exists in a different frame.
-        if (r.value.changed) {
-          merged.changed ??= { added: [], removed: 0 };
-          merged.changed.added.push(...r.value.changed.added.map(pfx));
-          merged.changed.removed += r.value.changed.removed;
-        }
+        // Each frame is its own document with its own ref numbering, keyed the
+        // same way its refs are prefixed, so a frame that navigated on its own
+        // can be told apart from the rest of the page.
+        if (r.value.docId) merged.docs[String(res.frameId)] = r.value.docId;
       }
       return merged;
     }

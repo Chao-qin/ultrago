@@ -13,6 +13,7 @@
     "zip:firefox": "pnpm --filter @bcp/shared build && wxt zip -b firefox",
     "typecheck": "pnpm --filter @bcp/shared build && wxt prepare && tsc --noEmit",
     "check:dom": "node scripts/dom-runtime-check.mjs",
+    "snapshot:capture": "node scripts/snapshot-capture.mjs",
     "postinstall": "wxt prepare",
     "test": "node --import tsx --test src/*.test.ts"
   },

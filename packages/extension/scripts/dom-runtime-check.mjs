@@ -17,57 +17,11 @@
  * adding either to the lockfile. If neither is found it says so and exits 2 —
  * a missing harness must never read as "tests passed".
  */
-import { createRequire } from "node:module";
-import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve as pathResolve } from "node:path";
+import { bundleRuntime, loadEsbuild, loadPlaywright } from "./toolchain.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const RUNTIME_TS = pathResolve(HERE, "../src/content/dom-runtime.ts");
-const require_ = createRequire(import.meta.url);
-
-// ---------------------------------------------------------------- toolchain
-const firstExisting = (paths) => paths.find((p) => existsSync(p));
-
-async function loadEsbuild() {
-  try {
-    return await import("esbuild");
-  } catch {
-    /* not a direct dependency — fall through to a scan */
-  }
-  const { globSync } = await import("node:fs");
-  const roots = [
-    pathResolve(HERE, "../../../node_modules/.pnpm"),
-    "/usr/local/lib/node_modules",
-  ];
-  for (const root of roots) {
-    if (!existsSync(root)) continue;
-    let hits = [];
-    try {
-      hits = globSync("esbuild@*/node_modules/esbuild/lib/main.js", { cwd: root }).map((h) => pathResolve(root, h));
-    } catch {
-      /* older node without globSync */
-    }
-    const hit = firstExisting(hits);
-    if (hit) return require_(hit);
-  }
-  return null;
-}
-
-async function loadPlaywright() {
-  try {
-    return await import("playwright-core");
-  } catch {
-    /* not a direct dependency — fall through to known machine locations */
-  }
-  const candidates = [
-    pathResolve(HERE, "../../../node_modules/playwright-core/index.mjs"),
-    "/root/.bun/install/cache/playwright-core@1.58.2@@@1/index.mjs",
-    "/usr/local/lib/python3.11/dist-packages/playwright/driver/package/index.mjs",
-  ];
-  const hit = firstExisting(candidates);
-  return hit ? await import(hit) : null;
-}
 
 // ------------------------------------------------------------------ harness
 let passed = 0;
@@ -95,12 +49,7 @@ async function main() {
     process.exit(2);
   }
 
-  const built = await esbuild.build({
-    entryPoints: [RUNTIME_TS],
-    bundle: true, format: "esm", target: "es2022", write: false, logLevel: "silent",
-  });
-  const moduleUrl = "data:text/javascript;base64," + Buffer.from(built.outputFiles[0].text).toString("base64");
-  const { bcpDomRuntime, bcpSignalWait, bcpWaitFactory, bcpEventProbes, bcpDomHelpersFactory } = await import(moduleUrl);
+  const { bcpDomRuntime, bcpSignalWait, bcpWaitFactory, bcpEventProbes, bcpDomHelpersFactory, bcpReadOnlyGuard } = await bundleRuntime(esbuild);
   const runtimeSource = bcpDomRuntime.toString();
   const probesSource = bcpEventProbes.toString();
   const signalSource = bcpSignalWait.toString();
@@ -1140,7 +1089,7 @@ async function main() {
       const refOf = (r, id) => r.value.elements.find((e) => e.name?.includes(id))?.ref;
       const aRef1 = refOf(first, "甲");
       eq(typeof aRef1, "string", "a control gets a ref");
-      eq(first.value.changed, undefined, "the first snapshot has nothing to compare against");
+      eq(typeof first.value.docId, "string", "the snapshot names the document its refs belong to");
 
       // Insert a control, remove another, then re-read.
       await page.evaluate(() => {
@@ -1150,11 +1099,8 @@ async function main() {
       const second = await t.call("snapshot", {});
 
       eq(refOf(second, "甲"), aRef1, "a control that survived keeps the ref the caller already holds");
-      const added = second.value.changed?.added ?? [];
-      eq(added.length, 1, "the diff names exactly the control that appeared");
-      eq(added[0], refOf(second, "丙"), "and names it by the ref the caller can act on");
-      eq(second.value.changed?.removed, 1, "and counts the one that went away");
-      eq(added.includes(aRef1), false, "a control the caller already read is not re-announced as new");
+      eq(second.value.docId, first.value.docId, "and the document is still the same one");
+      eq([aRef1, refOf(first, "乙")].includes(refOf(second, "丙")), false, "a new control gets a number no earlier control had");
 
       // A fresh element must never be handed a number a live element still holds.
       await page.evaluate(() => {
@@ -1164,6 +1110,47 @@ async function main() {
       const refs = third.value.elements.map((e) => e.ref);
       eq(new Set(refs).size, refs.length, "refs stay unique after reuse");
       eq(refOf(third, "甲"), aRef1, "and the surviving ref is still stable across a third read");
+    },
+  );
+
+  // ---- What the backend's snapshot reply relies on ----
+  // Refs are numbered per document: a new document starts again at e1, so the
+  // backend compares docId before it compares refs. The isolated world gives
+  // every real document a fresh store; here the realm is reset by hand, the
+  // way the probe cases above do it, because setContent keeps the realm.
+  await withPage(`<button>甲</button>`, async (t) => {
+    const newDocument = () => page.evaluate(() => {
+      for (const k of Object.keys(globalThis)) if (k.startsWith("__bcp") && k !== "__bcpRun" && k !== "__bcpSignalWait") delete globalThis[k];
+    });
+    await newDocument();
+    const before = await t.call("snapshot", {});
+    await newDocument();
+    const after = await t.call("snapshot", {});
+    eq(after.value.elements[0]?.ref, before.value.elements[0]?.ref, "a new document reuses the same ref numbers");
+    eq(after.value.docId === before.value.docId, false, "so it must report a different docId");
+  });
+
+  // A default reply summarises hidden elements but keeps hidden form fields,
+  // keyed on the tag: a concealed file input is upload_file's target, a native
+  // <select> under a custom dropdown is select_option's. And a menu rendered up
+  // front and hidden by CSS keeps its refs when it opens — only the hidden flag
+  // flips, which is what makes it "new to you" in the backend.
+  await withPage(
+    `<label>上传<input id="file" type="file" style="display:none"></label>
+     <select id="native" style="display:none"><option>北京</option></select>
+     <ul id="menu" style="display:none"><li><a href="#" id="opt">Python</a></li></ul>`,
+    async (t) => {
+      const closed = await t.call("snapshot", {});
+      const of = (r, ref) => r.value.elements.find((e) => e.ref === ref);
+      eq(of(closed, t.ref("file"))?.tag, "input", "the hidden file input is reported with its tag");
+      eq(of(closed, t.ref("file"))?.hidden, true);
+      eq(of(closed, t.ref("native"))?.tag, "select", "so is the hidden native <select>");
+      eq(of(closed, t.ref("native"))?.hidden, true);
+      eq(of(closed, t.ref("opt"))?.hidden, true, "the menu item is collected while hidden");
+      await page.evaluate(() => { document.getElementById("menu").style.display = "block"; });
+      const open = await t.call("snapshot", {});
+      eq(of(open, t.ref("opt"))?.hidden, undefined, "opening the menu flips it to visible");
+      eq(open.value.docId, closed.value.docId, "without changing the document");
     },
   );
 
@@ -2292,7 +2279,7 @@ async function main() {
   // pass, every class of page effect is refused (and the refusal names it), and the page is left exactly as it
   // was — the swapped APIs are restored, so the page's own code keeps working after a refused check.
   {
-    const guardSource = (await import(moduleUrl)).bcpReadOnlyGuard.toString();
+    const guardSource = bcpReadOnlyGuard.toString();
     await withPage(
       `<form id="f"><input id="i" value="a"><button id="b" type="button">B</button></form>
        <div id="s" style="height:50px;overflow:auto"><div style="height:500px"></div></div>`,

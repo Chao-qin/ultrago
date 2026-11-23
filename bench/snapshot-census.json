@@ -1,0 +1,37 @@
+{
+  "baidu-home": {
+    "replyTokens": 802,
+    "pages": 1,
+    "listed": 42
+  },
+  "bilibili-home": {
+    "replyTokens": 904,
+    "pages": 1,
+    "listed": 42
+  },
+  "github-trending": {
+    "replyTokens": 2632,
+    "pages": 1,
+    "listed": 218
+  },
+  "hn-list": {
+    "replyTokens": 2778,
+    "pages": 1,
+    "listed": 229
+  },
+  "jd-corporate": {
+    "replyTokens": 820,
+    "pages": 1,
+    "listed": 51
+  },
+  "mdn-select": {
+    "replyTokens": 6920,
+    "pages": 1,
+    "listed": 482
+  },
+  "wikipedia-list": {
+    "replyTokens": 8018,
+    "pages": 3,
+    "listed": 1458
+  }
+}

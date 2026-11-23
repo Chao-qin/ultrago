@@ -301,20 +301,17 @@ export interface RpcContracts {
     result: { dataUrl: string; warning?: string; activated?: boolean; keptInFront?: boolean };
   };
   [RpcMethod.Snapshot]: {
-    /** deltaKey scopes `changed` to the observer exactly as page_state's does; the backend fills it for the
-     *  agent's own reads, and a backend-internal read leaves it out so it never moves the agent's baseline. */
-    params: TabTarget & { deltaKey?: string; resetDelta?: boolean };
+    params: TabTarget;
     /** Compact interactable-element tree with stable refs for this snapshot.
      * `moreBelow` flags that the page can still scroll down (content below the
      * fold / lazy-loaded) so the agent knows to scroll rather than assume it saw all. */
-    /** `changed` = what moved since the SAME observer's previous snapshot of this
-     *  tab. Refs are reused for elements that survive, so `added` names exactly
-     *  the controls that are new — the caller can go straight to them instead of
-     *  re-reading a page it has already read. Absent on the first snapshot. */
+    /** `docs` names the document each frame's refs belong to, keyed by frameId ("0" = top frame). Refs are numbered
+     *  per document, so after a navigation or reload a new page's "e5" is not the old page's "e5": whoever compares
+     *  two snapshots (what is new to an observer) must compare documents first. Absent from extensions that predate it. */
     /** tabId: the tab actually read — with no tabId given, that is whichever tab was active at that moment. */
     result: {
       tabId: number; url: string; title: string; elements: SnapshotElement[]; moreBelow: boolean;
-      changed?: { added: string[]; removed: number };
+      docs?: Record<string, string>;
     };
   };
   [RpcMethod.Click]: {
@@ -807,8 +804,10 @@ export interface SnapshotElement {
   /** True when aria-busy — the element/region is loading. */
   busy?: boolean;
   /** True when the element is not visible (display:none / visibility:hidden /
-   * opacity:0 / zero-size). Still listed so nothing is dropped from perception —
-   * e.g. a file <input> concealed behind a styled button stays reachable by ref. */
+   * content-visibility:hidden / inside a closed <details> / zero width or height;
+   * opacity:0 counts as visible, since it still takes clicks). Still collected so
+   * nothing is dropped from perception — e.g. a file <input> concealed behind a
+   * styled button stays reachable by ref. */
   hidden?: boolean;
   /** True when a form control is disabled — can't be interacted with, but its
    * presence/state is still worth surfacing. */

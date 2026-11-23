@@ -36,12 +36,16 @@ export function registerDomTools({ server, call, deltaKey, drainEvents, readDump
       viewportOnly: looseBool.optional(),
       limit: z.coerce.number().int().positive().optional(),
       after: z.string().optional(),
+      within: z.string().optional(),
+      full: looseBool.optional(),
     },
-    async ({ tabId, query, viewportOnly, limit, after }) => {
+    async ({ tabId, query, viewportOnly, limit, after, within, full }) => {
       try {
-        const r = await readSnapshot(tabId, { query, viewportOnly, limit, after });
+        const r = await readSnapshot(tabId, { query, viewportOnly, limit, after, within, full });
         const more = r.moreBelow ? "\n\n↓ more content below the fold — use scroll to load/see it" : "";
-        return text(`# ${r.title}\n${r.url}\n\n${r.text}${more}${drainEvents()}`);
+        const reply = text(`# ${r.title}\n${r.url}\n\n${r.text}${more}${drainEvents()}`);
+        r.commit();
+        return reply;
       } catch (e) {
         return fail(e);
       }

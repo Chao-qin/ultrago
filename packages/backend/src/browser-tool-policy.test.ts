@@ -124,17 +124,8 @@ test("a huge page pages under the budget by ref cursor, and query / viewportOnly
   assert.match(renderSnapshotView(page, { query: "不存在" }).text, /nothing to show for query="不存在".*0 of 2581/);
   assert.match(renderSnapshotView(page, {}, { tool: "analyze_page" }).text, /this snapshot section is paged — call snapshot\(\{after: "e\d+"\}\)/, "analyze_page points at snapshot, whose parameters these are");
   const small = elements(3);
-  assert.equal(renderSnapshotView(small).partial, false);
+  assert.equal(renderSnapshotView(small).shown.length, 3, "the reply reports exactly the refs it listed");
   assert.doesNotMatch(renderSnapshotView(small).text, /showing|continue/);
-});
-
-test("the delta says the rest was already read only when nothing was left out, now or last time", () => {
-  const changed = { added: ["e9"], removed: 0 };
-  const small = elements(3);
-  assert.match(renderSnapshotView(small, {}, { changed }).text, /the rest is what you already read/);
-  assert.doesNotMatch(renderSnapshotView(small, {}, { changed, previousPartial: true }).text, /already read/, "上一次回复只给了一部分");
-  assert.doesNotMatch(renderSnapshotView(small, { query: "职位" }, { changed }).text, /already read/, "这一次只给了一部分");
-  assert.equal(renderSnapshotView(small, { query: "职位" }).partial, true);
 });
 
 test("the window the user is on is named even while Chrome is in the background", () => {

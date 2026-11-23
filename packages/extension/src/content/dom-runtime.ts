@@ -48,10 +48,9 @@ export async function bcpDomRuntime(
        *  elements that survive a re-snapshot, so the counter cannot restart —
        *  a fresh element must never be handed a number a live element still holds. */
       __bcpRefSeq?: number;
-      /** Refs present at the observer's previous snapshot, keyed by deltaKey the
-       *  same way page_state keys its state baseline, so two sessions sharing a
-       *  tab don't consume each other's "what changed since I last looked". */
-      __bcpSnapSeen?: Record<string, string[]>;
+      /** Identity of this document, minted on its first snapshot. Refs only mean
+       *  something within one document; see the snapshot's return. */
+      __bcpDocId?: string;
     };
     store.__bcpRefs ??= new Map<string, Element>();
 
@@ -1397,27 +1396,16 @@ export async function bcpDomRuntime(
       store.__bcpRefOf = elToRef;
       store.__bcpRefSeq = seq;
 
-      // What is NEW since this observer last looked. Without it every snapshot
-      // arrives as an undifferentiated full page and the caller has to re-scan
-      // all of it to find the one control that appeared — which is the whole
-      // cost of a read, paid again on every beat.
-      const seenStore = (store.__bcpSnapSeen ??= {});
-      const key = params.deltaKey ?? "_";
-      const prevSeen = params.resetDelta ? undefined : seenStore[key];
-      const nowRefs = elements.map((e) => e.ref);
-      seenStore[key] = nowRefs;
-      let changed: { added: string[]; removed: number } | undefined;
-      if (prevSeen) {
-        const before = new Set(prevSeen);
-        const added = nowRefs.filter((r) => !before.has(r));
-        const now = new Set(nowRefs);
-        const removed = prevSeen.filter((r) => !now.has(r)).length;
-        if (added.length || removed) changed = { added, removed };
-      }
+      // Refs are numbered per document (the store lives and dies with it), so
+      // the caller needs to know WHICH document they belong to before it can
+      // say what is new since its last read: after a navigation the new page's
+      // "e5" is a different element that happens to share the old one's name.
+      // Not crypto.randomUUID — it is missing on plain-http pages.
+      store.__bcpDocId ??= `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
 
       const se = document.scrollingElement ?? document.documentElement;
       const moreBelow = se.scrollTop + se.clientHeight < se.scrollHeight - 4;
-      return { url: location.href, title: document.title, elements, moreBelow, changed };
+      return { url: location.href, title: document.title, elements, moreBelow, docId: store.__bcpDocId };
     };
 
     // ---- Descriptive locators -------------------------------------------

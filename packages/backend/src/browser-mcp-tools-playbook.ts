@@ -19,7 +19,7 @@ import { materializePlaybookUpload } from "./playbook-upload.js";
 import { keepFailedTabs, runAutoPlayback, type RunFinishInfo } from "./playback.js";
 import { RunBrowserContext } from "./run-browser-context.js";
 import { runLocalEval, writePreviousStepValue } from "./local-actions.js";
-import { pickOption, pickOptionDeltaKey } from "./pick-option.js";
+import { pickOption } from "./pick-option.js";
 import { extractArtifacts, extractOutputs, instantiateDeliveries } from "./delivery-executor.js";
 import type { DeliverySink } from "./console-delivery-client.js";
 import type { EventStore, RunFinishedEvent } from "./event-store.js";
@@ -344,7 +344,7 @@ export function registerPlaybookTools({
           }
           if (method === LocalMethod.PickOption) {
             return runner.asOneAction({ method, params: p }, () =>
-              pickOption((m, q) => call(m, q as never), p as unknown as PickOptionParams, pickOptionDeltaKey(`run:${planId}`)),
+              pickOption((m, q) => call(m, q as never), p as unknown as PickOptionParams),
             );
           }
           if (method === RpcMethod.CloseTab) {

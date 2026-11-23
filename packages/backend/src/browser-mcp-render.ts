@@ -10,6 +10,7 @@
 import { CHROME_RENDERING_FLAGS, RpcMethod, toolNameOf, type ActionDelta, type PageState, type SnapshotElement, type StepVerify, type TabInfo } from "@bcp/shared";
 import type { RecordingNote } from "./orchestrator.js";
 import type { ReadDump } from "./browser-read-dump.js";
+import type { ShownDiff } from "./snapshot-ledger.js";
 
 /** A plain-text tool reply. Every tool answers with one of these two, so they
  *  live beside the renderers rather than in the registration file. */
@@ -80,28 +81,27 @@ export function deltaGate(delta?: ActionDelta): string | null {
   return null;
 }
 
-/** One line naming exactly what appeared since this caller's previous snapshot.
+/** One line naming what this reply lists that the caller has not been shown before (see ShownLedger).
  *  A snapshot without it is an undifferentiated full page every time: the caller
  *  has to re-scan everything it already read to find the one control that is
- *  new, and pays that scan on every beat. Refs survive re-snapshots now, so
+ *  new, and pays that scan on every beat. Refs survive re-snapshots, so
  *  "e37 is new" is a durable statement rather than a renumbering artefact. */
-export function renderSnapshotDelta(changed?: { added: string[]; removed: number }, coverage: { partial?: boolean; previousPartial?: boolean } = {}): string {
-  if (!changed) return ""; // first snapshot of this page — nothing to compare against
+export function renderShownDelta(d?: ShownDiff): string {
+  if (!d || d.fresh === "first") return "";
+  if (d.fresh === "navigated") return "\n\n↳ New document since your last snapshot (navigation or reload) — refs from earlier replies no longer apply.";
+  // A re-render that swapped most nodes is a new page to the reader, whatever the URL says; listing hundreds of
+  // "new" and "gone" refs would only bury that.
+  if (d.gone >= 10 && d.gone * 2 >= d.known)
+    return `\n\n↳ ${d.gone} of the ${d.known} elements you were shown are gone (the page re-rendered or switched view) — read this as a fresh page; earlier refs no longer apply.`;
+  const list = (refs: string[]): string => (refs.length <= 12 ? refs.join(", ") : `${refs.length} (first 12: ${refs.slice(0, 12).join(", ")})`);
   const bits: string[] = [];
-  if (changed.added.length)
-    bits.push(
-      changed.added.length <= 12
-        ? `NEW since your last snapshot: ${changed.added.join(", ")}`
-        : `${changed.added.length} NEW elements since your last snapshot (first 12: ${changed.added.slice(0, 12).join(", ")})`,
-    );
-  if (changed.removed) bits.push(`${changed.removed} gone`);
+  if (d.appeared.length) bits.push(`NEW to you: ${list(d.appeared)}`);
+  if (d.changed.length) bits.push(`CHANGED: ${list(d.changed)}`);
+  if (d.gone) bits.push(`${d.gone} gone`);
+  if (d.hiddenAgain) bits.push(`${d.hiddenAgain} hidden again`);
+  if (d.framesNavigated) bits.push(`${d.framesNavigated} frame(s) loaded a new document — their earlier refs no longer apply`);
   if (!bits.length) return "";
-  // "Already read" is only true when the previous reply showed everything and this one does too; after a paged
-  // or narrowed reply the agent never saw the rest, and must not be told it did.
-  const rest = coverage.partial || coverage.previousPartial
-    ? "start with those; earlier replies showed only part of the page, so other elements may still be unread."
-    : "start with those; the rest is what you already read.";
-  return `\n\n↳ ${bits.join(" · ")} — ${rest}`;
+  return `\n\n↳ Since your last snapshot: ${bits.join(" · ")} — start with those; everything else listed here was in an earlier reply.`;
 }
 
 export function renderSnapshot(els: SnapshotElement[]): string {
@@ -187,8 +187,10 @@ export function windowFocusLegend(windowCount: number, focusedWindowId: number |
 
 /** Narrowing for a snapshot reply. Every ref stays valid whatever is shown: this narrows the reply, not the page.
  *  `after` continues from a ref rather than a position: each call takes a fresh snapshot, and a position would
- *  skip or repeat elements whenever the page added or removed some in between. */
-export interface SnapshotView { query?: string; viewportOnly?: boolean; limit?: number; after?: string }
+ *  skip or repeat elements whenever the page added or removed some in between.
+ *  `within` lists one element and everything under it or opened by it (`controls`), hidden ones included — it is
+ *  how a group from the "Hidden right now" summary is expanded. `full` lists every element, hidden ones included. */
+export interface SnapshotView { query?: string; viewportOnly?: boolean; limit?: number; after?: string; within?: string; full?: boolean }
 
 /** One reply of a 2,581-element page came to 116,063 characters and the MCP client refused it outright, so the
  *  agent lost the result and every [ref] in it. Past this size the reply pages instead. */
@@ -196,52 +198,122 @@ export const SNAPSHOT_CHAR_BUDGET = 30_000;
 /** page_state's count is a lower bound of snapshot's (top frame, no cursor:pointer); past this it suggests narrowing. */
 const LARGE_PAGE = 500;
 
-/** Renders a snapshot reply for `tool`. `partial` says whether this reply left elements out; the caller keeps it
- *  per tab so the next reply's delta does not claim the agent "already read" elements it was never shown. */
+/** Hidden inputs and selects stay listed: a concealed file input is what upload_file targets, a native <select>
+ *  under a custom dropdown is what select_option targets, and a zero-size checkbox may be the only place its
+ *  checked state shows. Any other hidden element cannot be acted on until it shows, so a default reply summarises
+ *  it instead — <textarea> included: hidden ones are data stores (baidu keeps its CSS and trending JSON in three)
+ *  or an editor's input sink that takes focus when the visible editor is clicked. */
+const HIDDEN_BUT_LISTED = new Set(["input", "select"]);
+const listedByDefault = (e: SnapshotElement): boolean => !e.hidden || HIDDEN_BUT_LISTED.has(e.tag);
+const shorten = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n)}…` : s);
+
+/** `root` and everything nested under it or opened by it, in document order; undefined when `root` is gone. */
+function subtreeOf(els: SnapshotElement[], root: string): SnapshotElement[] | undefined {
+  const byRef = new Map(els.map((e) => [e.ref, e] as const));
+  if (!byRef.has(root)) return undefined;
+  const kids = new Map<string, string[]>();
+  for (const e of els) if (e.parentRef) (kids.get(e.parentRef) ?? kids.set(e.parentRef, []).get(e.parentRef)!).push(e.ref);
+  const keep = new Set<string>();
+  const stack = [root];
+  while (stack.length) {
+    const ref = stack.pop()!;
+    const e = byRef.get(ref);
+    if (!e || keep.has(ref)) continue;
+    keep.add(ref);
+    stack.push(...(kids.get(ref) ?? []), ...(e.controls ?? []));
+  }
+  return els.filter((e) => keep.has(e.ref));
+}
+
+/** What a default reply left out, grouped by the hidden subtree each element sits in: a closed menu is one line
+ *  naming the menu (github's language picker: 848 hidden options), not one line per option. Lone hidden elements
+ *  share a single line with a few of their names, so that "there is a hidden 登录 link" is still visible. */
+function renderHiddenSummary(folded: SnapshotElement[], all: SnapshotElement[]): string {
+  const byRef = new Map(all.map((e) => [e.ref, e] as const));
+  const foldedRefs = new Set(folded.map((e) => e.ref));
+  const rootOf = (e: SnapshotElement): SnapshotElement => {
+    let r = e;
+    while (r.parentRef && foldedRefs.has(r.parentRef)) r = byRef.get(r.parentRef)!;
+    return r;
+  };
+  const size = new Map<string, number>();
+  for (const e of folded) {
+    const r = rootOf(e).ref;
+    size.set(r, (size.get(r) ?? 0) + 1);
+  }
+  const groups = [...size].filter(([, n]) => n > 1).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  const grouped = new Set(groups.map(([ref]) => ref));
+  const lines = groups.map(([ref, n]) => {
+    const e = byRef.get(ref)!;
+    return `  [${ref}] ${e.role}${e.name ? ` "${shorten(e.name, 30)}"` : ""} — ${n} hidden elements`;
+  });
+  const loose = folded.filter((e) => !grouped.has(rootOf(e).ref));
+  if (loose.length) {
+    const names = [...new Set(loose.map((e) => e.name?.trim()).filter((n): n is string => !!n))].slice(0, 8);
+    lines.push(`  ${loose.length}${groups.length ? " more" : ""} hidden${names.length ? `, e.g. ${names.map((n) => `"${shorten(n, 20)}"`).join(", ")}` : ""}`);
+  }
+  return `\n\nHidden right now (${folded.length}, not listed above; listed once visible) — expand a group with snapshot({within: ref}), search them with query, or list everything with snapshot({full: true}):\n${lines.join("\n")}`;
+}
+
+/** Renders a snapshot reply for `tool`, and returns the refs it listed — what the caller records as shown. */
 export function renderSnapshotView(
   els: SnapshotElement[],
   view: SnapshotView = {},
-  opts: { tool?: "snapshot" | "analyze_page"; changed?: { added: string[]; removed: number }; previousPartial?: boolean } = {},
-): { text: string; partial: boolean } {
+  opts: { tool?: "snapshot" | "analyze_page" } = {},
+): { text: string; shown: string[] } {
   const tool = opts.tool ?? "snapshot";
   const query = view.query?.trim().toLowerCase();
   let matched = els;
+  if (view.within) {
+    const sub = subtreeOf(els, view.within);
+    if (!sub) return { text: `([${view.within}] is no longer on the page — take a fresh snapshot to find what replaced it)`, shown: [] };
+    matched = sub;
+  }
   if (query) matched = matched.filter((e) => [e.role, e.name, e.value, ...(e.options ?? [])].some((v) => v?.toLowerCase().includes(query)));
   if (view.viewportOnly) matched = matched.filter((e) => e.inViewport === true);
-  const narrowed = !!query || !!view.viewportOnly;
-  const filter = [query ? `query=${JSON.stringify(view.query)}` : "", view.viewportOnly ? "viewportOnly" : ""].filter(Boolean).join(" ");
+  const narrowed = !!query || !!view.viewportOnly || !!view.within;
+  const filter = [view.within ? `within [${view.within}]` : "", query ? `query=${JSON.stringify(view.query)}` : "", view.viewportOnly ? "viewportOnly" : ""].filter(Boolean).join(" ");
+  // Searching or opening a group is asking for hidden elements too; only the default view summarises them.
+  const folded = view.full || query || view.within ? [] : matched.filter((e) => !listedByDefault(e));
+  if (folded.length) matched = matched.filter(listedByDefault);
   let start = 0;
   let restarted = "";
   if (view.after) {
     const at = matched.findIndex((e) => e.ref === view.after);
-    if (at < 0) restarted = `[${view.after}] is no longer on the page${narrowed ? " or no longer matches" : ""}, so this starts again from the first element. `;
+    if (at < 0) {
+      const why = !els.some((e) => e.ref === view.after) ? "is no longer on the page" : folded.some((e) => e.ref === view.after) ? "is hidden now" : "no longer matches";
+      restarted = `[${view.after}] ${why}, so this starts again from the first element. `;
+    }
     else start = at + 1;
   }
+  // The summary belongs to the first page of a reply; later pages continue the list.
+  const summary = folded.length && !view.after ? renderHiddenSummary(folded, els) : "";
+  const budget = SNAPSHOT_CHAR_BUDGET - summary.length;
   let page = matched.slice(start, view.limit ? start + view.limit : undefined);
   // Measured on the real rendering (indentation included), shrinking until it fits.
   let body = renderSnapshot(page);
-  while (body.length > SNAPSHOT_CHAR_BUDGET && page.length > 1) {
-    page = page.slice(0, Math.max(1, Math.floor((page.length * SNAPSHOT_CHAR_BUDGET) / body.length) - 1));
+  while (body.length > budget && page.length > 1) {
+    page = page.slice(0, Math.max(1, Math.floor((page.length * budget) / body.length) - 1));
     body = renderSnapshot(page);
   }
   const end = start + page.length;
-  const partial = narrowed || start > 0 || end < matched.length;
-  const delta = renderSnapshotDelta(opts.changed, { partial, previousPartial: !!opts.previousPartial });
   if (!page.length) {
-    if (!els.length) return { text: renderSnapshot(els) + delta, partial: false };
-    return { text: `(${restarted}nothing to show for ${filter || "this page"}${start ? ` after [${view.after}]` : ""} — ${matched.length} of ${els.length} elements match; widen the query or drop \`after\`)${delta}`, partial: true };
+    if (!els.length) return { text: renderSnapshot(els), shown: [] };
+    if (summary) return { text: `(no visible interactable elements right now)${summary}`, shown: [] };
+    return { text: `(${restarted}nothing to show for ${filter || "this page"}${start ? ` after [${view.after}]` : ""} — ${matched.length} of ${els.length} elements match; widen the query or drop \`after\`)`, shown: [] };
   }
   const notes: string[] = [];
   if (narrowed) notes.push(`${matched.length} of ${els.length} elements match ${filter}`);
   if (start || end < matched.length) notes.push(`showing ${start + 1}–${end} of ${matched.length}`);
   if (end < matched.length) {
-    const next = `after: ${JSON.stringify(page[page.length - 1].ref)}`;
+    // `full` is part of what is being paged: page 2 without it would summarise hidden elements again.
+    const next = `after: ${JSON.stringify(page[page.length - 1].ref)}${view.full ? ", full: true" : ""}`;
     notes.push(tool === "snapshot"
       ? `continue with snapshot({${next}${narrowed ? ", plus the same filters" : ""}})${narrowed ? "" : ", or narrow with query (text/role) / viewportOnly"}`
       : `this snapshot section is paged — call snapshot({${next}}) for the rest, or snapshot({query}) / snapshot({viewportOnly: true}) to narrow`);
   }
   const footer = notes.length ? `\n\n… ${restarted}${notes.join(" · ")}. Refs not shown here still work.` : restarted ? `\n\n… ${restarted.trim()}` : "";
-  return { text: body + footer + delta, partial };
+  return { text: body + summary + footer, shown: page.map((e) => e.ref) };
 }
 
 /** One-line summary of what an action changed, appended after action tools so
