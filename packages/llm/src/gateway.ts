@@ -985,7 +985,8 @@ export async function createGateway(options: GatewayOptions = {}): Promise<Serve
   };
 
   return createServer((req, res) => {
-    if (process.env.BCP_DESKTOP === '1' && req.headers.authorization !== `Bearer ${process.env.BCP_DESKTOP_TOKEN}`) {
+    // An unset token must not turn "Bearer undefined" into the password (same rule as @bcp/shared's desktopHttpGuard).
+    if (process.env.BCP_DESKTOP === '1' && (!process.env.BCP_DESKTOP_TOKEN || req.headers.authorization !== `Bearer ${process.env.BCP_DESKTOP_TOKEN}`)) {
       res.writeHead(401).end('Unauthorized');
       return;
     }
