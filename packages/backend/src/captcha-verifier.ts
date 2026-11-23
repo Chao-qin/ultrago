@@ -82,7 +82,8 @@ export function createCaptchaVerifier(options: {
       combined.throwIfAborted();
       const response = await request(`${baseUrl}/v1/chat/completions`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        // Names this caller in the gateway's call log; without it these calls show up unattributed.
+        headers: { 'content-type': 'application/json', 'X-BCP-Caller': 'captcha-verifier' },
         signal: combined,
         redirect: 'error',
         body: JSON.stringify({

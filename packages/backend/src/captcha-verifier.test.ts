@@ -29,6 +29,7 @@ test('local visual verification sends the compressed image and parses an explici
     'http://127.0.0.1:11435/v1/models',
     'http://127.0.0.1:11435/v1/chat/completions',
   ]);
+  assert.equal((calls[1].init?.headers as Record<string, string>)['X-BCP-Caller'], 'captcha-verifier');
   const body = JSON.parse(String(calls[1].init?.body));
   assert.equal(body.model, 'qwen3.5:4b');
   assert.equal(body.stream, false);
