@@ -1,4 +1,4 @@
-{"name":"mdn-select","url":"https://developer.mozilla.org/en-US/docs/Web/HTML/Element/select","runtime":"058cfefe96db","capturedAt":"2026-11-24","chromium":"151.0.7922.34","viewport":{"width":1280,"height":800},"scrollY":0,"devicePixelRatio":1,"userAgent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.7922.34 Safari/537.36","timeZone":"Asia/Shanghai","moreBelow":true,"frames":6,"elements":[
+{"name":"mdn-select","url":"https://developer.mozilla.org/en-US/docs/Web/HTML/Element/select","runtime":"01250d8a5264","capturedAt":"2026-11-24","chromium":"151.0.7922.34","viewport":{"width":1280,"height":800},"scrollY":0,"devicePixelRatio":1,"userAgent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.7922.34 Safari/537.36","timeZone":"Asia/Shanghai","moreBelow":true,"frames":6,"elements":[
 {"ref":"e1","tag":"a","role":"link","name":"Skip to main content","inViewport":false},
 {"ref":"e2","tag":"a","role":"link","name":"Skip to search","inViewport":false},
 {"ref":"e3","tag":"a","role":"link","name":"MDN","inViewport":true,"rect":[10,104,99,40]},
@@ -557,7 +557,7 @@
 {"ref":"e556","tag":"a","role":"link","name":"Legal","inViewport":false},
 {"ref":"e557","tag":"a","role":"link","name":"Community Participation Guidelines","inViewport":false},
 {"ref":"e558","tag":"a","role":"link","name":"a Creative Commons license","inViewport":false},
-{"ref":"e559","tag":"a","role":"link","name":"Meet Otari, the open source LLM Control Plane that helps developers control LLM infrastructure. Discover Otari","hidden":true,"inViewport":false},
+{"ref":"e559","tag":"a","role":"link","name":"Connect communication channels, contextual data, and integrated AI-driven workflows all in one place. Learn more","hidden":true,"inViewport":false},
 {"ref":"e560","tag":"a","role":"link","name":"AD","inViewport":true,"rect":[1220,8,25,17]},
 {"ref":"e561","tag":"a","role":"link","name":"Don't want to see ads?","inViewport":true,"rect":[1144,40,105,11]},
 {"ref":"e562","tag":"button","role":"button","name":"Search the site","hidden":true,"inViewport":false},

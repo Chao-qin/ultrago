@@ -1289,6 +1289,12 @@ async function main() {
   // content need a letter or digit; text split across elements is still found; a hidden frame shows no text.
   await withPage(
     `<style>body{margin:0}</style>
+     <div style="height:20px;overflow:hidden;translate:0 0"><div style="height:20px"></div><button id="tr" style="position:absolute;top:40px">平移裁剪</button></div>
+     <div style="height:0;overflow:hidden;rotate:0deg"><button id="rot" style="position:fixed;top:5px;left:300px">旋转裁剪</button></div>
+     <div style="height:20px;contain:paint"><div style="height:20px"></div><button id="cp">绘制裁剪</button></div>
+     <div><script>var s="Proceed to checkout"</script><button>Buy</button></div>
+     <div><span>Order</span> <span style="display:none">confirmed</span></div>
+     <div><p>do not</p><p>agree</p></div>
      <div style="height:0;overflow:hidden"><div style="position:fixed;top:20px;left:20px"><button id="p1">固定弹窗</button></div></div>
      <div style="position:relative;margin-top:100px"><div style="height:20px;overflow:hidden"><div style="position:absolute;top:30px;left:0"><button id="p2">下拉项</button></div></div></div>
      <div style="height:20px;overflow-x:clip;overflow-y:visible;margin-top:60px"><div style="height:20px"></div><button id="p3">纵向溢出</button></div>
@@ -1309,6 +1315,11 @@ async function main() {
       eq(of("p3")?.inViewport, true, "overflow-x:clip does not cut along y");
       eq(of("p4")?.inViewport, true, "a modal dialog is in the top layer: a small clipping card around it hides nothing, even one that holds fixed boxes (transform)");
       eq(of("gone")?.inViewport, false, "a button scrolled out of its own list is still off screen");
+      eq(of("tr")?.inViewport, false, "translate (not part of computed transform) makes the clipping box hold an absolute child");
+      eq(of("rot")?.inViewport, false, "rotate makes it hold a fixed child too, so its zero height hides it");
+      eq(of("cp")?.inViewport, false, "contain:paint clips like overflow");
+      for (const q of ["Proceed to checkout", "Order confirmed", "do not agree"])
+        eq((await t.call("snapshot", { query: q })).value.textHits?.count, 0, `"${q}" is not shown text: script source, a display:none part, two paragraphs`);
       eq(of("x")?.name, "Close", "content with no letter or digit (×) does not name it; the title does");
       eq(of("ico")?.name, "删除", "an icon-font glyph does not name it either");
       eq(of("plus")?.name, "+", "with nothing else to go by the symbol is still its name");

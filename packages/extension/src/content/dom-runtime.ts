@@ -1275,13 +1275,23 @@ export async function bcpDomRuntime(
         }
       }
       // Text split across elements ("Add to <b>cart</b>") is in no single text node: then the innermost elements
-      // whose text, taken whole, contains it. Only searched on a miss — it reads textContent down the matching path.
+      // whose SHOWN text contains it within one line — innerText leaves out script source and display:none parts
+      // and breaks lines at block boundaries, so words from two paragraphs are not read as one phrase. textContent
+      // only prunes the descent (a superset). Only searched on a miss.
       if (!out.count) {
         const has = (el: Element) => !SKIP_TEXT_TAGS.has(el.tagName) && normText(el.textContent ?? "").toLowerCase().includes(w);
+        const shownLines = (el: Element): string[] => {
+          if (isVisible(el)) return ((el as HTMLElement).innerText ?? "").split(/\n+/);
+          // Not rendered: innerText would be textContent. Its text nodes outside script and style, as one line.
+          const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+          let t = "";
+          for (let n = walker.nextNode(); n; n = walker.nextNode()) if (!SKIP_TEXT_TAGS.has(n.parentElement?.tagName ?? "")) t += n.nodeValue;
+          return [t];
+        };
         const visit = (el: Element): void => {
           const inner = [...el.children].filter(has);
           if (inner.length) inner.forEach(visit);
-          else record(el, normText(el.textContent ?? ""));
+          else for (const line of shownLines(el)) record(el, normText(line));
         };
         for (const root of pageRoots(false)) {
           const top = root instanceof Document ? root.body : root;
@@ -1333,11 +1343,16 @@ export async function bcpDomRuntime(
           pointerCache.set(host, st.cursor === "pointer");
           // <html>/<body> overflow applies to the viewport, which inViewport already measures against.
           const viewportOwned = host === document.documentElement || host === document.body;
-          const clipX = !viewportOwned && st.overflowX !== "visible";
-          const clipY = !viewportOwned && st.overflowY !== "visible";
-          const holdsFixed = st.transform !== "none" || st.perspective !== "none" || st.filter !== "none" ||
-            (st.backdropFilter ?? "none") !== "none" || /paint|layout|strict|content/.test(st.contain) ||
-            /transform|perspective|filter/.test(st.willChange);
+          // contain:paint (and content-visibility:auto, which implies it) clips like overflow does.
+          const paints = /paint|strict|content/.test(st.contain) || st.contentVisibility === "auto";
+          const clipX = !viewportOwned && (st.overflowX !== "visible" || paints);
+          const clipY = !viewportOwned && (st.overflowY !== "visible" || paints);
+          // The individual transform properties (translate / rotate / scale — what Tailwind v4 emits) are not part
+          // of the computed `transform`, and hold fixed boxes all the same. A browser without them reads undefined,
+          // which must not count as "set" (every node would then hold fixed boxes).
+          const holdsFixed = st.transform !== "none" || (st.translate || "none") !== "none" || (st.rotate || "none") !== "none" || (st.scale || "none") !== "none" ||
+            st.perspective !== "none" || st.filter !== "none" || (st.backdropFilter ?? "none") !== "none" ||
+            paints || /layout/.test(st.contain) || /transform|translate|rotate|scale|perspective|filter/.test(st.willChange);
           if (clipX || clipY || holdsFixed || st.position !== "static") boxes.set(host, { pos: st.position, clipX, clipY, holdsFixed });
           if (st.position === "fixed") fixedLayers.add(host);
           else if (st.position === "sticky") {

@@ -1,4 +1,4 @@
-{"name":"jd-corporate","url":"https://www.jd.com","runtime":"058cfefe96db","capturedAt":"2026-11-24","chromium":"151.0.7922.34","viewport":{"width":1280,"height":800},"scrollY":0,"devicePixelRatio":1,"userAgent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.7922.34 Safari/537.36","timeZone":"Asia/Shanghai","moreBelow":true,"frames":1,"elements":[
+{"name":"jd-corporate","url":"https://www.jd.com","runtime":"01250d8a5264","capturedAt":"2026-11-24","chromium":"151.0.7922.34","viewport":{"width":1280,"height":800},"scrollY":0,"devicePixelRatio":1,"userAgent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.7922.34 Safari/537.36","timeZone":"Asia/Shanghai","moreBelow":true,"frames":1,"elements":[
 {"ref":"e1","tag":"a","role":"link","name":"JD.com","inViewport":true,"rect":[70,15,270,57]},
 {"ref":"e2","tag":"button","role":"button","name":"Open navigation menu","expanded":false,"hidden":true,"inViewport":false},
 {"ref":"e3","tag":"a","role":"link","name":"HOME","inViewport":true,"rect":[165,83,98,50]},

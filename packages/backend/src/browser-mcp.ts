@@ -457,7 +457,7 @@ export function createBrowserMcpServer(
   registerCaptureTools({ server, call, deltaKey, drainEvents, captureWithLease, readDumps, readSnapshot });
   registerIoTools({
     server, call, events, evLine, inbox, sessionSees, callWindow: () => toolCall.getStore()?.window,
-    tabOfRef: () => (lastRead && lastRead.instanceId === resolvedTarget()?.instanceId ? lastRead.tabId : undefined),
+    lastReadTab: () => (lastRead && lastRead.instanceId === resolvedTarget()?.instanceId ? lastRead.tabId : undefined),
     recordAsOne: (action, run) => (planRunner ? planRunner.asOneAction(action, run) : run()),
   });
 
