@@ -319,28 +319,25 @@ async function main() {
     },
   );
 
-  // role="alert" means "announce this promptly", NOT "this is an error". A
-  // version banner carrying it used to make every page report a standing error,
-  // which buried real ones and misled a real session.
+  // An error is what the page declares invalid (aria-invalid), with the message
+  // the field points to. role="alert" means "announce this promptly", NOT "this
+  // is an error" — a version banner carrying it used to make every page report a
+  // standing error. And a class name is no declaration: no library's classes are
+  // known here.
   await withPage(
     `<div role="alert">新版本可用，请刷新页面</div>
-     <div class="error">用户名不能为空</div>
-     <input id="bad" aria-invalid="true">`,
+     <div class="error el-form-item__error">只有类名的提示</div>
+     <input id="bad" aria-invalid="true" aria-describedby="bad-msg"><div id="bad-msg">用户名不能为空</div>
+     <input id="bare" aria-label="手机号" aria-invalid="true">`,
     async (t) => {
       const st = await t.call("state", {});
-      // Only the real validation message counts; the banner does not.
-      eq(st.value.errorCount, 1, "role=alert banner is not counted as an error");
+      eq(st.value.errorCount, 2, "the two declared-invalid fields; neither the banner nor a bare class counts");
       eq(st.value.errors?.[0], undefined, "errors are only listed in detail mode");
       const detail = await t.call("state", { verbosity: "detail", resetDelta: true });
-      eq(detail.value.errors?.length, 1, "detail mode lists exactly the real error");
-      match(detail.value.errors[0], /用户名不能为空/, "the listed error is the validation message");
-
-      // Division of labour: a control's invalid STATE rides on the snapshot
-      // element, not on errorCount — errorCount counts messages with text, and
-      // an <input> carries none.
+      eq(JSON.stringify(detail.value.errors), JSON.stringify(["用户名不能为空", "手机号 is invalid"]),
+        "each error is the message its field points to, or the field's name when it points to none");
       const snap = await t.call("snapshot", {});
-      const bad = snap.value.elements.find((e) => e.tag === "input");
-      eq(bad?.invalid, true, "an aria-invalid input is flagged in the snapshot instead");
+      eq(snap.value.elements.find((e) => e.ref === t.ref("bad"))?.invalid, true, "the field itself is flagged in the snapshot too");
     },
   );
 
@@ -1281,7 +1278,7 @@ async function main() {
      <script>
        document.getElementById("hidden-host").attachShadow({ mode: "open" }).innerHTML = '<p>隐藏的提示</p>';
        document.getElementById("go").onclick = () => {
-         document.getElementById("toast-host").attachShadow({ mode: "open" }).innerHTML = '<p class="error">提交失败</p>';
+         document.getElementById("toast-host").attachShadow({ mode: "open" }).innerHTML = '<input aria-invalid="true" aria-describedby="m"><p id="m">提交失败</p>';
        };
      </script>`,
     async (t) => {

@@ -262,22 +262,30 @@ export async function bcpDomRuntime(
 
     // ---- Action delta: capture a compact page signature before/after a mutating
     // action so the tool can report what changed without a full re-snapshot. ----
-    // NOTE: bare [role="alert"] is deliberately NOT here. That role means "announce
-    // this promptly", not "this is an error" — a version-update banner, a save
-    // confirmation and a cookie notice all legitimately carry it. Including it made
-    // page_state report a standing "1 error(s)" on an ordinary page, which both
-    // buried real errors and actively misled a session into investigating a click
-    // that was fine. Component libraries put their real validation errors behind
-    // the class selectors below (which usually ALSO carry role=alert), so nothing
-    // is lost; genuine alerts remain visible in the snapshot as `alert` elements.
-    const ERROR_SELECTOR =
-      '[aria-invalid="true"], [aria-errormessage], .error, .ant-form-item-explain-error, .arco-form-message-error, .el-form-item__error';
+    // An error is what the page DECLARES invalid: a field marked aria-invalid, with the message it points to through
+    // aria-errormessage (else aria-describedby), or its name when it points to none. No component library's class
+    // names — what counts as an error is the page's own statement, not a list of libraries we happen to know.
+    // The cost, measured: a library that marks nothing (Element Plus 2.9 renders its message as a bare
+    // div.el-form-item__error, with no aria-invalid on the field) reports no error here; the agent sees the message
+    // by reading the page.
+    // NOTE: bare [role="alert"] is deliberately NOT an error. That role means "announce this promptly", not "this is
+    // an error" — a version-update banner, a save confirmation and a cookie notice all legitimately carry it.
+    // Counting it made page_state report a standing "1 error(s)" on an ordinary page, which both buried real errors
+    // and actively misled a session into investigating a click that was fine.
     const collectErrors = (roots?: (Document | ShadowRoot)[]): string[] => {
       const out: string[] = [];
-      for (const el of queryDeepAll(ERROR_SELECTOR, roots)) {
-        if (!isVisible(el)) continue;
-        const t = (el as HTMLElement).innerText?.trim();
-        if (t) out.push(truncate(t, 80));
+      for (const field of queryDeepAll('[aria-invalid="true"]', roots)) {
+        if (!isVisible(field)) continue;
+        const root = field.getRootNode() as Document | ShadowRoot;
+        const ids = (field.getAttribute("aria-errormessage") || field.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean);
+        const message = ids
+          .map((id) => root.getElementById(id))
+          .filter((m): m is HTMLElement => !!m && isVisible(m))
+          .map((m) => m.innerText.trim())
+          .filter(Boolean)
+          .join(" ");
+        const text = truncate(message || `${accessibleName(field) || field.tagName.toLowerCase()} is invalid`, 80);
+        if (!out.includes(text)) out.push(text);
         if (out.length >= 10) break;
       }
       return out;
