@@ -56,10 +56,13 @@ async function connect(opts: {
   lifecycle?: BrowserLifecycle | null;
   result?: unknown;
   events?: EventStore;
+  /** An RPC that rejects, for the paths that must survive a failing leg. */
+  failOn?: string;
 } = {}): Promise<{ client: Client; calls: CallLog[]; close: () => Promise<void> }> {
   const calls: CallLog[] = [];
   const rawCall = (async (method, params, target) => {
     calls.push({ method, params: params as Record<string, unknown>, target });
+    if (method === opts.failOn) throw new Error(`${method} failed`);
     return (opts.result ?? {}) as never;
   }) as RawBrowserCall;
 
@@ -156,7 +159,7 @@ test("关键工具的参数名与必填集不变", async () => {
     claim_tab: { props: ["release", "tabId"], required: [] },
     stop_browser: { props: ["confirm", "instanceId", "kind"], required: ["confirm", "instanceId", "kind"] },
     // Narrowing and paging: one huge page's full snapshot was refused by the MCP client outright.
-    snapshot: { props: ["after", "limit", "query", "tabId", "viewportOnly"], required: [] },
+    snapshot: { props: ["after", "full", "limit", "query", "tabId", "viewportOnly", "within"], required: [] },
     drag: { props: ["confirm", "method", "ref", "tabId", "toRef"], required: ["ref", "toRef"] },
     screenshot: { props: ["savePath", "tabId"], required: [] },
   };
@@ -413,7 +416,7 @@ test("验证码候选事件不出现在任何给 LLM 的输出里", async () => 
 
 test("工具参数一路到达 RPC：drag 的 method 变成 dragMethod，snapshot 的 query 真的缩小回复", async () => {
   const elements = Array.from({ length: 50 }, (_, i) => ({ ref: `e${i}`, tag: "a", role: "link", name: i === 7 ? "登录/注册" : `职位 ${i}` }));
-  const { client, calls, close } = await connect({ result: { url: "https://x/", title: "列表", elements, moreBelow: false, changed: { added: ["e7"], removed: 0 }, ok: true } });
+  const { client, calls, close } = await connect({ result: { url: "https://x/", title: "列表", elements, moreBelow: false, docs: { "0": "d" }, ok: true } });
   try {
     await client.callTool({ name: "drag", arguments: { ref: "e1", toRef: "e2", method: "pointer" } });
     assert.equal(calls.at(-1)?.params.dragMethod, "pointer");
@@ -421,16 +424,17 @@ test("工具参数一路到达 RPC：drag 的 method 变成 dragMethod，snapsho
     const narrowedText = (narrowed.content as Array<{ text: string }>)[0].text;
     assert.match(narrowedText, /\[e7\] link "登录\/注册"/);
     assert.doesNotMatch(narrowedText, /\[e8\]/);
-    assert.match(narrowedText, /1 of 50 elements match/);
-    const full = await client.callTool({ name: "snapshot", arguments: {} });
-    assert.doesNotMatch((full.content as Array<{ text: string }>)[0].text, /already read/, "上一次只看到了过滤后的部分，不能声称其余都读过");
+    assert.match(narrowedText, /^Coverage: 1 of the page's 50 elements listed here \(all 1 elements matching query="登录"\)/m);
+    const full = (await client.callTool({ name: "snapshot", arguments: {} }) as { content: Array<{ text: string }> }).content[0].text;
+    assert.match(full, /NEW to you: 49 \(first 12: e0, e1, e2/, "上一次只看到了过滤后的 e7，其余 49 个对 agent 都是新的");
+    assert.doesNotMatch(full, /NEW to you:[^\n]*\be7\b/, "e7 已经给它看过");
   } finally { await close(); }
 });
 
-test("快照的覆盖记账跟着实际读到的标签页走，变化基线按会话隔离", async () => {
+test("已展示记录跟着实际读到的标签页走，并按会话隔离", async () => {
   const elements = Array.from({ length: 50 }, (_, i) => ({ ref: `e${i}`, tag: "a", role: "link", name: i === 7 ? "登录/注册" : `职位 ${i}` }));
   // One mutable page: which tab the extension reports as read changes between calls, as the active tab would.
-  const page = { tabId: 2, url: "https://x/", title: "列表", elements, moreBelow: false, changed: undefined as { added: string[]; removed: number } | undefined };
+  const page = { tabId: 2, url: "https://x/", title: "列表", elements, moreBelow: false, docs: { "0": "d" } };
   const a = await connect({ result: page });
   const b = await connect({ result: page });
   const textOf = (r: unknown) => (r as { content: Array<{ text: string }> }).content[0].text;
@@ -439,30 +443,76 @@ test("快照的覆盖记账跟着实际读到的标签页走，变化基线按�
     page.tabId = 1;
     await a.client.callTool({ name: "snapshot", arguments: {} });
     page.tabId = 2;
-    page.changed = { added: ["e7"], removed: 0 };
     const back = textOf(await a.client.callTool({ name: "snapshot", arguments: {} }));
-    assert.doesNotMatch(back, /already read/, "标签页 2 上次只看了一部分；标签页 1 的完整读取不能替它作证");
+    assert.match(back, /NEW to you: 49/, "标签页 2 上次只看了 e7；标签页 1 的完整读取不能替它作证");
     page.tabId = 1;
     const other = textOf(await a.client.callTool({ name: "snapshot", arguments: {} }));
-    assert.match(other, /already read/, "标签页 1 上次看全了");
+    assert.doesNotMatch(other, /Since your last snapshot/, "标签页 1 上次看全了，没有新东西");
 
-    const keyA = a.calls.at(-1)?.params.deltaKey;
-    await b.client.callTool({ name: "snapshot", arguments: {} });
-    const keyB = b.calls.at(-1)?.params.deltaKey;
-    assert.equal(typeof keyA, "string", "agent 自己的快照要带会话键，否则所有会话共用一份变化基线");
-    assert.notEqual(keyA, keyB);
+    const first = textOf(await b.client.callTool({ name: "snapshot", arguments: {} }));
+    assert.doesNotMatch(first, /Since your last snapshot/, "另一个会话第一次读，不能沿用 a 的记录");
+    assert.equal(a.calls.find((c) => c.method === RpcMethod.Snapshot)?.params.deltaKey, undefined, "比对在后端做，不再把会话键送进页面");
   } finally { await Promise.all([a.close(), b.close()]); }
 });
 
-test("pick_option 内部读的快照用自己的基线键，不挪动 agent 的变化基线", async () => {
-  const { client, calls, close } = await connect({ result: { tabId: 1, url: "u", title: "t", moreBelow: false, elements: [{ ref: "e1", tag: "li", role: "option", name: "北京" }], ok: true } });
+test("读了快照但工具随后失败时不记账：下一次读照样把那些元素当成新的", async () => {
+  const elements = Array.from({ length: 50 }, (_, i) => ({ ref: `e${i}`, tag: "a", role: "link", name: i === 7 ? "登录/注册" : `职位 ${i}` }));
+  const { client, close } = await connect({ result: { tabId: 1, url: "https://x/", title: "列表", elements, moreBelow: false, docs: { "0": "d" } }, failOn: RpcMethod.ReadContent });
+  const textOf = (r: unknown) => (r as { content: Array<{ text: string }> }).content[0].text;
+  try {
+    await client.callTool({ name: "snapshot", arguments: { query: "登录" } });
+    const analyzed = await client.callTool({ name: "analyze_page", arguments: {} });
+    assert.equal(analyzed.isError, true, "analyze_page 读完快照后，读正文那一路失败了");
+    assert.match(textOf(await client.callTool({ name: "snapshot", arguments: {} })), /NEW to you: 49/, "失败的 analyze_page 没把整页记成已展示");
+  } finally { await close(); }
+});
+
+test("带过滤条件的 full 不重新记账，否则记录会缩成一次搜索的结果", async () => {
+  const elements = Array.from({ length: 5 }, (_, i) => ({ ref: `e${i}`, tag: "a", role: "link", name: `职位 ${i}` }));
+  const { client, close } = await connect({ result: { tabId: 1, url: "https://x/", title: "列表", elements, moreBelow: false, docs: { "0": "d" } } });
+  const textOf = (r: unknown) => (r as { content: Array<{ text: string }> }).content[0].text;
   try {
     await client.callTool({ name: "snapshot", arguments: {} });
-    const sessionKey = calls.at(-1)?.params.deltaKey;
+    await client.callTool({ name: "snapshot", arguments: { full: true, query: "职位 3" } });
+    assert.doesNotMatch(textOf(await client.callTool({ name: "snapshot", arguments: {} })), /NEW to you/, "五个都已经看过");
+  } finally { await close(); }
+});
+
+test("full 读取重新开始记账；旧扩展不带 docs 时不报任何增量；两个浏览器的同号标签页各记各的", async () => {
+  const elements = [
+    { ref: "e1", tag: "a", role: "link", name: "首页" },
+    { ref: "e2", tag: "li", role: "option", name: "北京", hidden: true as boolean | undefined },
+  ];
+  const page: Record<string, unknown> = { tabId: 1, url: "u", title: "t", moreBelow: false, elements, docs: { "0": "d" } };
+  const { client, close } = await connect({ result: page });
+  const textOf = (r: unknown) => (r as { content: Array<{ text: string }> }).content[0].text;
+  try {
+    assert.match(textOf(await client.callTool({ name: "snapshot", arguments: {} })), /Hidden right now \(1/);
+    const full = textOf(await client.callTool({ name: "snapshot", arguments: { full: true } }));
+    assert.match(full, /\[e2\] option "北京" \[hidden\]/);
+    assert.doesNotMatch(full, /↳/, "full 列出全部、重新记账，不拿上一次比");
+
+    // The page moves on; the other browser's tab 1 has never been read, so it has nothing to report.
+    elements[1].hidden = undefined;
+    await client.callTool({ name: "use_browser", arguments: { kind: "chrome", instanceId: "inst-b" } });
+    assert.doesNotMatch(textOf(await client.callTool({ name: "snapshot", arguments: {} })), /↳/, "另一个浏览器的 tab 1 是第一次读");
+
+    delete page.docs;
+    elements.push({ ref: "e3", tag: "a", role: "link", name: "新" });
+    assert.doesNotMatch(textOf(await client.callTool({ name: "snapshot", arguments: {} })), /↳/, "没有文档标识就无从比较，也不能当成换了页面");
+  } finally { await close(); }
+});
+
+test("pick_option 内部读的快照不记进 agent 的已展示记录", async () => {
+  const option = { ref: "e1", tag: "li", role: "option", name: "北京", hidden: true as boolean | undefined };
+  const page = { tabId: 1, url: "u", title: "t", moreBelow: false, docs: { "0": "d" }, elements: [option], ok: true };
+  const { client, close } = await connect({ result: page });
+  const textOf = (r: unknown) => (r as { content: Array<{ text: string }> }).content[0].text;
+  try {
+    await client.callTool({ name: "snapshot", arguments: {} });
+    option.hidden = undefined;
     await client.callTool({ name: "pick_option", arguments: { ref: "e0", option: "北京" } });
-    const internal = calls.filter((c) => c.method === RpcMethod.Snapshot).slice(1);
-    assert.ok(internal.length >= 1, "pick_option 应当读过快照");
-    for (const c of internal) assert.notEqual(c.params.deltaKey, sessionKey, "内部快照不能用 agent 的会话键");
+    assert.match(textOf(await client.callTool({ name: "snapshot", arguments: {} })), /NEW to you: e1/, "agent 自己从没看到过 e1");
   } finally { await close(); }
 });
 

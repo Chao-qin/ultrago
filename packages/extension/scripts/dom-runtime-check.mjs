@@ -17,57 +17,11 @@
  * adding either to the lockfile. If neither is found it says so and exits 2 —
  * a missing harness must never read as "tests passed".
  */
-import { createRequire } from "node:module";
-import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve as pathResolve } from "node:path";
+import { bundleRuntime, loadEsbuild, loadPlaywright } from "./toolchain.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const RUNTIME_TS = pathResolve(HERE, "../src/content/dom-runtime.ts");
-const require_ = createRequire(import.meta.url);
-
-// ---------------------------------------------------------------- toolchain
-const firstExisting = (paths) => paths.find((p) => existsSync(p));
-
-async function loadEsbuild() {
-  try {
-    return await import("esbuild");
-  } catch {
-    /* not a direct dependency — fall through to a scan */
-  }
-  const { globSync } = await import("node:fs");
-  const roots = [
-    pathResolve(HERE, "../../../node_modules/.pnpm"),
-    "/usr/local/lib/node_modules",
-  ];
-  for (const root of roots) {
-    if (!existsSync(root)) continue;
-    let hits = [];
-    try {
-      hits = globSync("esbuild@*/node_modules/esbuild/lib/main.js", { cwd: root }).map((h) => pathResolve(root, h));
-    } catch {
-      /* older node without globSync */
-    }
-    const hit = firstExisting(hits);
-    if (hit) return require_(hit);
-  }
-  return null;
-}
-
-async function loadPlaywright() {
-  try {
-    return await import("playwright-core");
-  } catch {
-    /* not a direct dependency — fall through to known machine locations */
-  }
-  const candidates = [
-    pathResolve(HERE, "../../../node_modules/playwright-core/index.mjs"),
-    "/root/.bun/install/cache/playwright-core@1.58.2@@@1/index.mjs",
-    "/usr/local/lib/python3.11/dist-packages/playwright/driver/package/index.mjs",
-  ];
-  const hit = firstExisting(candidates);
-  return hit ? await import(hit) : null;
-}
 
 // ------------------------------------------------------------------ harness
 let passed = 0;
@@ -83,6 +37,13 @@ function match(actual, re, label) {
   failures.push(`${label}\n    expected to match: ${re}\n    actual:            ${JSON.stringify(actual)}`);
 }
 
+/** The nearest ancestor of `e` (by parentRef) that is a hidden group, or undefined. */
+function climb(els, e) {
+  const byRef = new Map(els.map((x) => [x.ref, x]));
+  for (let p = e && byRef.get(e.parentRef); p; p = byRef.get(p.parentRef)) if (p.hiddenGroup) return p.ref;
+  return undefined;
+}
+
 async function main() {
   const esbuild = await loadEsbuild();
   const pw = await loadPlaywright();
@@ -95,12 +56,7 @@ async function main() {
     process.exit(2);
   }
 
-  const built = await esbuild.build({
-    entryPoints: [RUNTIME_TS],
-    bundle: true, format: "esm", target: "es2022", write: false, logLevel: "silent",
-  });
-  const moduleUrl = "data:text/javascript;base64," + Buffer.from(built.outputFiles[0].text).toString("base64");
-  const { bcpDomRuntime, bcpSignalWait, bcpWaitFactory, bcpEventProbes, bcpDomHelpersFactory } = await import(moduleUrl);
+  const { bcpDomRuntime, bcpSignalWait, bcpWaitFactory, bcpEventProbes, bcpDomHelpersFactory, bcpReadOnlyGuard } = await bundleRuntime(esbuild);
   const runtimeSource = bcpDomRuntime.toString();
   const probesSource = bcpEventProbes.toString();
   const signalSource = bcpSignalWait.toString();
@@ -1140,7 +1096,7 @@ async function main() {
       const refOf = (r, id) => r.value.elements.find((e) => e.name?.includes(id))?.ref;
       const aRef1 = refOf(first, "甲");
       eq(typeof aRef1, "string", "a control gets a ref");
-      eq(first.value.changed, undefined, "the first snapshot has nothing to compare against");
+      eq(typeof first.value.docId, "string", "the snapshot names the document its refs belong to");
 
       // Insert a control, remove another, then re-read.
       await page.evaluate(() => {
@@ -1150,11 +1106,8 @@ async function main() {
       const second = await t.call("snapshot", {});
 
       eq(refOf(second, "甲"), aRef1, "a control that survived keeps the ref the caller already holds");
-      const added = second.value.changed?.added ?? [];
-      eq(added.length, 1, "the diff names exactly the control that appeared");
-      eq(added[0], refOf(second, "丙"), "and names it by the ref the caller can act on");
-      eq(second.value.changed?.removed, 1, "and counts the one that went away");
-      eq(added.includes(aRef1), false, "a control the caller already read is not re-announced as new");
+      eq(second.value.docId, first.value.docId, "and the document is still the same one");
+      eq([aRef1, refOf(first, "乙")].includes(refOf(second, "丙")), false, "a new control gets a number no earlier control had");
 
       // A fresh element must never be handed a number a live element still holds.
       await page.evaluate(() => {
@@ -1164,6 +1117,104 @@ async function main() {
       const refs = third.value.elements.map((e) => e.ref);
       eq(new Set(refs).size, refs.length, "refs stay unique after reuse");
       eq(refOf(third, "甲"), aRef1, "and the surviving ref is still stable across a third read");
+    },
+  );
+
+  // ---- What the backend's snapshot reply relies on ----
+  // Refs are numbered per document: a new document starts again at e1, so the
+  // backend compares docId before it compares refs. The isolated world gives
+  // every real document a fresh store; here the realm is reset by hand, the
+  // way the probe cases above do it, because setContent keeps the realm.
+  await withPage(`<button>甲</button>`, async (t) => {
+    const newDocument = () => page.evaluate(() => {
+      for (const k of Object.keys(globalThis)) if (k.startsWith("__bcp") && k !== "__bcpRun" && k !== "__bcpSignalWait") delete globalThis[k];
+    });
+    await newDocument();
+    const before = await t.call("snapshot", {});
+    await newDocument();
+    const after = await t.call("snapshot", {});
+    eq(after.value.elements[0]?.ref, before.value.elements[0]?.ref, "a new document reuses the same ref numbers");
+    eq(after.value.docId === before.value.docId, false, "so it must report a different docId");
+  });
+
+  // Hidden elements are still collected and reported with their tag — a
+  // concealed file input is upload_file's target, a native <select> under a
+  // custom dropdown is select_option's — and the backend names them by ref. A
+  // menu rendered up front and hidden by CSS keeps its refs when it opens —
+  // only the hidden flag flips, which is what makes it "new to you" in the
+  // backend.
+  await withPage(
+    `<label>上传<input id="file" type="file" style="display:none"></label>
+     <select id="native" style="display:none"><option>北京</option></select>
+     <ul id="menu" style="display:none"><li><a href="#" id="opt">Python</a></li></ul>`,
+    async (t) => {
+      const closed = await t.call("snapshot", {});
+      const of = (r, ref) => r.value.elements.find((e) => e.ref === ref);
+      eq(of(closed, t.ref("file"))?.tag, "input", "the hidden file input is reported with its tag");
+      eq(of(closed, t.ref("file"))?.hidden, true);
+      eq(of(closed, t.ref("native"))?.tag, "select", "so is the hidden native <select>");
+      eq(of(closed, t.ref("native"))?.hidden, true);
+      eq(of(closed, t.ref("opt"))?.hidden, true, "the menu item is collected while hidden");
+      await page.evaluate(() => { document.getElementById("menu").style.display = "block"; });
+      const open = await t.call("snapshot", {});
+      eq(of(open, t.ref("opt"))?.hidden, undefined, "opening the menu flips it to visible");
+      eq(open.value.docId, closed.value.docId, "without changing the document");
+    },
+  );
+
+  // ---- Hidden groups. A closed menu's container is routinely a role-less
+  // <ul>/<div> that nothing else collects, so its items had no common ref and
+  // the backend could only list or count them one by one. The runtime collects
+  // the OUTERMOST node whose own rule hides two or more collected elements —
+  // the same rule hiddenCause names when an action is refused.
+  await withPage(
+    `<button id="trigger">菜单</button>
+     <nav id="outer" style="display:none">
+       <a href="#" id="top">首页</a>
+       <ul id="inner" style="display:none"><li><a href="#" id="a1">甲</a></li><li><a href="#" id="a2">乙</a></li></ul>
+     </nav>
+     <div id="solo-wrap" style="display:none"><a href="#" id="solo">落单</a></div>
+     <div role="menu" id="menu" style="display:none"><a href="#" id="m1">一</a><a href="#" id="m2">二</a></div>
+     <details id="det"><summary id="sum">更多</summary><a href="#" id="d1">导出</a><a href="#" id="d2">删除</a></details>
+     <div style="visibility:hidden"><a href="#" id="vis-back" style="visibility:visible">仍可见</a><a href="#" id="v1">藏</a></div>
+     <div id="va" style="visibility:hidden"><div style="visibility:visible"><button id="vb">可见</button>
+       <ul id="vu" style="display:none"><li><a href="#" id="vu1">x</a></li><li><a href="#" id="vu2">y</a></li></ul></div></div>
+     <div id="sw" style="display:none"><span id="shost"></span></div>
+     <script>document.getElementById("shost").attachShadow({ mode: "open" }).innerHTML = '<a href="#">影一</a><a href="#">影二</a>';</script>`,
+    async (t) => {
+      const els = (await t.call("snapshot", {})).value.elements;
+      const refOfEl = await page.evaluate(() => {
+        const out = {};
+        for (const [ref, el] of globalThis.__bcpRefs) if (el.id) out[el.id] = ref;
+        return out;
+      });
+      const of = (id) => els.find((e) => e.ref === refOfEl[id]);
+      const groups = els.filter((e) => e.hiddenGroup);
+      eq(of("outer")?.hiddenGroup, true, "the outermost hiding node of a role-less menu is collected as its group");
+      eq(of("inner"), undefined, "a hiding node inside another is not a second group: the outermost one names the subtree");
+      for (const id of ["top", "a1", "a2"]) eq(climb(els, of(id)), refOfEl.outer, `${id} nests under the group through parentRef`);
+      eq(of("solo-wrap"), undefined, "a node hiding a single collected element is no group — that element stands alone");
+      eq(of("menu")?.hiddenGroup, undefined, "an already collected container (role=menu) is the group itself, nothing is added");
+      eq(of("det")?.hiddenGroup, true, "a closed <details> groups what it hides");
+      eq(of("det")?.hidden, undefined, "while the <details> itself still shows (its summary)");
+      eq(of("sum")?.parentRef, refOfEl.det, "the summary nests under it too");
+      eq(of("vis-back")?.hidden, undefined, "a child that overrides visibility:hidden is visible and not grouped");
+      eq(of("vu")?.hiddenGroup, true, "under a visibility override the group is the node that really hides the items");
+      eq(of("va"), undefined, "not the visibility:hidden ancestor whose visible child shows them");
+      eq(of("vb")?.hidden, undefined, "and the visible button beside them is no member of anything hidden");
+      eq(of("sw"), undefined, "a host hidden from outside its shadow root is no group: nesting does not cross into the shadow tree, so the group could hold none of it");
+      eq(groups.length, 3, "exactly three groups: the nav, the details and the overridden list");
+      // Whatever the page, a group must hold what it stands for: it is collected only to name them.
+      for (const g of groups) eq(els.filter((e) => climb(els, e) === g.ref).length >= 2, true, `group ${g.ref} holds at least two members through parentRef`);
+      const order = els.map((e) => e.ref);
+      eq(order.indexOf(refOfEl.outer) < order.indexOf(refOfEl.top), true, "a group precedes what it holds, as the tree and paging assume");
+      await page.evaluate(() => { document.getElementById("outer").style.display = "block"; document.getElementById("inner").style.display = "block"; });
+      const open = (await t.call("snapshot", {})).value.elements;
+      eq(open.some((e) => e.hiddenGroup && e.ref === refOfEl.outer), false, "an opened menu is no longer a hidden group");
+      eq(open.find((e) => e.ref === refOfEl.a1)?.hidden, undefined, "and its items keep their refs, now visible");
+      await page.evaluate(() => { document.getElementById("outer").style.display = "none"; });
+      const closedAgain = (await t.call("snapshot", {})).value.elements;
+      eq(closedAgain.find((e) => e.hiddenGroup && e.name?.includes("首页"))?.ref, refOfEl.outer, "closed again, the group gets its own ref back: the agent's ref did not go stale while the node existed");
     },
   );
 
@@ -2292,7 +2343,7 @@ async function main() {
   // pass, every class of page effect is refused (and the refusal names it), and the page is left exactly as it
   // was — the swapped APIs are restored, so the page's own code keeps working after a refused check.
   {
-    const guardSource = (await import(moduleUrl)).bcpReadOnlyGuard.toString();
+    const guardSource = bcpReadOnlyGuard.toString();
     await withPage(
       `<form id="f"><input id="i" value="a"><button id="b" type="button">B</button></form>
        <div id="s" style="height:50px;overflow:auto"><div style="height:500px"></div></div>`,

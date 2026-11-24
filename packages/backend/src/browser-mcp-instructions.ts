@@ -29,11 +29,13 @@ Perceive — use the cheapest read that answers the question:
 - When a read says "more content below the fold" or the item is not there yet, \`scroll\` (the window, or the list's (scrollable) container) and read again. Never conclude "not found" from one unscrolled view.
 
 Reading a snapshot:
-- State: [expanded]/[collapsed], [checked]/[unchecked], [invalid: …], [busy], [disabled], [hidden], (scrollable), and [clickable] for a custom element found by its pointer cursor — click it like any control. Hidden and disabled elements are listed but will not respond normally; the exception is a [hidden] file input, which \`upload_file\` targets by its ref.
+- State: [expanded]/[collapsed], [checked]/[unchecked], [invalid: …], [busy], [disabled], [hidden], (scrollable), and [clickable] for a custom element found by its pointer cursor — click it like any control. Disabled elements are listed but will not respond normally.
+- The first line (Coverage) says what the reply lists and gives the call for the rest: read it before concluding something is not on the page.
+- Hidden elements cannot be acted on until they show, so "Hidden right now" names them by [ref] instead of listing them: a closed menu is one line, its container. A [hidden] file input named there is still \`upload_file\`'s target.
 - Layer: @dialog:<name> (or bare @dialog) marks a control inside an open modal — act on those; the rest is behind it. @fixed-top / @fixed-bottom / @fixed-left / @fixed mark pinned bars, toolbars and banners. No marker means normal page content.
 - →[ref] names the container a control opens (declared by the page through aria-controls and similar); follow it to a panel rendered elsewhere. (group) is a wrapper without a role whose name is its children's text; act on the children.
 - (x,y w×h) is the element's viewport box, in the same coordinates as a screenshot: use it to match what you see to a ref.
-- A ref stays valid while its element exists. Each snapshot lists the refs that are NEW since your last one — after opening a menu or dialog, look there first.
+- A ref stays valid while its element exists. Each snapshot names the refs NEW to you and those that CHANGED — after opening a menu or dialog, look there first.
 
 Targeting (click, double_click, right_click, hover, type_text, paste_text, upload_file, pick_option and batch steps):
 - By [ref]; by description — text / role / name / css, combined with AND, narrowed by near (within ~200px of an anchor text, which must itself be unique), exact or nth; or, for click, double_click, right_click, hover and pick_option, by x,y read off a screenshot when nothing else names the target (canvas, icon-only buttons).

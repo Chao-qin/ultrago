@@ -133,14 +133,17 @@ test("drag 两端不在同一帧时拒绝，不把另一帧的 ref 拿到本帧�
   assert.deepEqual([inject.args[1].ref, inject.args[1].toRef], ["e3", "e4"]);
 });
 
-test("snapshot 的 changed 逐帧累加，added 的 ref 也要带同样的前缀", async () => {
+test("snapshot 按帧带回各自的文档标识，键与 ref 前缀一致；子帧元素提到的 ref 都带前缀", async () => {
   const h = harness();
   h.setExec(async () => [
-    { frameId: 0, result: { value: { url: "u", title: "t", moreBelow: false, elements: [], changed: { added: ["e1"], removed: 1 } } } },
-    { frameId: 42, result: { value: { url: "u2", title: "t2", moreBelow: false, elements: [], changed: { added: ["e9"], removed: 2 } } } },
+    { frameId: 0, result: { value: { url: "u", title: "t", moreBelow: false, elements: [{ ref: "e1" }], docId: "top" } } },
+    { frameId: 42, result: { value: { url: "u2", title: "t2", moreBelow: false, elements: [{ ref: "e1", controls: ["e2"] }, { ref: "e2", parentRef: "e1" }], docId: "sub" } } },
   ]);
-  const r = (await h.dispatch(RpcMethod.Snapshot, {})) as { changed?: { added: string[]; removed: number } };
-  assert.deepEqual(r.changed, { added: ["e1", "42_e9"], removed: 3 }, "不带前缀的 added 会指向另一帧里的 ref");
+  const r = (await h.dispatch(RpcMethod.Snapshot, {})) as { docs?: Record<string, string>; elements: { ref: string; parentRef?: string; controls?: string[] }[] };
+  assert.deepEqual(r.docs, { "0": "top", "42": "sub" }, "子帧单独跳转时，只有它的文档标识会变");
+  assert.deepEqual(r.elements.map((e) => e.ref), ["e1", "42_e1", "42_e2"]);
+  assert.deepEqual(r.elements[1].controls, ["42_e2"], "不带前缀的 controls 会指向顶层帧里同号的元素");
+  assert.equal(r.elements[2].parentRef, "42_e1");
 });
 
 test("snapshot 顺带重装探针，且不阻塞自己", async () => {

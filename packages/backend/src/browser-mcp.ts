@@ -25,7 +25,7 @@ import type { BrowserSetupService } from "./browser-setup-service.js";
 import type { BrowserCall, BrowserLifecycle, BrowserRegistry, RawBrowserCall, ReadSnapshot } from "./browser-mcp-types.js";
 export type { BrowserCall, BrowserLifecycle, BrowserRegistry, RawBrowserCall } from "./browser-mcp-types.js";
 import { BROWSER_INSTRUCTIONS } from "./browser-mcp-instructions.js";
-import { deltaGate, describeRecording, describeVerify, fail, gateNote, renderDelta, renderHistoryNav, renderPageState, renderSnapshot, renderSnapshotDelta, renderSnapshotView, renderTabsByWindow, text } from "./browser-mcp-render.js";
+import { deltaGate, describeRecording, describeVerify, fail, gateNote, renderDelta, renderHistoryNav, renderPageState, renderSnapshot, renderShownDelta, renderSnapshotView, renderTabsByWindow, text } from "./browser-mcp-render.js";
 import { looseBool, stepShape, tabId, verifyShape } from "./browser-mcp-shapes.js";
 import { registerPlanTools } from "./browser-mcp-tools-plan.js";
 import { registerDomTools } from "./browser-mcp-tools-dom.js";
@@ -37,6 +37,7 @@ import { registerBatchTools } from "./browser-mcp-tools-batch.js";
 import { registerPlaybookTools } from "./browser-mcp-tools-playbook.js";
 import { captureBrowserScreenshot, withForegroundLease } from './browser-screenshot.js';
 import { PageReadDumpStore } from "./browser-read-dump.js";
+import { ShownLedger } from "./snapshot-ledger.js";
 
 /** Monotonic per-MCP-session id, used to scope page_state's change baseline to
  * the observing session (so two sessions sharing a tab keep independent deltas).
@@ -377,23 +378,24 @@ export function createBrowserMcpServer(
 
   registerTabsTools({ server, call, resolvedTarget, claimFor, setClaimed, getClaimed: () => claimed, drainEvents });
 
-  // Per tab: whether this session's last snapshot reply left elements out (see renderSnapshotView).
-  // Whether this session's last read of a tab left elements out, so the next one's delta never claims "the rest
-  // is what you already read" about elements that were never shown. Keyed by the browser and the tab actually
-  // read: with no tabId the read lands on whichever tab is active, and tab ids repeat across browsers.
-  const snapshotPartial = new Map<string, boolean>();
-  const readSnapshot: ReadSnapshot = async (tabId, view, tool) => {
+  // What this session has been shown of each tab, so a reply can name what is new to it. Keyed by the browser and
+  // the tab actually read: with no tabId the read lands on whichever tab is active, and tab ids repeat across
+  // browsers. Backend-internal reads (pick_option, plan runners) never touch it.
+  const shownLedger = new ShownLedger();
+  const readSnapshot: ReadSnapshot = async (tabId, view) => {
     const target = resolvedTarget() ?? undefined;
-    const r = await call(RpcMethod.Snapshot, { tabId, deltaKey }, target);
-    const key = `${target?.instanceId}:${r.tabId}`;
-    const rendered = renderSnapshotView(r.elements, view, { tool, changed: r.changed, previousPartial: snapshotPartial.get(key) });
-    snapshotPartial.set(key, rendered.partial);
-    return { ...r, text: rendered.text };
+    const r = await call(RpcMethod.Snapshot, { tabId }, target);
+    const rendered = renderSnapshotView(r.elements, view);
+    // A `full` read of the whole page starts the record over: on its first page only, or paging through it would
+    // keep just the last; and not when narrowed, or the record would shrink to what one search matched.
+    const reset = !!view.full && !view.after && !view.query && !view.within && !view.viewportOnly;
+    const seen = shownLedger.read(`${target?.instanceId}:${r.tabId}`, r.docs, r.elements, rendered.shown, { reset });
+    return { ...r, text: rendered.text + renderShownDelta(seen.diff, { continuation: rendered.continued }), commit: seen.commit };
   };
   registerDomTools({ server, call, deltaKey, drainEvents, readDumps, readSnapshot });
   registerCaptureTools({ server, call, deltaKey, drainEvents, captureWithLease, readDumps, readSnapshot });
   registerIoTools({
-    server, call, events, evLine, inbox, sessionSees, callWindow: () => toolCall.getStore()?.window, deltaKey,
+    server, call, events, evLine, inbox, sessionSees, callWindow: () => toolCall.getStore()?.window,
     recordAsOne: (action, run) => (planRunner ? planRunner.asOneAction(action, run) : run()),
   });
 

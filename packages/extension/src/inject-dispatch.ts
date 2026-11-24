@@ -26,6 +26,7 @@
  */
 import type { RpcErrorInfo, RpcMethod } from "@bcp/shared";
 import { domOpError } from "./rpc-errors";
+import { mergeFrameSnapshots } from "./snapshot-merge";
 
 export interface InjectionResultLike {
     frameId: number;
@@ -102,45 +103,7 @@ export function createInjectDispatch(deps: InjectDeps) {
       // "Install on perceive": a snapshot also (re)installs resident page-event
       // probes. Fire-and-forget so it never blocks or fails the snapshot itself.
       void injectEventProbes(tabId);
-      const merged = {
-        tabId, url: "", title: "", elements: [] as unknown[], moreBelow: false,
-        changed: undefined as { added: string[]; removed: number } | undefined,
-      };
-      for (const res of results) {
-        const r = res.result as
-          | {
-              value?: {
-                url: string; title: string; moreBelow: boolean;
-                elements: { ref: string; parentRef?: string }[];
-                changed?: { added: string[]; removed: number };
-              };
-            }
-          | undefined;
-        if (!r?.value) continue;
-        const pfx = (ref: string): string => (res.frameId === 0 ? ref : `${res.frameId}_${ref}`);
-        if (res.frameId === 0) {
-          merged.url = r.value.url;
-          merged.title = r.value.title;
-        }
-        merged.moreBelow ||= r.value.moreBelow; // any frame with more content below counts
-        for (const el of r.value.elements) {
-          // Sub-frame refs are namespaced with the frameId; parentRef must be too.
-          merged.elements.push(
-            res.frameId === 0
-              ? el
-              : { ...el, ref: pfx(el.ref), parentRef: el.parentRef ? pfx(el.parentRef) : undefined },
-          );
-        }
-        // Each frame keeps its own baseline, so the diffs sum — and the added refs
-        // must carry the same frame prefix as the elements they name, or they
-        // would point at a ref that exists in a different frame.
-        if (r.value.changed) {
-          merged.changed ??= { added: [], removed: 0 };
-          merged.changed.added.push(...r.value.changed.added.map(pfx));
-          merged.changed.removed += r.value.changed.removed;
-        }
-      }
-      return merged;
+      return mergeFrameSnapshots(tabId, results);
     }
 
     // Route a ref-bearing op to the frame its ref came from ("42_e3" -> frame 42, ref "e3").

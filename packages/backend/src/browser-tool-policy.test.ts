@@ -105,36 +105,29 @@ test("a huge page pages under the budget by ref cursor, and query / viewportOnly
   const page = elements(2581);
   const first = renderSnapshotView(page).text;
   assert.ok(first.length < SNAPSHOT_CHAR_BUDGET + 600, `first page stays under the budget (${first.length})`);
-  const shown = Number(/showing 1–(\d+) of 2581/.exec(first)?.[1]);
+  const shown = Number(/^Coverage: (\d+) of the page's 2581 elements listed here \(1–\1 of 2581 visible elements\)/.exec(first)?.[1]);
   assert.ok(shown > 100 && shown < 2581, "shows a first page");
   const last = `e${shown - 1}`;
-  assert.match(first, new RegExp(`continue with snapshot\\(\\{after: "${last}"\\}\\), or narrow with query`));
-  assert.match(renderSnapshotView(page, { after: last }).text, new RegExp(`^\\[e${shown}\\]`), "the next page starts right after the cursor");
+  assert.match(first, new RegExp(`· next page: snapshot\\(\\{after: "${last}"\\}\\) ·`));
+  assert.match(renderSnapshotView(page, { after: last }).text, new RegExp(`\\n\\n\\[e${shown}\\]`), "the next page starts right after the cursor");
   const shifted = page.filter((e) => !["e3", "e4", "e5"].includes(e.ref));
-  assert.match(renderSnapshotView(shifted, { after: last }).text, new RegExp(`^\\[e${shown}\\]`), "elements removed before the cursor do not make the next page skip any");
+  assert.match(renderSnapshotView(shifted, { after: last }).text, new RegExp(`\\n\\n\\[e${shown}\\]`), "elements removed before the cursor do not make the next page skip any");
   assert.match(renderSnapshotView(page, { after: "e999999" }).text, /\[e999999\] is no longer on the page, so this starts again from the first element/);
   assert.ok(renderSnapshotView(page, { limit: 2581 }).text.length < SNAPSHOT_CHAR_BUDGET + 600, "an explicit large limit cannot bypass the budget");
   const nested = page.map((e, i) => (i ? { ...e, parentRef: `e${i - 1}` } : e));
   assert.ok(renderSnapshotView(nested).text.length < SNAPSHOT_CHAR_BUDGET + 600, "indentation counts toward the budget");
   const login = renderSnapshotView(page, { query: "登录" }).text;
   assert.match(login, /\[e1500\] textbox "登录\/注册"/);
-  assert.match(login, /1 of 2581 elements match query="登录"/);
+  assert.match(login, /^Coverage: 1 of the page's 2581 elements listed here \(all 1 elements matching query="登录"\)/);
   assert.equal((renderSnapshotView(page, { query: "TEXTBOX", limit: 5 }).text.match(/^\[e\d+\] textbox/gm) ?? []).length, 5);
-  assert.match(renderSnapshotView(page, { viewportOnly: true }).text, /40 of 2581 elements match viewportOnly/);
-  assert.match(renderSnapshotView(page, { query: "不存在" }).text, /nothing to show for query="不存在".*0 of 2581/);
-  assert.match(renderSnapshotView(page, {}, { tool: "analyze_page" }).text, /this snapshot section is paged — call snapshot\(\{after: "e\d+"\}\)/, "analyze_page points at snapshot, whose parameters these are");
+  assert.match(renderSnapshotView(page, { viewportOnly: true }).text, /\(all 40 elements matching viewportOnly\)/);
+  const none = renderSnapshotView(page, { query: "不存在" }).text;
+  assert.match(none, /^Coverage: 0 of the page's 2581 elements listed here \(none of 0 elements matching query="不存在"\)/);
+  assert.match(none, /nothing to show for query="不存在"/);
   const small = elements(3);
-  assert.equal(renderSnapshotView(small).partial, false);
-  assert.doesNotMatch(renderSnapshotView(small).text, /showing|continue/);
-});
-
-test("the delta says the rest was already read only when nothing was left out, now or last time", () => {
-  const changed = { added: ["e9"], removed: 0 };
-  const small = elements(3);
-  assert.match(renderSnapshotView(small, {}, { changed }).text, /the rest is what you already read/);
-  assert.doesNotMatch(renderSnapshotView(small, {}, { changed, previousPartial: true }).text, /already read/, "上一次回复只给了一部分");
-  assert.doesNotMatch(renderSnapshotView(small, { query: "职位" }, { changed }).text, /already read/, "这一次只给了一部分");
-  assert.equal(renderSnapshotView(small, { query: "职位" }).partial, true);
+  assert.equal(renderSnapshotView(small).shown.length, 3, "the reply reports exactly the refs it listed");
+  assert.doesNotMatch(renderSnapshotView(small).text, /next page/);
+  assert.match(renderSnapshotView(small).text, /that is the whole page/);
 });
 
 test("the window the user is on is named even while Chrome is in the background", () => {

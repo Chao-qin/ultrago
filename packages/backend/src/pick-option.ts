@@ -11,6 +11,8 @@
  * how a breadcrumb or another row carrying the same text got picked.
  */
 import { RpcMethod, type ActionDelta, type PickOptionParams, type SnapshotElement } from "@bcp/shared";
+import { listedByDefault } from "./browser-mcp-render.js";
+import { frameOf, ShownLedger } from "./snapshot-ledger.js";
 
 /** The RPCs pick_option needs, typed loosely so both channels can pass their own call. */
 export type PickOptionCall = (method: RpcMethod, params: Record<string, unknown>) => Promise<unknown>;
@@ -33,26 +35,33 @@ const LIST_RENDER_MS = 500;
 
 const norm = (s: string): string => s.replace(/\s+/g, " ").trim().toLowerCase();
 
-/** Snapshot baseline key private to pick_option, so it never moves the agent's own "NEW since" baseline. */
-export function pickOptionDeltaKey(sessionKey: string): string {
-  return `${sessionKey}.pick`;
-}
-
-export async function pickOption(call: PickOptionCall, params: PickOptionParams, deltaKey: string): Promise<PickOptionResult> {
+export async function pickOption(call: PickOptionCall, params: PickOptionParams): Promise<PickOptionResult> {
   const { option, tabId, ...trigger } = params;
   if (!option?.trim()) throw new Error("pick_option needs the `option` text to choose");
-  type Snap = { elements: SnapshotElement[]; changed?: { added: string[] } };
-  const before = (await call(RpcMethod.Snapshot, { tabId, deltaKey, resetDelta: true })) as Snap;
+  type Snap = { url?: string; elements: SnapshotElement[]; docs?: Record<string, string> };
+  const before = (await call(RpcMethod.Snapshot, { tabId })) as Snap;
   const open = (await call(RpcMethod.Click, { ...trigger, tabId })) as { delta?: ActionDelta };
   await call(RpcMethod.WaitFor, { ms: LIST_RENDER_MS, tabId });
-  const after = (await call(RpcMethod.Snapshot, { tabId, deltaKey })) as Snap;
+  const after = (await call(RpcMethod.Snapshot, { tabId })) as Snap;
 
-  const hiddenBefore = new Set(before.elements.filter((e) => e.hidden).map((e) => e.ref));
-  const revealed = new Set([
-    ...(after.changed?.added ?? []),
-    ...after.elements.filter((e) => !e.hidden && hiddenBefore.has(e.ref)).map((e) => e.ref),
-  ]);
-  const named = after.elements.filter((e) => e.name && !e.hidden);
+  // The list the trigger opened = what is visible now and was not visible before: newly mounted, or rendered up
+  // front and merely hidden. Same question the agent's snapshot answers, so the same ledger answers it — and the
+  // same predicate decides what counts as visible (a hidden group's container is not an option).
+  const seen = new ShownLedger(1);
+  const visible = (s: Snap): string[] => s.elements.filter(listedByDefault).map((e) => e.ref);
+  // An extension without document ids cannot report a navigation; within one pick, milliseconds apart, assume the
+  // same document — what pick_option always assumed before ids existed.
+  const docsOf = (s: Snap): Record<string, string> => s.docs ?? { "0": "unknown" };
+  seen.read("pick", docsOf(before), before.elements, visible(before)).commit();
+  const { diff } = seen.read("pick", docsOf(after), after.elements, visible(after));
+  // A new document is not a list the trigger opened: whatever is on it was not chosen from that list, and clicking
+  // it would act on a page nobody asked about. Say so instead of picking.
+  if (diff.fresh === "navigated")
+    throw new Error(`the opening click navigated to a new document${after.url ? ` (${after.url})` : ""}, so it is not what opens this list — nothing was picked. Snapshot the page and pick_option with the control that opens the list.`);
+  // A sub-frame that loaded a new document in the meantime (an ad, a widget) is not the list either.
+  const reloaded = new Set(diff.framesNavigated);
+  const revealed = new Set(diff.appeared.filter((ref) => !reloaded.has(frameOf(ref))));
+  const named = after.elements.filter((e) => e.name && listedByDefault(e));
   const fromRevealedList = named.some((e) => revealed.has(e.ref));
   const pool = fromRevealedList ? named.filter((e) => revealed.has(e.ref)) : named;
   const want = norm(option);

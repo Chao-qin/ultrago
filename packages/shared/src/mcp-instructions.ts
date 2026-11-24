@@ -174,13 +174,15 @@ export const MCP_TOOL_INSTRUCTIONS = {
     name: "snapshot",
     annotations: TOOL_HINTS.read,
     description:
-      "List the page's interactable elements with [ref] handles, each with its state ([disabled], [hidden], [checked], [expanded], [invalid: …] …), viewport box (x,y w×h) and visual layer (@dialog:…, @fixed-…). Covers iframes (frame-prefixed refs; elements in cross-origin frames have no box) and open shadow roots. A ref stays valid while its element exists, and the reply lists the refs that are new since your last snapshot. Large pages are paged: narrow with query or viewportOnly, or continue with after. " +
+      "List the page's interactable elements with [ref] handles, each with its state ([disabled], [checked], [expanded], [invalid: …] …), viewport box (x,y w×h) and visual layer (@dialog:…, @fixed-…). Covers iframes (frame-prefixed refs; elements in cross-origin frames have no box) and open shadow roots. Hidden elements are named by [ref] instead of listed. A ref stays valid while its element exists, and the reply names the refs new to you or changed. Large pages are paged: narrow with query or viewportOnly, or continue with after. " +
       "It has no page text (read_content), pixels (screenshot) or readiness and form state (page_state); analyze_page returns all of them.",
     params: {
       query: "Only elements whose role, name, value or options contain this text (case-insensitive), e.g. \"登录\" or \"textbox\"",
       viewportOnly: "Only elements inside the visible viewport",
       limit: "Maximum number of elements in this reply, after query/viewportOnly",
       after: "Continue a paged reply after this [ref] (the reply names it)",
+      within: "List this [ref] and what it holds or opens, hidden ones included",
+      full: "List every element, hidden ones included",
     },
   },
   [RpcMethod.Click]: {
@@ -342,7 +344,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
     annotations: TOOL_HINTS.pageAction,
     description:
       "Attach files to an <input type=file> without the OS file dialog. Source: `url` (fetched by the backend, http(s) only, private and loopback hosts refused, sent with a same-origin Referer), `localPath` (a file on the backend host) or `attachments` (a list of either); 25MB per file. " +
-      "Target the input by ref, or describe the visible upload slot — a slot inside a <label> resolves to its input; otherwise use the input's [ref] (snapshot lists hidden inputs too). " +
+      "Target the input by ref, or describe the visible upload slot — a slot inside a <label> resolves to its input; otherwise use the input's [ref] (snapshot names hidden inputs too). " +
       "Each attachment is a separate change event that replaces input.files: uploaders that add one file per change get them all, a plain <input multiple> keeps only the last, and galleries that re-render between files can drop some (give those one file per plan step). " +
       "Uploaders that require a real user gesture reject injected files — ask the user to attach those by hand.",
     params: {

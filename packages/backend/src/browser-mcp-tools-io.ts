@@ -17,7 +17,7 @@ import type { BrowserCall } from "./browser-mcp-types.js";
 import { deltaGate, describeTarget, fail, gateNote, renderDelta, text } from "./browser-mcp-render.js";
 import { locatorShape, looseBool, tabId } from "./browser-mcp-shapes.js";
 import { registerRpcTool } from "./browser-mcp-tool-spec.js";
-import { pickOption, pickOptionDeltaKey } from "./pick-option.js";
+import { pickOption } from "./pick-option.js";
 
 /** How much of a captured response body read_network prints per request. */
 const NETWORK_BODY_PREVIEW = 2_000;
@@ -37,8 +37,6 @@ export interface IoToolDeps {
   sessionSees: () => (e: BrowserEvent) => boolean;
   /** The running tool call's window (what counts as recent for it). */
   callWindow: () => CallWindow | undefined;
-  /** This session's snapshot-baseline key (pick_option derives a private one from it). */
-  deltaKey: string;
   /** Run a composite so the current plan step records it as ONE action. */
   recordAsOne: <T>(action: PlaybookStepAction, run: () => Promise<T>) => Promise<T>;
 }
@@ -46,7 +44,7 @@ export interface IoToolDeps {
 /** Registers switch_tab / download / upload_file / pick_option / drag /
  *  read_network / set_network_capture / read_events /
  *  wait_for_event / right_click / double_click / paste_text / hover. */
-export function registerIoTools({ server, call, events, evLine, inbox, sessionSees, callWindow, deltaKey, recordAsOne }: IoToolDeps): void {
+export function registerIoTools({ server, call, events, evLine, inbox, sessionSees, callWindow, recordAsOne }: IoToolDeps): void {
   registerRpcTool(
     server,
     RpcMethod.SwitchTab,
@@ -153,7 +151,7 @@ export function registerIoTools({ server, call, events, evLine, inbox, sessionSe
     async (args) => {
       try {
         const r = await recordAsOne({ method: LocalMethod.PickOption, params: args as Record<string, unknown> }, () =>
-          pickOption((m, p) => call(m, p as never), args, pickOptionDeltaKey(deltaKey)),
+          pickOption((m, p) => call(m, p as never), args),
         );
         const openEvidence = renderDelta(r.openDelta).trim();
         const opened = r.fromRevealedList
