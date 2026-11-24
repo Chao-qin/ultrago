@@ -11,25 +11,12 @@
  * HERE, not in one channel.
  */
 
-import { RpcMethod } from "@bcp/shared";
+import { MUTATING_METHODS, RpcMethod, TAB_SCOPED_METHODS } from "@bcp/shared";
 
 /** Ops that CHANGE the page (writes) — refused on the user's visible tab in
  * manual mode. Read ops (snapshot/page_state/screenshot/read_content) are
  * harmless there, so they're excluded. */
-export const MUTATING = new Set<RpcMethod>([
-  RpcMethod.Navigate, RpcMethod.Click, RpcMethod.Type, RpcMethod.SelectOption,
-  RpcMethod.PressKey, RpcMethod.Scroll, RpcMethod.Drag, RpcMethod.Upload,
-  RpcMethod.Reload, RpcMethod.GoBack, RpcMethod.GoForward, RpcMethod.ClickText,
-  RpcMethod.CloseTab, RpcMethod.ContextMenu, RpcMethod.DblClick, RpcMethod.Paste,
-  RpcMethod.SetWindowState,
-  // NewTab/NewWindow change the BROWSER rather than a page, but they belong
-  // here for the same reason CloseTab does: a playbook that works in its own
-  // tab has to be able to RECORD opening it (membership here is what makes an
-  // action recordable — see the noteAction call in call()). Neither is
-  // TAB_SCOPED, so manual mode's "needs an explicit tabId" and visible-tab
-  // guards don't apply; its active:false / focused:false forcing still does.
-  RpcMethod.NewTab, RpcMethod.NewWindow,
-]);
+export const MUTATING = new Set<RpcMethod>(MUTATING_METHODS);
 
 /** Read-only ops that a RECORDING plan may also capture (in addition to
  * MUTATING), so a playbook can carry a "read the data" step alongside its
@@ -45,14 +32,4 @@ export const RECORDABLE_READS = new Set<RpcMethod>([RpcMethod.Eval, RpcMethod.Re
  * - playback's trackedCall(): default an omitted tabId to the RUN's own tab
  *   (the last one it opened) — this is what keeps a console-path playbook from
  *   typing/clicking into whatever the user happens to be looking at. */
-export const TAB_SCOPED = new Set<RpcMethod>([
-  RpcMethod.Navigate, RpcMethod.CloseTab, RpcMethod.Screenshot, RpcMethod.Snapshot,
-  RpcMethod.Click, RpcMethod.Type, RpcMethod.ReadContent, RpcMethod.WaitFor,
-  RpcMethod.WaitSignal,
-  RpcMethod.Eval, RpcMethod.SelectOption, RpcMethod.PressKey, RpcMethod.GoBack,
-  RpcMethod.GoForward, RpcMethod.Reload, RpcMethod.Scroll, RpcMethod.Drag,
-  RpcMethod.Upload, RpcMethod.Hover, RpcMethod.ClickText, RpcMethod.ReadNetwork,
-  RpcMethod.SetNetworkCapture, RpcMethod.PageState,
-  RpcMethod.ContextMenu, RpcMethod.DblClick, RpcMethod.Paste,
-  RpcMethod.SetWindowState,
-]);
+export const TAB_SCOPED = new Set<RpcMethod>(TAB_SCOPED_METHODS);

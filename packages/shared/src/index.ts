@@ -115,6 +115,7 @@ import type { Delivery } from "./deliveries.js";
 import type { BrowserKind } from "./browser-lifecycle.js";
 import type { SignalCondition, SignalGate, BookPageDefinition } from "./book-signals.js";
 export { RpcMethod, LocalMethod } from "./methods.js";
+export { RPC_TRAITS, DOM_OP, isPageAction, MUTATING_METHODS, UNSAFE_TO_REPEAT_METHODS, TAB_SCOPED_METHODS, type DomOp, type RpcTraits } from "./rpc-traits.js";
 
 /* ------------------------------------------------------------------ *
  * Browser RPC surface — the methods Claude can invoke via MCP tools.  *

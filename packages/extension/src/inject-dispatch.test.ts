@@ -321,3 +321,25 @@ test("每个 DOM 操作都报回它实际操作的标签页 —— 后端据此�
   assert.equal((await h.dispatch(RpcMethod.Click, { ref: "e1" }) as { tabId?: number }).tabId, 1, "不传 tabId：报回当时解析出的活动页");
   assert.equal((await h.dispatch(RpcMethod.Click, { ref: "e1", tabId: 7 }) as { tabId?: number }).tabId, 7, "传了 tabId：报回所传的那个");
 });
+
+test("每一个页面内的动作都装对话框观察并过导航等待，读取都不装 —— 由 RPC_TRAITS 决定，不靠手写清单", async () => {
+  const { DOM_OP, RPC_TRAITS } = await import("@bcp/shared");
+  const inPage = (Object.keys(DOM_OP) as RpcMethod[]);
+  assert.ok(inPage.includes(RpcMethod.DblClick) && inPage.includes(RpcMethod.Paste), "双击、粘贴也在页面内执行");
+  for (const m of inPage) {
+    const h = harness({ domOp: DOM_OP });
+    h.setExec(async (o: { world?: string }) => [{ frameId: 0, result: { value: o.world === "MAIN" ? undefined : { ok: true, elements: [] } } }]);
+    await h.dispatch(m, { ref: "e1", toRef: "e2" });
+    const shimmed = h.execCalls.some((c) => (c as { func?: unknown }).func === "SHIM");
+    const isAction = !RPC_TRAITS[m].readOnly;
+    assert.equal(shimmed, isAction, `${m}: ${isAction ? "动作要" : "读取不"}装对话框观察`);
+    assert.equal(h.listenerCount, 0, `${m}: 导航监听用完即撤`);
+  }
+});
+
+test("会改页面的页面内动作都不能被重发再执行一次", async () => {
+  const { RPC_TRAITS } = await import("@bcp/shared");
+  for (const [m, t] of Object.entries(RPC_TRAITS)) {
+    if (t.domOp && t.mutating) assert.equal(t.unsafeToRepeat, true, `${m} 重发会再执行一次`);
+  }
+});

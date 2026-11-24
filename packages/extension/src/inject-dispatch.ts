@@ -24,7 +24,7 @@
  * Split out of background.ts so those decisions can be asserted against fake
  * scripting/webNavigation APIs.
  */
-import type { RpcErrorInfo, RpcMethod } from "@bcp/shared";
+import { isPageAction, type RpcErrorInfo, type RpcMethod } from "@bcp/shared";
 import { domOpError } from "./rpc-errors";
 import { mergeFrameSnapshots } from "./snapshot-merge";
 
@@ -128,7 +128,9 @@ export function createInjectDispatch(deps: InjectDeps) {
     // Dialog handling: a page confirm()/alert() fired from a click handler would block
     // our synthetic dispatch. Install a MAIN-world shim tied to the caller's confirm
     // intent (fail-safe cancel by default), and restore native dialogs afterwards.
-    const interaction = op === "click" || op === "type" || op === "select" || op === "key" || op === "clickText";
+    // Every in-page action gets this and the navigation barrier below — a double
+    // click, a paste or a drag navigates and opens dialogs as readily as a click.
+    const interaction = isPageAction(method);
     if (interaction) {
       try {
         await scripting.executeScript({ target: { tabId, frameIds: [frameId] }, world: "MAIN", func: runtime.dialogShim as never, args: [!!p.confirm] });
