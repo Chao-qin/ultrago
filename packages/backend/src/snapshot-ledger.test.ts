@@ -322,3 +322,18 @@ test("摘要按预算点名：组按大小排在前，落单的按文档顺序�
   assert.match(text, new RegExp(`^ {2}… ${265 - named} more hidden, counted but not named here — query searches them`, "m"));
   assert.match(text, new RegExp(`^Coverage: .* · 265 hidden: ${named} named by ref under "Hidden right now" below, ${265 - named} only counted there`), "覆盖行不能说全都点了名");
 });
+
+test("query 只按元素自己的名字找：包住它的 (group) 与隐藏分组不跟着命中，覆盖行与正文一致", () => {
+  const page = [
+    el("g1", { role: "generic", tag: "div", container: true, name: "首页 Deutsch 设置" }),
+    el("e1", { name: "首页", parentRef: "g1" }),
+    el("e2", { name: "Deutsch", parentRef: "g1" }),
+    el("h1", { role: "generic", tag: "ul", container: true, hiddenGroup: true, hidden: true, name: "العربية Deutsch Dansk" }),
+    el("e3", { name: "العربية", hidden: true, parentRef: "h1" }),
+  ];
+  assert.deepEqual(renderSnapshotView(page, { query: "deutsch" }).shown, ["e2"], "不返回包住它的分组");
+  const inGroup = renderSnapshotView(page, { within: "h1", query: "deutsch" });
+  assert.deepEqual(inGroup.shown, []);
+  assert.match(inGroup.text, /^Coverage: 0 of the page's 4 elements listed here \(none of 0 elements matching within \[h1\] query="deutsch"\)/);
+  assert.doesNotMatch(inGroup.text, /^\[h1\]/m, "正文不能印出覆盖行说没列的分组");
+});

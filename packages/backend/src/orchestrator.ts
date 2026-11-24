@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { BookPageDefinition, NetworkRequest, PageState, PlanStep, PlaybookStepAction, SignalCondition, SignalGate, SnapshotElement, StepVerify } from "@bcp/shared";
-import { resolveSignalRef, validateGate } from "@bcp/shared";
+import { matchGrade, resolveSignalRef, validateGate } from "@bcp/shared";
 import { extractSlots } from "./playbook.js";
 
 /**
@@ -180,6 +180,9 @@ interface VerifyOutcome {
   pass: boolean;
   /** Human-readable checks that failed (empty when pass). */
   failed: string[];
+  /** Facts about how checks that passed were satisfied, when that was weaker than they read (a name matched only as
+   *  part of a longer one). Shown with the step's result. */
+  notes?: string[];
 }
 
 /** What a RECORDING plan captured for the step that just advanced. Surfaced by
@@ -218,8 +221,8 @@ function recordingNote(acts: PlaybookStepAction[]): RecordingNote {
 }
 
 export type AdvanceResult =
-  | { kind: "advanced"; index: number; total: number; next: PlanStep; recording?: RecordingNote }
-  | { kind: "complete"; total: number; recording?: RecordingNote }
+  | { kind: "advanced"; index: number; total: number; next: PlanStep; recording?: RecordingNote; notes?: string[] }
+  | { kind: "complete"; total: number; recording?: RecordingNote; notes?: string[] }
   | { kind: "retry"; strategy: "retry" | "rescan"; remaining: number; step: PlanStep; failed: string[] }
   // results 一并带出：失败的那一步常常只是下游受害者，真因在上游某个 ok:false 的
   // 步骤自己报的 reason 里（见 browser-mcp 的「上游线索」）。
@@ -690,10 +693,10 @@ export class PlanRunner {
     p.cursor++;
     if (p.cursor >= p.steps.length) {
       p.done = true;
-      return { kind: "complete", total: p.steps.length, recording: note };
+      return { kind: "complete", total: p.steps.length, recording: note, notes: outcome.notes };
     }
     await this.enterStep(p);
-    return { kind: "advanced", index: p.cursor, total: p.steps.length, next: p.steps[p.cursor], recording: note };
+    return { kind: "advanced", index: p.cursor, total: p.steps.length, next: p.steps[p.cursor], recording: note, notes: outcome.notes };
   }
 
   private async failStep(p: PlanRecord, step: PlanStep, failed: string[]): Promise<AdvanceResult> {
@@ -776,6 +779,7 @@ export class PlanRunner {
     const planId = p.planId;
     const page = p.steps[p.cursor].page;
     const failed: string[] = [];
+    const notes: string[] = [];
 
     if (v.actionSucceeded && !actionSucceeded) failed.push("no successful action was recorded for this step");
 
@@ -833,7 +837,10 @@ export class PlanRunner {
       }
       if (v.textAbsent != null) {
         const needle = normalizeRenderedText(v.textAbsent);
-        if (needle.length > 0 && haystack.includes(needle)) failed.push(`text "${v.textAbsent}" still present`);
+        // Same rule as textPresent: an expectation that normalizes to nothing says nothing about the page, and
+        // skipping it passed the check unconditionally.
+        if (needle.length === 0) failed.push(`textAbsent "${v.textAbsent}" is only whitespace — it would pass on any page`);
+        else if (haystack.includes(needle)) failed.push(`text "${v.textAbsent}" still present`);
       }
     }
 
@@ -841,16 +848,33 @@ export class PlanRunner {
       const { elements } = await this.evidence.snapshot(planId, page);
       // A hidden group is the container of a closed menu, named by all the text it holds: not an element anyone
       // could interact with, and its name would match any one of its items' names.
-      const named = (q: string) => elements.filter((e) => !e.hiddenGroup && e.name && e.name.includes(q));
-      if (v.elementName != null && named(v.elementName).length === 0)
+      // An element named exactly what was asked holds the check. One whose name only CONTAINS it still does —
+      // recorded books rely on that — but the step then says which element it was, so "同意" held by a checked
+      // "不同意并退出" is in the result instead of passing silently. Names compare the way query and pick_option
+      // compare them (see text-match.ts).
+      const holds = (what: string, q: string, pred: (e: SnapshotElement) => boolean): boolean => {
+        const graded = elements
+          .filter((e) => !e.hiddenGroup && pred(e))
+          .map((e) => ({ e, g: matchGrade(e.name, q) }))
+          .filter((x) => x.g);
+        if (graded.some((x) => x.g === "exact")) return true;
+        if (!graded.length) return false;
+        notes.push(
+          `${what} "${q}" held only through ${graded.map((x) => `[${x.e.ref}] "${x.e.name}"`).slice(0, 3).join(", ")} — no element is named exactly "${q}"`,
+        );
+        return true;
+      };
+      if (v.elementName != null && !holds("elementName", v.elementName, () => true))
         failed.push(`no interactable element named "${v.elementName}" (plain-text banners aren't in the snapshot — use textPresent for status text)`);
-      if (v.elementChecked != null && !named(v.elementChecked).some((e) => e.checked === true))
+      if (v.elementChecked != null && !holds("elementChecked", v.elementChecked, (e) => e.checked === true))
         failed.push(`no checked element named "${v.elementChecked}"`);
-      if (v.elementEnabled != null && !named(v.elementEnabled).some((e) => e.disabled !== true))
+      if (v.elementEnabled != null && !holds("elementEnabled", v.elementEnabled, (e) => e.disabled !== true))
         failed.push(`no enabled element named "${v.elementEnabled}"`);
       if (v.elementValue != null) {
         const { name, equals, includes } = v.elementValue;
-        const hit = named(name).some(
+        const hit = holds(
+          "elementValue",
+          name,
           (e) =>
             e.value != null &&
             (equals != null ? e.value === equals : includes != null ? e.value.includes(includes) : true),
@@ -920,6 +944,6 @@ export class PlanRunner {
       }
     }
 
-    return { pass: failed.length === 0, failed };
+    return { pass: failed.length === 0, failed, ...(notes.length ? { notes } : {}) };
   }
 }

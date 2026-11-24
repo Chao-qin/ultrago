@@ -266,3 +266,21 @@ test("verify.networkOk.bodyIncludes：响应体必须来自成功的那类响应
   const result = await runner.advance(planId);
   assert.notEqual(result.kind, "complete", "500 的响应体不能证明保存成功");
 });
+
+test("verify 名字匹配：完全相等优先；只靠包含命中时照样通过，但结果写明是哪个元素 —— 「同意」被已勾选的「不同意并退出」满足不再无声", async () => {
+  const mk = (elements: unknown[]) => new PlanRunner({ ...evidence, pageState: async () => settledPage, snapshot: async () => ({ elements }) } as unknown as EvidenceReader);
+  const loose = mk([{ ref: "e7", tag: "input", role: "checkbox", name: "不同意并退出", checked: true }]);
+  const a = await loose.create("g", [{ goal: "agree", verify: { elementChecked: "同意" } }]);
+  const r = await loose.advance(a.planId);
+  assert.equal(r.kind, "complete");
+  assert.match((r as { notes?: string[] }).notes?.join() ?? "", /elementChecked "同意" held only through \[e7\] "不同意并退出" — no element is named exactly "同意"/);
+  const exact = mk([{ ref: "e1", tag: "input", role: "checkbox", name: "同意", checked: true }, { ref: "e7", tag: "input", role: "checkbox", name: "不同意并退出", checked: true }]);
+  const b = await exact.create("g", [{ goal: "agree", verify: { elementChecked: "同意" } }]);
+  assert.equal((await exact.advance(b.planId) as { notes?: string[] }).notes, undefined, "有名字完全相等的就不需要说明");
+});
+
+test("verify.textAbsent：期望只有空白/零宽时判失败，不再无条件通过", async () => {
+  const runner = new PlanRunner({ ...evidence, pageState: async () => settledPage, readContent: async () => ({ text: "提交失败" }) } satisfies EvidenceReader);
+  const { planId } = await runner.create("g", [{ goal: "x", verify: { textAbsent: "​" } }]);
+  assert.notEqual((await runner.advance(planId)).kind, "complete");
+});

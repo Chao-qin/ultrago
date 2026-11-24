@@ -1218,6 +1218,23 @@ async function main() {
     },
   );
 
+  // ---- The page runtime's copy of the text rule agrees with the shared one
+  // (packages/shared/src/text-match.ts): wait_for finds text written with
+  // other case, spacing or invisible characters exactly when the backend's
+  // normalization says the two are the same.
+  {
+    const { normalizeText, TEXT_MATCH_CASES } = await import("../../shared/dist/text-match.js");
+    for (const [raw, norm] of TEXT_MATCH_CASES) {
+      eq(normalizeText(raw), norm, `shared rule: ${JSON.stringify(raw)}`);
+      await withPage(`<p id="p">${raw.replace(/</g, "&lt;")}</p>`, async (t) => {
+        const r = await t.call("wait", { waitText: norm.toUpperCase(), ms: 300 });
+        eq(r.value?.matched, true, `wait_for matches ${JSON.stringify(raw)} as ${JSON.stringify(norm)}`);
+        const absent = await t.call("wait", { waitText: `${norm} 不在页面上`, ms: 100 });
+        eq(absent.value?.matched, false, "and does not match text the page does not show");
+      });
+    }
+  }
+
   // ---- What judges the page sees what the snapshot sees: text, errors and
   // waits reach into open shadow roots (a web component's error toast used to
   // be invisible to textAbsent, noErrors and the action's newErrors).

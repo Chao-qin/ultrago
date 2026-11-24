@@ -10,7 +10,7 @@
  * libraries keep a closed list mounted). Searching the whole page instead is
  * how a breadcrumb or another row carrying the same text got picked.
  */
-import { RpcMethod, type ActionDelta, type PickOptionParams, type SnapshotElement } from "@bcp/shared";
+import { RpcMethod, matchGrade, type ActionDelta, type PickOptionParams, type SnapshotElement } from "@bcp/shared";
 import { listedByDefault } from "./browser-mcp-render.js";
 import { frameOf, ShownLedger } from "./snapshot-ledger.js";
 
@@ -33,7 +33,6 @@ export interface PickOptionResult {
 /** How long to let the list render after the opening click. */
 const LIST_RENDER_MS = 500;
 
-const norm = (s: string): string => s.replace(/\s+/g, " ").trim().toLowerCase();
 
 export async function pickOption(call: PickOptionCall, params: PickOptionParams): Promise<PickOptionResult> {
   const { option, tabId, ...trigger } = params;
@@ -64,9 +63,9 @@ export async function pickOption(call: PickOptionCall, params: PickOptionParams)
   const named = after.elements.filter((e) => e.name && listedByDefault(e));
   const fromRevealedList = named.some((e) => revealed.has(e.ref));
   const pool = fromRevealedList ? named.filter((e) => revealed.has(e.ref)) : named;
-  const want = norm(option);
-  const exact = pool.filter((e) => norm(e.name) === want);
-  const cands = exact.length ? exact : pool.filter((e) => norm(e.name).includes(want));
+  // Compared the way query and the verifiers compare names (text-match.ts).
+  const exact = pool.filter((e) => matchGrade(e.name, option) === "exact");
+  const cands = exact.length ? exact : pool.filter((e) => matchGrade(e.name, option));
 
   if (!cands.length) {
     const shown = pool.slice(0, 30).map((e) => e.name).join(" | ");

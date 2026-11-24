@@ -2256,7 +2256,9 @@ export async function bcpDomRuntime(
             const vis = !!el && isVisible(el);
             return params.state === "hidden" ? !vis : vis; // default: wait until visible
           }
-          if (params.waitText) return pageText().includes(params.waitText);
+          // Compared the way locators and the backend compare text (shared text-match.ts): case, whitespace and
+          // invisible formatting characters folded. A case-sensitive wait timed out on text a query had just found.
+          if (params.waitText) return normText(pageText()).toLowerCase().includes(normText(params.waitText).toLowerCase());
           return null; // no condition -> fixed delay
         };
         if (check() === null) {

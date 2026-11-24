@@ -7,7 +7,7 @@
  * closure — so they are the part of that file that can be read, and tested,
  * on its own.
  */
-import { CHROME_RENDERING_FLAGS, RpcMethod, toolNameOf, type ActionDelta, type PageState, type SnapshotElement, type StepVerify, type TabInfo } from "@bcp/shared";
+import { CHROME_RENDERING_FLAGS, RpcMethod, bestGrade, gradeRank, matchGrade, toolNameOf, type MatchGrade, type ActionDelta, type PageState, type SnapshotElement, type StepVerify, type TabInfo } from "@bcp/shared";
 import type { RecordingNote } from "./orchestrator.js";
 import type { ReadDump } from "./browser-read-dump.js";
 import type { ShownDiff } from "./snapshot-ledger.js";
@@ -329,7 +329,18 @@ export function renderSnapshotView(
       };
     matched = sub;
   }
-  if (query) matched = matched.filter((e) => [e.role, e.name, e.value, ...(e.options ?? [])].some((v) => v?.toLowerCase().includes(query)));
+  // A (group) wrapper and a hidden group are named by all the text they hold, so their "name" matches whatever one
+  // of their elements matches: the search would return the element and every container around it, and a group that
+  // is not one of the page's elements. A query asks for elements by their own name, role, value or options.
+  if (query) {
+    // Graded the way every other text comparison is (text-match.ts): case and whitespace folded, the words of a
+    // several-word query found in any order. Ordered best grade first — an element named exactly what was asked
+    // before the hundreds that merely contain it — and in document order within a grade. Nothing is dropped.
+    const graded = matched
+      .map((e) => ({ e, g: e.container || e.hiddenGroup ? undefined : [e.role, e.name, e.value, ...(e.options ?? [])].reduce<MatchGrade | undefined>((best, v) => bestGrade(best, matchGrade(v, query)), undefined) }))
+      .filter((x): x is { e: SnapshotElement; g: MatchGrade } => !!x.g);
+    matched = graded.map((x, i) => ({ ...x, i })).sort((a, b) => gradeRank(a.g) - gradeRank(b.g) || a.i - b.i).map((x) => x.e);
+  }
   if (view.viewportOnly) matched = matched.filter((e) => e.inViewport === true);
   const narrowed = !!query || !!view.viewportOnly || !!view.within;
   const filter = [view.within ? `within [${view.within}]` : "", query ? `query=${JSON.stringify(view.query)}` : "", view.viewportOnly ? "viewportOnly" : ""].filter(Boolean).join(" ");

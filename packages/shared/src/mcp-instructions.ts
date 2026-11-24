@@ -177,7 +177,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
       "List the page's interactable elements with [ref] handles, each with its state ([disabled], [checked], [expanded], [invalid: …] …), viewport box (x,y w×h) and visual layer (@dialog:…, @fixed-…). Covers iframes (frame-prefixed refs; elements in cross-origin frames have no box) and open shadow roots. Hidden elements are named by [ref] instead of listed. A ref stays valid while its element exists, and the reply names the refs new to you or changed. Large pages are paged: narrow with query or viewportOnly, or continue with after. " +
       "It has no page text (read_content), pixels (screenshot) or readiness and form state (page_state); analyze_page returns all of them.",
     params: {
-      query: "Only elements whose role, name, value or options contain this text (case-insensitive), e.g. \"登录\" or \"textbox\"",
+      query: "Only elements whose role, name, value or options contain this text (case and spacing ignored; several words match in any order; exact names first), e.g. \"登录\" or \"textbox\"",
       viewportOnly: "Only elements inside the visible viewport",
       limit: "Maximum number of elements in this reply, after query/viewportOnly",
       after: "Continue a paged reply after this [ref] (the reply names it)",
@@ -231,11 +231,11 @@ export const MCP_TOOL_INSTRUCTIONS = {
     name: "wait_for",
     annotations: TOOL_HINTS.read,
     description:
-      "Wait until `text` appears (top frame, case-sensitive), until a CSS `selector`'s element is visible or hidden, or — with neither — for a fixed `ms`. Give text or selector, not both. " +
+      "Wait until `text` appears (top frame and its open shadow roots; case and spacing ignored, as in snapshot query), until a CSS `selector`'s element is visible or hidden, or — with neither — for a fixed `ms`. Give text or selector, not both. " +
       `When waiting on a condition, \`ms\` is the timeout (default ${WAIT_FOR_DEFAULT_MS}ms, max ${WAIT_FOR_MAX_MS}ms) and the reply says whether it was met. ` +
       "For page loads and browser events use wait_for_event; for any other condition, bcpWait.until inside eval.",
     params: {
-      text: "Text to wait for in the top frame's visible text (case-sensitive substring)",
+      text: "Text to wait for in the top frame's visible text (substring; case and spacing ignored)",
       selector: "CSS selector to wait on; pierces open shadow roots",
       state: 'With selector: "visible" (default) or "hidden"',
       ms: `Timeout for text/selector (default ${WAIT_FOR_DEFAULT_MS}, max ${WAIT_FOR_MAX_MS}); the delay itself when neither is given`,

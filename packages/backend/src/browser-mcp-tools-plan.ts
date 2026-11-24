@@ -82,13 +82,15 @@ export function registerPlanTools({ server, runner }: PlanToolDeps): void {
             : text(prompt + "\n(screenshot unavailable — use screenshot/analyze_page yourself, then confirm.)");
         }
         let msg: string;
+        // How a passed check was satisfied, when it was weaker than it reads — the agent decides whether it holds.
+        const notes = (r.kind === "complete" || r.kind === "advanced") && r.notes?.length ? `\n  note: ${r.notes.join("\n  note: ")}` : "";
         if (r.kind === "complete")
           msg =
-            `✅ Plan complete — all ${r.total} step(s) verified.${describeRecording(r.recording)}` +
+            `✅ Plan complete — all ${r.total} step(s) verified.${notes}${describeRecording(r.recording)}` +
             (r.recording ? `\nRecording finished — call record_stop({planId:"${planId}", name:"<playbook name>"}) to save it, or plan_abort to throw it away.` : "");
         else if (r.kind === "advanced")
           msg =
-            `✓ Step verified.${describeRecording(r.recording)}\n` +
+            `✓ Step verified.${notes}${describeRecording(r.recording)}\n` +
             `→ Step ${r.index + 1}/${r.total}: ${r.next.goal}\n  done when: ${describeVerify(r.next.verify)}`;
         else if (r.kind === "judge")
           msg =
