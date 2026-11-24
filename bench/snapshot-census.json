@@ -1,6 +1,6 @@
 {
   "baidu-home": {
-    "replyTokens": 1270,
+    "replyTokens": 1274,
     "pages": 1,
     "listed": 40
   },
@@ -10,22 +10,22 @@
     "listed": 43
   },
   "github-trending": {
-    "replyTokens": 2692,
+    "replyTokens": 2993,
     "pages": 1,
     "listed": 216
   },
   "hn-list": {
-    "replyTokens": 2742,
+    "replyTokens": 2790,
     "pages": 1,
-    "listed": 227
+    "listed": 230
   },
   "jd-corporate": {
-    "replyTokens": 901,
+    "replyTokens": 903,
     "pages": 1,
     "listed": 51
   },
   "mdn-select": {
-    "replyTokens": 7857,
+    "replyTokens": 7522,
     "pages": 1,
     "listed": 485
   },
@@ -35,7 +35,7 @@
     "listed": 74
   },
   "wikipedia-list": {
-    "replyTokens": 7873,
+    "replyTokens": 7228,
     "pages": 3,
     "listed": 1452
   }

@@ -1257,7 +1257,8 @@ async function main() {
      <fieldset disabled><button id="fs">提交表单</button></fieldset>
      <input type="checkbox" id="cb">
      <div id="box" style="height:40px;overflow:auto"><div style="height:400px"></div><button id="below">底部</button></div>
-     <div id="row" style="cursor:pointer" onclick="0">订单 123 <span id="edit" title="编辑" style="cursor:pointer">✎</span></div>
+     <div id="row" style="cursor:pointer">订单 123 <span id="edit" title="编辑">✎</span></div>
+     <a href="#" id="vote"><div id="arrow" title="upvote" style="width:10px;height:10px"></div></a>
      <select id="size"><option value="1">Small</option><option value="2" selected>Large</option></select>`,
     async (t) => {
       const els = (await t.call("snapshot", {})).value.elements;
@@ -1276,6 +1277,7 @@ async function main() {
       eq(of("below")?.rect, undefined, "and gets no box that would land on whatever covers that spot");
       eq(typeof t.ref("edit"), "string", "an icon its author named inside a clickable row is a control of its own");
       eq(of("edit")?.name, "编辑");
+      eq(t.ref("arrow"), undefined, "but a titled part of a link is the link, not a second control");
       eq(of("size")?.value, "Large", "a <select> reports the chosen option's text, as its options are listed");
       const toggled = await t.call("click", { ref: t.ref("cb") });
       match((toggled.value?.delta?.stateChanged ?? []).join(" | "), /target checked: false → true/, "a native checkbox click reports the flip");

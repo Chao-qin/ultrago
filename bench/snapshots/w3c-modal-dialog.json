@@ -1,4 +1,4 @@
-{"name":"w3c-modal-dialog","url":"https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/examples/dialog/","open":"button:has-text(\"Add Delivery Address\")","runtime":"c42634590a46","capturedAt":"2026-11-24","chromium":"151.0.7922.34","viewport":{"width":1280,"height":800},"scrollY":20,"devicePixelRatio":1,"userAgent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.7922.34 Safari/537.36","timeZone":"Asia/Shanghai","moreBelow":true,"frames":2,"elements":[
+{"name":"w3c-modal-dialog","url":"https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/examples/dialog/","open":"button:has-text(\"Add Delivery Address\")","runtime":"058cfefe96db","capturedAt":"2026-11-24","chromium":"151.0.7922.34","viewport":{"width":1280,"height":800},"scrollY":20,"devicePixelRatio":1,"userAgent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.7922.34 Safari/537.36","timeZone":"Asia/Shanghai","moreBelow":true,"frames":2,"elements":[
 {"ref":"e1","tag":"a","role":"link","name":"Skip to content","hidden":true,"inViewport":false},
 {"ref":"e2","tag":"a","role":"link","name":"ARIA Authoring Practices Guide (APG)","inViewport":true,"rect":[88,11,391,22]},
 {"ref":"e3","tag":"a","role":"link","name":"W3C homepage","inViewport":true,"rect":[1013,-4,36,52]},
@@ -31,7 +31,7 @@
 {"ref":"e30","tag":"a","role":"link","name":"Alert Dialog Example","inViewport":true,"rect":[120,577,157,16]},
 {"ref":"e31","tag":"a","role":"link","name":"Date Picker Dialog example","inViewport":true,"rect":[120,609,208,16]},
 {"ref":"e32","tag":"button","role":"button","name":"Open In CodePen","inViewport":true,"rect":[80,704,136,38]},
-{"ref":"e33","tag":"div","role":"separator","name":"Start of","hidden":true,"inViewport":true,"rect":[80,762,832,0]},
+{"ref":"e33","tag":"div","role":"separator","name":"Start of","hidden":true,"inViewport":false},
 {"ref":"e34","tag":"button","role":"button","name":"Add Delivery Address","inViewport":true,"rect":[80,762,163,38]},
 {"ref":"e35","tag":"div","role":"generic","name":"","hidden":true,"inViewport":false,"zone":"fixed"},
 {"ref":"e36","tag":"div","role":"dialog","name":"Add Delivery Address","inViewport":true,"rect":[335,32,610,345],"zone":"dialog:Add Delivery Address"},
@@ -53,7 +53,7 @@
 {"ref":"e52","tag":"button","role":"button","name":"OK","hidden":true,"inViewport":false,"parentRef":"e50"},
 {"ref":"e53","tag":"div","role":"dialog","name":"End of the Road!","hidden":true,"inViewport":false},
 {"ref":"e54","tag":"button","role":"button","name":"Close","hidden":true,"inViewport":false,"parentRef":"e53"},
-{"ref":"e55","tag":"div","role":"separator","name":"End of","hidden":true,"inViewport":true,"rect":[80,800,832,0]},
+{"ref":"e55","tag":"div","role":"separator","name":"End of","hidden":true,"inViewport":false},
 {"ref":"e56","tag":"a","role":"link","name":"Learn how to interpret and use assistive technology support data","inViewport":false},
 {"ref":"e57","tag":"a","role":"link","name":"dialog.css","inViewport":false},
 {"ref":"e58","tag":"a","role":"link","name":"dialog.js","inViewport":false},
@@ -85,7 +85,7 @@
 {"ref":"e84","tag":"a","role":"link","name":"World Wide Web Consortium","inViewport":false},
 {"ref":"e85","tag":"a","role":"link","name":"liability","inViewport":false},
 {"ref":"e86","tag":"a","role":"link","name":"trademark","inViewport":false},
-{"ref":"e87","tag":"a","role":"link","name":"W3C Software License","inViewport":false},
+{"ref":"e87","tag":"a","role":"link","name":"permissive license","inViewport":false},
 {"ref":"e88","tag":"a","role":"link","name":"Permission to Use WAI Material","inViewport":false},
 {"ref":"e89","tag":"button","role":"button","name":"Skip To Content, shortcut Alt + 0","expanded":false,"inViewport":false,"controls":["e90"],"zone":"fixed-top"},
 {"ref":"e90","tag":"div","role":"menu","name":"Landmarks and Headings","hidden":true,"inViewport":false,"zone":"fixed-top"},

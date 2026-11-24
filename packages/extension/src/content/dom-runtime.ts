@@ -1318,9 +1318,12 @@ export async function bcpDomRuntime(
           // that (its inherited icon/text descendants are skipped) so <div> buttons aren't invisible.
           if (collected.has(host) || st.cursor !== "pointer") continue;
           const par = host.parentElement;
-          // Parent is pointer too → not the outermost clickable, so it is part of that one — unless the author
-          // named it (aria-label / title): an edit or delete icon inside a clickable row is a control of its own.
-          if (par && pointerCache.get(par) && !host.hasAttribute("aria-label") && !host.hasAttribute("title")) continue;
+          // Parent is pointer too → not the outermost clickable, so it is part of that one — unless the author named
+          // it (aria-label / title) AND it sits in no element collected as a control in its own right: an edit icon
+          // inside a row that is clickable only by its cursor is a control of its own, while a titled arrow inside a
+          // link or an <abbr> inside a button is part of that link or button (measured: listing them added 30 copies
+          // of hn's vote links and 237 of MDN's compatibility-table buttons).
+          if (par && pointerCache.get(par) && !((host.hasAttribute("aria-label") || host.hasAttribute("title")) && !par.closest(SNAP_SELECTOR))) continue;
           collected.add(host);
           customClickable.add(host);
         }
