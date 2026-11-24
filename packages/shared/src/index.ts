@@ -797,8 +797,13 @@ export interface SnapshotElement {
   name: string;
   /** For inputs. */
   value?: string;
-  /** For checkbox/radio: current checked state (so the agent can reach a desired state). */
-  checked?: boolean;
+  /** Whether it is on: a native checkbox/radio, or what a widget declares through aria-checked (a switch, a
+   *  menuitemcheckbox) — "mixed" for a partly checked one. Lets the agent reach a desired state instead of toggling. */
+  checked?: boolean | "mixed";
+  /** aria-pressed of a toggle button. */
+  pressed?: boolean | "mixed";
+  /** aria-selected: the selected tab, option or row. */
+  selected?: boolean;
   /** For <select>: the visible option labels, so the agent knows valid choices. */
   options?: string[];
   /** True if this element is a scrollable container with more content than fits. */

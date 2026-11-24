@@ -1218,6 +1218,44 @@ async function main() {
     },
   );
 
+  // ---- Names and states as the platform defines them, one predicate each,
+  // shared by the snapshot and the actions.
+  await withPage(
+    `<a href="#" id="de" title="Kuckucksuhr – German">Deutsch</a>
+     <a href="#" id="icon"><img alt="首页图标" src="data:,"></a>
+     <a href="#" id="tip" title="只有提示"></a>
+     <span id="l1">保存</span><span id="l2">草稿</span><button id="lb" aria-labelledby="l1 l2"></button>
+     <button id="sw" role="switch" aria-checked="true">通知</button>
+     <button id="tg" aria-pressed="false">加粗</button>
+     <div role="tablist"><div role="tab" id="tab" aria-selected="true">概览</div></div>
+     <fieldset disabled><button id="fs">提交表单</button></fieldset>
+     <input type="checkbox" id="cb">
+     <div id="box" style="height:40px;overflow:auto"><div style="height:400px"></div><button id="below">底部</button></div>
+     <div id="row" style="cursor:pointer" onclick="0">订单 123 <span id="edit" title="编辑" style="cursor:pointer">✎</span></div>
+     <select id="size"><option value="1">Small</option><option value="2" selected>Large</option></select>`,
+    async (t) => {
+      const els = (await t.call("snapshot", {})).value.elements;
+      const of = (id) => els.find((e) => e.ref === t.ref(id));
+      eq(of("de")?.name, "Deutsch", "a link is named by the words it shows, not by its title tooltip");
+      eq(of("icon")?.name, "首页图标", "an image-only link is named by its image's alt");
+      eq(of("tip")?.name, "只有提示", "an empty link still falls back to its title");
+      eq(of("lb")?.name, "保存 草稿", "aria-labelledby with several ids joins their text");
+      eq(of("sw")?.checked, true, "a switch's aria-checked is its state");
+      eq(of("tg")?.pressed, false, "a toggle button's aria-pressed is its state");
+      eq(of("tab")?.selected, true, "the selected tab says so");
+      eq(of("fs")?.disabled, true, "a button inside a disabled fieldset is disabled");
+      const refused = await t.call("click", { ref: t.ref("fs"), timeoutMs: 200, confirm: true });
+      eq(typeof refused.error, "string", "and the action does not click it as if it were usable");
+      eq(of("below")?.inViewport, false, "a button scrolled out of its own list is not in the viewport");
+      eq(of("below")?.rect, undefined, "and gets no box that would land on whatever covers that spot");
+      eq(typeof t.ref("edit"), "string", "an icon its author named inside a clickable row is a control of its own");
+      eq(of("edit")?.name, "编辑");
+      eq(of("size")?.value, "Large", "a <select> reports the chosen option's text, as its options are listed");
+      const toggled = await t.call("click", { ref: t.ref("cb") });
+      match((toggled.value?.delta?.stateChanged ?? []).join(" | "), /target checked: false → true/, "a native checkbox click reports the flip");
+    },
+  );
+
   // ---- The page runtime's copy of the text rule agrees with the shared one
   // (packages/shared/src/text-match.ts): wait_for finds text written with
   // other case, spacing or invisible characters exactly when the backend's

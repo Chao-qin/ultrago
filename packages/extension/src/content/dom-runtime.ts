@@ -203,13 +203,21 @@ export async function bcpDomRuntime(
       if (el.getAttribute("contenteditable") !== null) return "textbox";
       return "generic";
     };
+    /** Roles whose accessible name comes from what they show (WAI-ARIA "name from content"; HTML-AAM gives
+     *  links, buttons and summary the same order). For these the visible text comes before a `title`, which is
+     *  only a tooltip — a link showing "Deutsch" with title "… – German" is named "Deutsch", the words on screen. */
+    const NAME_FROM_CONTENT = new Set([
+      "button", "link", "tab", "menuitem", "menuitemcheckbox", "menuitemradio", "option", "checkbox", "radio",
+      "switch", "treeitem", "cell", "gridcell", "columnheader", "rowheader", "row", "heading", "tooltip",
+    ]);
     const accessibleName = (el: Element): string => {
       const aria = el.getAttribute("aria-label");
       if (aria) return aria;
       const labelledby = el.getAttribute("aria-labelledby");
       if (labelledby) {
-        const ref = document.getElementById(labelledby);
-        if (ref?.textContent) return ref.textContent;
+        // A space-separated list of ids, each contributing its text in order.
+        const text = labelledby.split(/\s+/).map((id) => document.getElementById(id)?.textContent?.trim() ?? "").filter(Boolean).join(" ");
+        if (text) return text;
       }
       // A form control is usually named by its associated <label> — either via
       // for=, or by being nested inside one. Without this step a labelled field
@@ -220,12 +228,28 @@ export async function bcpDomRuntime(
         const viaLabel = [...labels].map((l) => l.textContent ?? "").join(" ").trim();
         if (viaLabel) return viaLabel;
       }
+      // A form field's text is its value, never its name: fields keep the order below.
+      if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) && NAME_FROM_CONTENT.has(inferRole(el))) {
+        const shown = ((el as HTMLElement).innerText ?? "").trim();
+        if (shown) return shown;
+        // An icon-only control: what its images and labelled children say.
+        const inner = [...el.querySelectorAll("img[alt], [aria-label]")].map((c) => c.getAttribute("alt") || c.getAttribute("aria-label") || "").filter(Boolean).join(" ").trim();
+        if (inner) return inner;
+      }
       const input = el as HTMLInputElement;
       if (input.placeholder) return input.placeholder;
       if (el.getAttribute("alt")) return el.getAttribute("alt")!;
       if (el.getAttribute("title")) return el.getAttribute("title")!;
       return (el as HTMLElement).innerText || el.textContent || "";
     };
+    /** Disabled as the platform and the page declare it: `:disabled` (a control inside a disabled <fieldset>
+     *  included) or aria-disabled. One predicate for the snapshot's [disabled] and for whether an action waits —
+     *  they disagreed, so a control the snapshot showed as usable was refused, and a fieldset-disabled one was
+     *  "clicked" successfully. */
+    const isDisabled = (el: Element): boolean => el.matches(":disabled") || el.getAttribute("aria-disabled") === "true";
+    /** An ARIA tri-state attribute as the snapshot reports it; absent or any other value says nothing. */
+    const ariaState = (v: string | null): boolean | "mixed" | undefined =>
+      v === "true" ? true : v === "false" ? false : v === "mixed" ? "mixed" : undefined;
 
     const resolve = (ref: string): HTMLElement => {
       // Read through the store rather than a captured binding: snapshot() swaps
@@ -537,7 +561,7 @@ export async function bcpDomRuntime(
     const whyNotActionable = (el: HTMLElement, waitedMs: number): string => {
       if (!el.isConnected)
         return "it was removed from the DOM mid-wait — re-locate it (take a fresh snapshot, or address it by description instead of by [ref])";
-      if ((el as HTMLInputElement).disabled || el.getAttribute("aria-disabled") === "true")
+      if (isDisabled(el))
         return `${describeEl(el)} was still disabled after ${waitedMs}ms — page_state {verbosity:"detail"} names the form fields that block submission`;
       const cause = hiddenCause(el);
       if (cause === el) {
@@ -559,7 +583,7 @@ export async function bcpDomRuntime(
     const waitActionable = async (el: HTMLElement, ms = 5000): Promise<void> => {
       const deadline = Date.now() + ms;
       for (;;) {
-        const enabled = !(el as HTMLInputElement).disabled && el.getAttribute("aria-disabled") !== "true";
+        const enabled = !isDisabled(el);
         if (el.isConnected && isVisible(el) && enabled) return;
         if (Date.now() > deadline) throw new Error(`not actionable within ${ms}ms: ${whyNotActionable(el, ms)}`);
         await sleep(100);
@@ -665,6 +689,9 @@ export async function bcpDomRuntime(
     const readState = (el: Element): Map<string, string> => {
       const m = new Map<string, string>();
       let n: Element | null = el;
+      // A native checkbox or radio keeps its state in a property, not an attribute: clicking one moves none of
+      // the attributes below, so a successful toggle read as "nothing changed" and invited a second click.
+      if (el instanceof HTMLInputElement && (el.type === "checkbox" || el.type === "radio")) m.set("0|checked", String(el.checked));
       for (let d = 0; n && d < 4; d++) {
         for (const a of STATE_ATTRS) m.set(`${d}|${a}`, n.getAttribute(a) ?? "");
         n = n.parentElement;
@@ -1223,6 +1250,9 @@ export async function bcpDomRuntime(
       // walk at no extra cost, so zoneOf can find a control's layer by walking
       // ancestors instead of reading style per ancestor on demand.
       const fixedLayers = new Set<Element>();
+      // Ancestors that cut off what lies outside their box (overflow other than visible), gathered in the same
+      // walk, so whether an element shows can account for the list or panel it is scrolled within.
+      const clippers = new Set<Element>();
       const collect = (root: Document | ShadowRoot) => {
         for (const el of root.querySelectorAll(SNAP_SELECTOR)) collected.add(el);
         for (const host of root.querySelectorAll("*")) {
@@ -1233,6 +1263,9 @@ export async function bcpDomRuntime(
           // the layer probe in here is free.
           const st = getComputedStyle(host);
           pointerCache.set(host, st.cursor === "pointer");
+          // <html>/<body> overflow applies to the viewport, which inViewport already measures against.
+          if (host !== document.documentElement && host !== document.body && /(hidden|clip|auto|scroll)/.test(`${st.overflowX} ${st.overflowY}`))
+            clippers.add(host);
           if (st.position === "fixed") fixedLayers.add(host);
           else if (st.position === "sticky") {
             // A sticky element that has not stuck yet is ordinary in-flow
@@ -1245,7 +1278,9 @@ export async function bcpDomRuntime(
           // that (its inherited icon/text descendants are skipped) so <div> buttons aren't invisible.
           if (collected.has(host) || st.cursor !== "pointer") continue;
           const par = host.parentElement;
-          if (par && pointerCache.get(par)) continue; // parent is pointer too → not outermost
+          // Parent is pointer too → not the outermost clickable, so it is part of that one — unless the author
+          // named it (aria-label / title): an edit or delete icon inside a clickable row is a control of its own.
+          if (par && pointerCache.get(par) && !host.hasAttribute("aria-label") && !host.hasAttribute("title")) continue;
           collected.add(host);
           customClickable.add(host);
         }
@@ -1404,6 +1439,7 @@ export async function bcpDomRuntime(
         !(el as HTMLInputElement).placeholder && !el.getAttribute("alt") && !el.getAttribute("title");
 
       // Pass 2: build each element with geometry, parent link and visual zone.
+      const clipRects = new Map<Element, DOMRect>();
       for (const el of collected) {
         // One rect + one style read per element, shared by the scrollable probe
         // and the viewport test below. (Visibility used to share them too; it now
@@ -1422,10 +1458,14 @@ export async function bcpDomRuntime(
         // Never drop an element — a hidden/disabled node is still worth perceiving
         // (e.g. a file <input> concealed behind a styled button). Mark state instead.
         const hidden = !visible || undefined;
-        const disabled = (el as HTMLInputElement).disabled || undefined;
+        const disabled = isDisabled(el) || undefined;
         const clickable = customClickable.has(el) || undefined;
         const ref = elToRef.get(el)!;
-        const value = (el as HTMLInputElement).value;
+        // A <select>'s value is the chosen option's text, as `options` lists them; its `.value` is an attribute
+        // the reader cannot map back to anything shown.
+        const value = el instanceof HTMLSelectElement
+          ? [...el.selectedOptions].map((o) => (o.textContent ?? "").trim()).filter(Boolean).join(", ")
+          : (el as HTMLInputElement).value;
         const input = el as HTMLInputElement;
         const isCheck = el.tagName === "INPUT" && (input.type === "checkbox" || input.type === "radio");
         const sel = el instanceof HTMLSelectElement
@@ -1452,15 +1492,31 @@ export async function bcpDomRuntime(
         const name = truncate(accessibleName(el), 120);
         // Judged in the TOP viewport: inside a frame, the frame's own viewport says nothing about what the user
         // sees, and a frame-local box does not line up with a screenshot or click({x,y}).
-        const box = topView ? { left: rct.left + topView.x, top: rct.top + topView.y, right: rct.right + topView.x, bottom: rct.bottom + topView.y } : null;
+        // What of the box actually shows: cut by every overflow-clipping ancestor, so a button scrolled out of its
+        // list is not "in the viewport" with a box that, clicked or matched against a screenshot, lands on whatever
+        // covers that spot now.
+        let vis = { left: rct.left, top: rct.top, right: rct.right, bottom: rct.bottom };
+        for (let a = el.parentElement; a; a = a.parentElement) {
+          if (!clippers.has(a)) continue;
+          let c = clipRects.get(a);
+          if (!c) clipRects.set(a, (c = a.getBoundingClientRect()));
+          vis = { left: Math.max(vis.left, c.left), top: Math.max(vis.top, c.top), right: Math.min(vis.right, c.right), bottom: Math.min(vis.bottom, c.bottom) };
+        }
+        const shows = vis.right > vis.left && vis.bottom > vis.top;
+        const box = topView ? { left: vis.left + topView.x, top: vis.top + topView.y, right: vis.right + topView.x, bottom: vis.bottom + topView.y } : null;
         const inViewport = box
-          ? rct.bottom > 0 && rct.right > 0 && rct.top < innerHeight && rct.left < innerWidth &&
+          ? shows && vis.bottom > 0 && vis.right > 0 && vis.top < innerHeight && vis.left < innerWidth &&
             box.bottom > 0 && box.right > 0 && box.top < topView!.height && box.left < topView!.width
           : undefined;
         elements.push({
           ref, tag: el.tagName.toLowerCase(), role,
           name, value: value ? truncate(value, 60) : undefined,
-          checked: isCheck ? input.checked : undefined,
+          // The ARIA states a widget declares, alongside the native ones: a role=switch / checkbox / radio /
+          // menuitemcheckbox says whether it is on, a toggle button whether it is pressed, a tab or option whether
+          // it is selected — without them an agent asked to turn something on cannot tell it already is.
+          checked: isCheck ? input.checked : ariaState(el.getAttribute("aria-checked")),
+          pressed: ariaState(el.getAttribute("aria-pressed")),
+          selected: el.getAttribute("aria-selected") === "true" || undefined,
           options: sel,
           scrollable,
           expanded, invalid, invalidMessage, busy, hidden, disabled, clickable,
@@ -1469,7 +1525,7 @@ export async function bcpDomRuntime(
           // that looks authoritative and means nothing. This is what lets an
           // agent tie something it SAW in a screenshot to a ref it can act on.
           rect: inViewport && box
-            ? [Math.round(box.left), Math.round(box.top), Math.round(rct.width), Math.round(rct.height)]
+            ? [Math.round(box.left), Math.round(box.top), Math.round(vis.right - vis.left), Math.round(vis.bottom - vis.top)]
             : undefined,
           zone: zoneOf(el),
           // Only a role-less, non-clickable node can be a pure grouping wrapper.

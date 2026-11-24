@@ -177,7 +177,9 @@ export function elementLine(e: SnapshotElement, opts: { geometry?: boolean } = {
   if (e.name) parts.push(`"${e.container && e.name.length > 30 ? `${e.name.slice(0, 30)}…` : e.name}"`);
   if (e.container) parts.push("(group)");
   if (e.value) parts.push(`value="${e.value}"`);
-  if (e.checked !== undefined) parts.push(e.checked ? "[checked]" : "[unchecked]");
+  if (e.checked !== undefined) parts.push(e.checked === "mixed" ? "[mixed]" : e.checked ? "[checked]" : "[unchecked]");
+  if (e.pressed !== undefined) parts.push(e.pressed === "mixed" ? "[partly pressed]" : e.pressed ? "[pressed]" : "[not pressed]");
+  if (e.selected) parts.push("[selected]");
   if (e.options) parts.push(`options=[${e.options.join(" | ")}]`);
   if (e.expanded !== undefined) parts.push(e.expanded ? "[expanded]" : "[collapsed]");
   // Right after expanded, because together they are one statement: THAT a

@@ -29,7 +29,7 @@ Perceive — use the cheapest read that answers the question:
 - When a read says "more content below the fold" or the item is not there yet, \`scroll\` (the window, or the list's (scrollable) container) and read again. Never conclude "not found" from one unscrolled view.
 
 Reading a snapshot:
-- State: [expanded]/[collapsed], [checked]/[unchecked], [invalid: …], [busy], [disabled], [hidden], (scrollable), and [clickable] for a custom element found by its pointer cursor — click it like any control. Disabled elements are listed but will not respond normally.
+- State: [expanded]/[collapsed], [checked]/[unchecked]/[mixed], [pressed]/[not pressed], [selected], [invalid: …], [busy], [disabled], [hidden], (scrollable), and [clickable] for a custom element found by its pointer cursor — click it like any control. Disabled elements are listed but will not respond normally.
 - The first line (Coverage) says what the reply lists and gives the call for the rest: read it before concluding something is not on the page.
 - Hidden elements cannot be acted on until they show, so "Hidden right now" names them by [ref] instead of listing them: a closed menu is one line, its container. A [hidden] file input named there is still \`upload_file\`'s target.
 - Layer: @dialog:<name> (or bare @dialog) marks a control inside an open modal — act on those; the rest is behind it. @fixed-top / @fixed-bottom / @fixed-left / @fixed mark pinned bars, toolbars and banners. No marker means normal page content.
