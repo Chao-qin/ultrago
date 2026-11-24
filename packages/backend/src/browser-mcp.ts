@@ -70,17 +70,29 @@ export function createBrowserMcpServer(
   // else ordered them. Every call that is not declared read-only runs after the previous one finished; a read runs
   // after every such call that arrived before it, so it sees what they did. An action does not wait for reads that
   // arrived earlier, so "wait_for_event, then click what fires it" in one turn does not block on itself.
+  // A call the client gave up on (timed out, cancelled) while it waited its turn is not run when its turn comes: the
+  // agent was told it failed, and would do it again. A tool that cancels work in progress cannot wait behind that
+  // work, so it runs at once.
   let lastAction: Promise<unknown> = Promise.resolve();
-  const inArrivalOrder = (readOnly: boolean, run: () => unknown): Promise<unknown> => {
-    const p = lastAction.then(run);
+  const CANCELS_WORK = new Set(["plan_abort"]);
+  const inArrivalOrder = (readOnly: boolean, signal: AbortSignal | undefined, run: () => unknown): Promise<unknown> => {
+    const p = lastAction.then(() =>
+      signal?.aborted
+        ? { isError: true, content: [{ type: "text" as const, text: "Cancelled before it ran — nothing was done." }] }
+        : run(),
+    );
     if (!readOnly) lastAction = p.catch(() => {});
     return p;
   };
   const registerTool = server.registerTool.bind(server);
   server.registerTool = ((name: string, toolConfig: unknown, cb: (...args: unknown[]) => unknown) => {
     const readOnly = (toolConfig as { annotations?: { readOnlyHint?: boolean } } | undefined)?.annotations?.readOnlyHint === true;
-    return registerTool(name, toolConfig as never, ((...args: unknown[]) =>
-      inArrivalOrder(readOnly, () => toolCall.run({ window: inbox.beginCall() }, () => cb(...args)))) as never);
+    return registerTool(name, toolConfig as never, ((...args: unknown[]) => {
+      const go = () => toolCall.run({ window: inbox.beginCall() }, () => cb(...args));
+      if (CANCELS_WORK.has(name)) return go();
+      const extra = args[args.length - 1] as { signal?: AbortSignal } | undefined;
+      return inArrivalOrder(readOnly, extra?.signal, go);
+    }) as never);
   }) as typeof server.registerTool;
 
   // ── Per-MCP-session routing state (this closure IS the session) ──────────
@@ -198,7 +210,9 @@ export function createBrowserMcpServer(
       }
       const docs = readDocs.get(`${resolved.instanceId}:${p.tabId ?? claimTab}`);
       const frame = /^(\d+)_/.exec(ref)?.[1] ?? "0";
-      if (docs?.[frame]) p = { ...p, expectDoc: docs[frame] };
+      // A caller that read the ref itself (pick_option's own snapshot) names its document; the session's record is
+      // only for refs the agent read.
+      if (docs?.[frame] && (p as { expectDoc?: string }).expectDoc === undefined) p = { ...p, expectDoc: docs[frame] };
     }
     if (claimTab != null && TAB_SCOPED.has(method) && p?.tabId == null) {
       p = { ...p, tabId: claimTab };
@@ -443,6 +457,7 @@ export function createBrowserMcpServer(
   registerCaptureTools({ server, call, deltaKey, drainEvents, captureWithLease, readDumps, readSnapshot });
   registerIoTools({
     server, call, events, evLine, inbox, sessionSees, callWindow: () => toolCall.getStore()?.window,
+    tabOfRef: () => (lastRead && lastRead.instanceId === resolvedTarget()?.instanceId ? lastRead.tabId : undefined),
     recordAsOne: (action, run) => (planRunner ? planRunner.asOneAction(action, run) : run()),
   });
 
@@ -457,6 +472,8 @@ export function createBrowserMcpServer(
   /** Frozen parameter snapshots for paused auto-playback. A resume must not
    * re-render dynamic defaults or accept a second params map. */
   const playbackParams = new Map<string, ParamMap>();
+  /** Per plan: the tab its last network read was taken in (see networkBodies below). */
+  const netTabOfPlan = new Map<string, number>();
   const routePlaybackEvidence = (planId: string, method: RpcMethod, params: Record<string, unknown>, page?: string) => {
     const context = playbackContexts.get(planId);
     return context ? context.route(method, params, page) : params;
@@ -464,7 +481,11 @@ export function createBrowserMcpServer(
   const runner = new PlanRunner({
     pageState: (planId, page) => call(RpcMethod.PageState, routePlaybackEvidence(planId, RpcMethod.PageState, { deltaKey: `${deltaKey}.rnr` }, page)),
     readContent: (planId, page) => call(RpcMethod.ReadContent, routePlaybackEvidence(planId, RpcMethod.ReadContent, { full: true }, page)),
-    readNetwork: (planId, page) => call(RpcMethod.ReadNetwork, routePlaybackEvidence(planId, RpcMethod.ReadNetwork, {}, page)),
+    readNetwork: async (planId, page) => {
+      const r = await call(RpcMethod.ReadNetwork, routePlaybackEvidence(planId, RpcMethod.ReadNetwork, {}, page));
+      netTabOfPlan.set(planId, r.tabId);
+      return r;
+    },
     snapshot: (planId, page) => call(RpcMethod.Snapshot, routePlaybackEvidence(planId, RpcMethod.Snapshot, {}, page)),
     evalJs: (planId, code, readOnly, page) => {
       // Gate the runner's own eval on policy — call() reaches RpcMethod.Eval
@@ -474,13 +495,10 @@ export function createBrowserMcpServer(
     },
     setNetworkCapture: (planId, enabled, page) => call(RpcMethod.SetNetworkCapture, routePlaybackEvidence(planId, RpcMethod.SetNetworkCapture, { enabled }, page) as unknown as RpcContracts[typeof RpcMethod.SetNetworkCapture]["params"]).then(() => undefined),
     networkBodies: (planId, sinceSeq, page) => {
-      // The bodies of the tab this plan works in, in this session's browser. A live plan has no playback context,
-      // and with no tab the store hands back every tab's, every browser's and every session's bodies — another
-      // session's success then confirmed this one's save.
-      const tgt = resolvedTarget();
-      const tab = playbackContexts.get(planId)?.currentTabId(page)
-        ?? claimFor(tgt)
-        ?? (lastRead && lastRead.instanceId === tgt?.instanceId ? lastRead.tabId : undefined);
+      // The bodies of the tab whose requests the status check just read, in this session's browser — one tab for
+      // both halves of the check. With no tab the store hands back every tab's, every browser's and every session's
+      // bodies: another session's success then confirmed this one's save.
+      const tab = playbackContexts.get(planId)?.currentTabId(page) ?? netTabOfPlan.get(planId);
       const { events: evs, maxSeq } = events.since(sinceSeq, tab);
       const sees = sessionSees();
       const bodies = evs

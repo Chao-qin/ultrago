@@ -46,7 +46,7 @@ export function registerBatchTools({ server, call, drainEvents }: BatchToolDeps)
     {
       annotations: TOOL_HINTS.pageAction,
       description:
-        "Run a known sequence of actions in one call, e.g. fill three fields and click submit. Each step is {action, ...that tool's arguments}, with action one of click, type_text, select_option, press_key, hover or scroll; tabId is set once for the whole batch. Steps run in order and stop at the first error, or right after a step that navigates, opens a dialog or a tab, or raises new errors — the remaining steps were planned against a page that is gone, so they are not run and the reply says which.",
+        "Run a known sequence of actions in one call, e.g. fill three fields and click submit. Each step is {action, ...that tool's arguments}, with action one of click, type_text, select_option, press_key, hover or scroll; tabId is set once for the whole batch. Steps run in order and stop at the first error, or right after a step that navigates, opens a dialog, an overlay or a tab, locks scrolling, raises a page alert/confirm/prompt, or marks new fields invalid — the remaining steps were planned against a page that is gone, so they are not run and the reply says which.",
       inputSchema: {
         steps: z.array(stepShape).min(1).describe("Ordered steps, each {action, ...that tool's arguments}"),
         tabId,

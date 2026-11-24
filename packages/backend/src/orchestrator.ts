@@ -856,7 +856,9 @@ export class PlanRunner {
         const graded = elements
           .filter((e) => !e.hiddenGroup && pred(e))
           .map((e) => ({ e, g: matchGrade(e.name, q) }))
-          .filter((x) => x.g);
+          // The whole expectation, as one piece: scattered words ("I agree" in "I don't agree") are a search
+          // ranking, never evidence that a check holds.
+          .filter((x) => x.g === "exact" || x.g === "substring");
         if (graded.some((x) => x.g === "exact")) return true;
         if (!graded.length) return false;
         notes.push(

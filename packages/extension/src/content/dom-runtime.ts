@@ -233,7 +233,10 @@ export async function bcpDomRuntime(
       // A form field's text is its value, never its name: fields keep the order below.
       if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) && NAME_FROM_CONTENT.has(inferRole(el))) {
         const shown = ((el as HTMLElement).innerText ?? "").trim();
-        if (shown) return shown;
+        // Content with no letter or digit in any script ("×", "›", an icon font's private-use glyph) names nothing
+        // a reader could ask for; the author's alt / title below does. Measured: <button title="Close">×</button>
+        // was named "×", and an icon-font link titled 删除 had no name at all.
+        if (/[\p{L}\p{N}]/u.test(shown)) return shown;
         // An icon-only control: what its images and labelled children say.
         const inner = [...el.querySelectorAll("img[alt], [aria-label]")].map((c) => c.getAttribute("alt") || c.getAttribute("aria-label") || "").filter(Boolean).join(" ").trim();
         if (inner) return inner;
@@ -1250,23 +1253,39 @@ export async function bcpDomRuntime(
       const w = normText(want).toLowerCase();
       const out = { count: 0, samples: [] as { text: string; ref?: string; hidden?: boolean }[] };
       if (!w) return out;
+      const record = (holder: Element, t: string) => {
+        const at = t.toLowerCase().indexOf(w);
+        if (at < 0) return;
+        out.count++;
+        if (out.samples.length >= 5) return;
+        let ref: string | undefined;
+        for (let host: Element | null = holder; host && !ref; host = climbOut(host)) ref = refOf(host);
+        out.samples.push({
+          text: truncate(t.slice(Math.max(0, at - 30), at + w.length + 30), 90),
+          ...(ref ? { ref } : {}),
+          ...(isVisible(holder) ? {} : { hidden: true }),
+        });
+      };
       for (const root of pageRoots(false)) {
         const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
         for (let n = walker.nextNode(); n; n = walker.nextNode()) {
           const parent = n.parentElement;
           if (!parent || SKIP_TEXT_TAGS.has(parent.tagName) || parent.closest("head")) continue;
-          const t = normText(n.nodeValue ?? "");
-          const at = t.toLowerCase().indexOf(w);
-          if (at < 0) continue;
-          out.count++;
-          if (out.samples.length >= 5) continue;
-          let ref: string | undefined;
-          for (let host: Element | null = parent; host && !ref; host = climbOut(host)) ref = refOf(host);
-          out.samples.push({
-            text: truncate(t.slice(Math.max(0, at - 30), at + w.length + 30), 90),
-            ...(ref ? { ref } : {}),
-            ...(isVisible(parent) ? {} : { hidden: true }),
-          });
+          record(parent, normText(n.nodeValue ?? ""));
+        }
+      }
+      // Text split across elements ("Add to <b>cart</b>") is in no single text node: then the innermost elements
+      // whose text, taken whole, contains it. Only searched on a miss — it reads textContent down the matching path.
+      if (!out.count) {
+        const has = (el: Element) => !SKIP_TEXT_TAGS.has(el.tagName) && normText(el.textContent ?? "").toLowerCase().includes(w);
+        const visit = (el: Element): void => {
+          const inner = [...el.children].filter(has);
+          if (inner.length) inner.forEach(visit);
+          else record(el, normText(el.textContent ?? ""));
+        };
+        for (const root of pageRoots(false)) {
+          const top = root instanceof Document ? root.body : root;
+          for (const c of top?.children ?? []) if (has(c)) visit(c);
         }
       }
       return out;
@@ -1290,11 +1309,20 @@ export async function bcpDomRuntime(
       // walk at no extra cost, so zoneOf can find a control's layer by walking
       // ancestors instead of reading style per ancestor on demand.
       const fixedLayers = new Set<Element>();
-      // Ancestors that cut off what lies outside their box (overflow other than visible), gathered in the same
-      // walk, so whether an element shows can account for the list or panel it is scrolled within.
-      const clippers = new Set<Element>();
+      // What deciding "is this box cut off by an ancestor" needs, per node, gathered in the same walk (absent =
+      // static, clips nothing, holds no fixed box). An ancestor cuts a box off only along an axis it clips, and
+      // only when it lies on the box's containing-block chain: a fixed box escapes every ancestor but one that holds
+      // fixed boxes (transform, filter, contain…), an absolute box every static one, and the top layer (modal
+      // dialog, open popover, fullscreen) escapes them all. Measured: without this a modal dialog inside a small
+      // card, a dropdown positioned outside its scroll box, or a fixed popup in a zero-height wrapper all read as
+      // off screen while the user saw them.
+      const boxes = new Map<Element, { pos: string; clipX: boolean; clipY: boolean; holdsFixed: boolean }>();
+      const topLayer = new Set<Element>();
       const collect = (root: Document | ShadowRoot) => {
         for (const el of root.querySelectorAll(SNAP_SELECTOR)) collected.add(el);
+        for (const sel of [":modal", ":popover-open", ":fullscreen"]) {
+          try { for (const t of root.querySelectorAll(sel)) topLayer.add(t); } catch { /* selector unsupported here */ }
+        }
         for (const host of root.querySelectorAll("*")) {
           const sr = (host as HTMLElement).shadowRoot;
           if (sr) collect(sr); // open shadow root only; closed roots are unreachable (no CDP)
@@ -1304,8 +1332,13 @@ export async function bcpDomRuntime(
           const st = getComputedStyle(host);
           pointerCache.set(host, st.cursor === "pointer");
           // <html>/<body> overflow applies to the viewport, which inViewport already measures against.
-          if (host !== document.documentElement && host !== document.body && /(hidden|clip|auto|scroll)/.test(`${st.overflowX} ${st.overflowY}`))
-            clippers.add(host);
+          const viewportOwned = host === document.documentElement || host === document.body;
+          const clipX = !viewportOwned && st.overflowX !== "visible";
+          const clipY = !viewportOwned && st.overflowY !== "visible";
+          const holdsFixed = st.transform !== "none" || st.perspective !== "none" || st.filter !== "none" ||
+            (st.backdropFilter ?? "none") !== "none" || /paint|layout|strict|content/.test(st.contain) ||
+            /transform|perspective|filter/.test(st.willChange);
+          if (clipX || clipY || holdsFixed || st.position !== "static") boxes.set(host, { pos: st.position, clipX, clipY, holdsFixed });
           if (st.position === "fixed") fixedLayers.add(host);
           else if (st.position === "sticky") {
             // A sticky element that has not stuck yet is ordinary in-flow
@@ -1539,11 +1572,19 @@ export async function bcpDomRuntime(
         // list is not "in the viewport" with a box that, clicked or matched against a screenshot, lands on whatever
         // covers that spot now.
         let vis = { left: rct.left, top: rct.top, right: rct.right, bottom: rct.bottom };
-        for (let a = el.parentElement; a; a = a.parentElement) {
-          if (!clippers.has(a)) continue;
-          let c = clipRects.get(a);
-          if (!c) clipRects.set(a, (c = a.getBoundingClientRect()));
-          vis = { left: Math.max(vis.left, c.left), top: Math.max(vis.top, c.top), right: Math.min(vis.right, c.right), bottom: Math.min(vis.bottom, c.bottom) };
+        let pos = boxes.get(el)?.pos ?? "static";
+        // Nothing above a top-layer element reaches what it contains.
+        for (let a = topLayer.has(el) ? null : el.parentElement; a; a = topLayer.has(a) ? null : a.parentElement) {
+          const b = boxes.get(a);
+          const holds = pos === "fixed" ? !!b?.holdsFixed : pos === "absolute" ? !!b && (b.pos !== "static" || b.holdsFixed) : true;
+          if (!holds) continue; // not on the containing-block chain: its overflow does not reach this box
+          if (b?.clipX || b?.clipY) {
+            let c = clipRects.get(a);
+            if (!c) clipRects.set(a, (c = a.getBoundingClientRect()));
+            if (b.clipX) vis = { ...vis, left: Math.max(vis.left, c.left), right: Math.min(vis.right, c.right) };
+            if (b.clipY) vis = { ...vis, top: Math.max(vis.top, c.top), bottom: Math.min(vis.bottom, c.bottom) };
+          }
+          pos = b?.pos ?? "static";
         }
         const shows = vis.right > vis.left && vis.bottom > vis.top;
         const box = topView ? { left: vis.left + topView.x, top: vis.top + topView.y, right: vis.right + topView.x, bottom: vis.bottom + topView.y } : null;
@@ -1557,7 +1598,8 @@ export async function bcpDomRuntime(
           // The ARIA states a widget declares, alongside the native ones: a role=switch / checkbox / radio /
           // menuitemcheckbox says whether it is on, a toggle button whether it is pressed, a tab or option whether
           // it is selected — without them an agent asked to turn something on cannot tell it already is.
-          checked: isCheck ? input.checked : ariaState(el.getAttribute("aria-checked")),
+          // A native checkbox set indeterminate shows neither state: "mixed", as aria-checked="mixed" reads.
+          checked: isCheck ? (input.type === "checkbox" && input.indeterminate ? "mixed" : input.checked) : ariaState(el.getAttribute("aria-checked")),
           pressed: ariaState(el.getAttribute("aria-pressed")),
           selected: el.getAttribute("aria-selected") === "true" || undefined,
           options: sel,
@@ -1628,7 +1670,8 @@ export async function bcpDomRuntime(
     const SKIP_TEXT_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "HEAD", "TEMPLATE"]);
     // Zero-width space and soft hyphen show up in real UI labels and would
     // silently defeat an exact match.
-    const normText = (s: string): string => s.replace(/[​­]/g, "").replace(/\s+/g, " ").trim();
+    // Kept equal to the shared normalizeText (text-match.ts) minus case folding; check:dom runs the shared cases.
+    const normText = (s: string): string => s.replace(/[\u200b-\u200d\ufeff\u00ad]/g, "").replace(/\s+/g, " ").trim();
 
     /** Text as a user perceives it, memoized per call.
      *  Not textContent (drags in <script>/<style>), not innerText (forces a
@@ -1960,13 +2003,15 @@ export async function bcpDomRuntime(
       // everywhere. snapshot pierces frames and hands back "42_e7"-style refs.
       // What the page's text says about the words, as a zero-hit snapshot query reports it: inside which element
       // they are (one named otherwise), in plain text, hidden, or absent — where nothing more used to be said.
+      // For a name too: whether the words are in the page's text is a fact either way (they may be a heading or a
+      // value, read with read_content); nothing beyond that fact is claimed.
       const words = q.text || q.name;
       const f = words ? textFacts(words, (el) => store.__bcpRefOf?.get(el)) : undefined;
       const facts = !f
         ? ""
         : f.count
           ? `\n  → the words occur ${f.count} time(s) in this frame's text: ${f.samples.slice(0, 3).map((h) => `${h.ref ? `inside [${h.ref}]` : "in page text"}${h.hidden ? " (hidden)" : ""} ${JSON.stringify(h.text)}`).join("; ")} — act on that [ref], or read the text with read_content`
-          : `\n  → the words are not in this frame's text at all — the content may not have loaded yet, or the page words it differently; take a snapshot to see what is there`;
+          : `\n  → the words do not occur in this frame's text; a snapshot shows what is there`;
       const frames = [...document.querySelectorAll("iframe")].filter((f) => isVisible(f)).length;
       if (frames)
         return facts + `\n  → nothing in this frame matches, and ${frames} visible iframe(s) here were NOT searched:` +
@@ -2307,7 +2352,11 @@ export async function bcpDomRuntime(
         // That is fine for the short labels truncate exists for, and wrong here.
         // Keep the line breaks innerText already computed; only squeeze runs of
         // spaces within a line and long blank stretches.
-        const raw = pageText()
+        // A frame with no viewport (its <iframe> is display:none or zero-sized) shows nothing: its innerText falls
+        // back to textContent, script source included, and merged into the page read it made a textAbsent check
+        // fail on words no one could see.
+        const shown = window === window.top || (innerWidth > 0 && innerHeight > 0);
+        const raw = (shown ? pageText() : "")
           .replace(/[^\S\n]+/g, " ")
           .replace(/\n{3,}/g, "\n\n")
           .trim();
@@ -3269,7 +3318,9 @@ export function bcpSignalWait(
   const pageStateNow = () => ({
     readyState: document.readyState,
     loading: document.readyState !== "complete" || !hasContent(),
-    errorCount: document.querySelectorAll('[role="alert"], [aria-live="assertive"]').length,
+    // The same meaning of "error" as everywhere else (collectErrors in bcpDomRuntime): fields the page marks
+    // aria-invalid. A role=alert / assertive live region announces, it does not declare an error.
+    errorCount: document.querySelectorAll('[aria-invalid="true"]').length,
   });
   /** Same definition as bcpDomRuntime's isVisible and bcpDomHelpersFactory's
    *  `visible` — see the long note on the former for why it is this and not

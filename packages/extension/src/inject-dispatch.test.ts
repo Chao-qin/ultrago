@@ -413,3 +413,28 @@ test("快照与整页读取附上读取那一刻还开着的请求；没有开�
   open = { count: 0, oldestMs: 0, oldestUrl: "" };
   assert.equal(((await h.dispatch(RpcMethod.Snapshot, {})) as { pendingRequests?: unknown }).pendingRequests, undefined);
 });
+
+test("动作返回之后、导航等待期间页面才打开的标签页不算这次动作的（与导航同一个归因口径）", async () => {
+  const listeners = new Set<(t: { id?: number; openerTabId?: number; pendingUrl?: string }) => void>();
+  const h = harness({
+    tabCreated: { addListener: (l) => void listeners.add(l), removeListener: (l) => void listeners.delete(l) },
+    waitTabComplete: async () => listeners.forEach((l) => l({ id: 9, openerTabId: 1, pendingUrl: "https://later/" })),
+  });
+  h.setTabStatus("loading");
+  h.setExec(async (o: { world?: string }) => [{ frameId: 0, result: o.world === "MAIN" ? undefined : { value: { ok: true } } }]);
+  const r = (await h.dispatch(RpcMethod.Click, { ref: "e1" })) as { delta?: { tabsOpened?: unknown } };
+  assert.equal(r.delta?.tabsOpened, undefined);
+});
+
+test("对话框垫片的还原立即注入、有时限：新文档迟迟加载不完，动作的回执也不被它卡住", async () => {
+  const h = harness();
+  h.setExec(async (o: { func?: unknown; world?: string }) =>
+    o.func === "RESTORE" ? new Promise<never>(() => {}) : [{ frameId: 0, result: o.world === "MAIN" ? undefined : { value: { ok: true } } }],
+  );
+  const t0 = Date.now();
+  const r = (await h.dispatch(RpcMethod.Click, { ref: "e1" })) as { ok?: boolean };
+  assert.ok(Date.now() - t0 < 5000, "有时限");
+  assert.ok(r);
+  const restore = h.execCalls.find((c) => (c as { func?: unknown }).func === "RESTORE") as { injectImmediately?: boolean };
+  assert.equal(restore.injectImmediately, true, "不等新文档加载完再注入");
+});

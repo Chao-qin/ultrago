@@ -279,6 +279,16 @@ test("verify 名字匹配：完全相等优先；只靠包含命中时照样通�
   assert.equal((await exact.advance(b.planId) as { notes?: string[] }).notes, undefined, "有名字完全相等的就不需要说明");
 });
 
+test("verify 名字匹配只认整句：散落的词（「I agree」在「I don't agree」里逐词都有）不算证据；半选不算已勾选", async () => {
+  const mk = (elements: unknown[]) => new PlanRunner({ ...evidence, pageState: async () => settledPage, snapshot: async () => ({ elements }) } as unknown as EvidenceReader);
+  const words = mk([{ ref: "e7", tag: "input", role: "checkbox", name: "I don't agree", checked: true }]);
+  const a = await words.create("g", [{ goal: "agree", verify: { elementChecked: "I agree" } }]);
+  assert.notEqual((await words.advance(a.planId)).kind, "complete");
+  const mixed = mk([{ ref: "e1", tag: "input", role: "checkbox", name: "全选", checked: "mixed" }]);
+  const b = await mixed.create("g", [{ goal: "all", verify: { elementChecked: "全选" } }]);
+  assert.notEqual((await mixed.advance(b.planId)).kind, "complete", "mixed 不是 checked");
+});
+
 test("verify.textAbsent：期望只有空白/零宽时判失败，不再无条件通过", async () => {
   const runner = new PlanRunner({ ...evidence, pageState: async () => settledPage, readContent: async () => ({ text: "提交失败" }) } satisfies EvidenceReader);
   const { planId } = await runner.create("g", [{ goal: "x", verify: { textAbsent: "​" } }]);

@@ -1237,7 +1237,7 @@ async function main() {
       match(miss.error ?? "", /nothing matches .*the words occur 1 time\(s\) in this frame's text: in page text "387,758"/s,
         "a locator that finds no control says where the words are instead");
       const gone = await t.call("click", { name: "不在页面上" });
-      match(gone.error ?? "", /the words are not in this frame's text at all/, "or that they are nowhere");
+      match(gone.error ?? "", /the words do not occur in this frame's text; a snapshot shows what is there$/, "or that they are nowhere");
       const waited = await t.call("wait", { waitText: "hidden copy", ms: 100 });
       eq(waited.value?.matched, false);
       eq(waited.value?.textHits?.samples?.[0]?.hidden, true, "a wait that ran out reports the text is there but hidden");
@@ -1281,6 +1281,48 @@ async function main() {
       eq(of("size")?.value, "Large", "a <select> reports the chosen option's text, as its options are listed");
       const toggled = await t.call("click", { ref: t.ref("cb") });
       match((toggled.value?.delta?.stateChanged ?? []).join(" | "), /target checked: false → true/, "a native checkbox click reports the flip");
+    },
+  );
+
+  // ---- What the user sees, as the snapshot reports it: an ancestor's overflow cuts a box off only when it is on
+  // the box's containing-block chain and along the axis it clips; the top layer escapes all of it. Names from
+  // content need a letter or digit; text split across elements is still found; a hidden frame shows no text.
+  await withPage(
+    `<style>body{margin:0}</style>
+     <div style="height:0;overflow:hidden"><div style="position:fixed;top:20px;left:20px"><button id="p1">固定弹窗</button></div></div>
+     <div style="position:relative;margin-top:100px"><div style="height:20px;overflow:hidden"><div style="position:absolute;top:30px;left:0"><button id="p2">下拉项</button></div></div></div>
+     <div style="height:20px;overflow-x:clip;overflow-y:visible;margin-top:60px"><div style="height:20px"></div><button id="p3">纵向溢出</button></div>
+     <div style="width:50px;height:50px;overflow:hidden;transform:translateZ(0);margin-top:40px"><dialog id="dlg"><button id="p4">对话框按钮</button></dialog></div>
+     <div style="height:40px;overflow:auto"><div style="height:400px"></div><button id="gone">滚出列表</button></div>
+     <button id="x" title="Close">×</button>
+     <a href="#" id="ico" title="删除"><i>\ue62b</i></a>
+     <button id="plus">+</button>
+     <p id="split">Add to <b>cart</b></p>
+     <input type="checkbox" id="half">
+     <iframe id="hf" style="display:none" srcdoc="<p>SecretHiddenText</p><script>var x='scriptbody'</script>"></iframe>`,
+    async (t) => {
+      await page.evaluate(() => { document.getElementById("dlg").showModal(); document.getElementById("half").indeterminate = true; });
+      const els = (await t.call("snapshot", {})).value.elements;
+      const of = (id) => els.find((e) => e.ref === t.ref(id));
+      eq(of("p1")?.inViewport, true, "a fixed popup in a zero-height clipping wrapper is seen: fixed boxes escape that overflow");
+      eq(of("p2")?.inViewport, true, "an absolute dropdown whose containing block is outside the clipping box is seen");
+      eq(of("p3")?.inViewport, true, "overflow-x:clip does not cut along y");
+      eq(of("p4")?.inViewport, true, "a modal dialog is in the top layer: a small clipping card around it hides nothing, even one that holds fixed boxes (transform)");
+      eq(of("gone")?.inViewport, false, "a button scrolled out of its own list is still off screen");
+      eq(of("x")?.name, "Close", "content with no letter or digit (×) does not name it; the title does");
+      eq(of("ico")?.name, "删除", "an icon-font glyph does not name it either");
+      eq(of("plus")?.name, "+", "with nothing else to go by the symbol is still its name");
+      eq(of("half")?.checked, "mixed", "a native indeterminate checkbox reads mixed");
+      const split = (await t.call("snapshot", { query: "Add to cart" })).value.textHits;
+      eq(split?.count, 1, "text split across elements (Add to <b>cart</b>) is found in the element holding all of it");
+      match(split?.samples?.[0]?.text ?? "", /Add to cart/);
+      const miss = await t.call("click", { name: "Add to cart", timeoutMs: 200 });
+      match(miss.error ?? "", /the words occur 1 time\(s\) in this frame's text: in page text "Add to cart"/, "a name miss reports where the words are, split across elements too");
+      eq(/loaded yet|words it differently/.test(miss.error ?? ""), false, "and claims nothing it did not observe");
+      const frame = page.frames().find((f) => f !== page.mainFrame());
+      await frame.evaluate((src) => { globalThis.__bcpRun = eval(`(${src})`); }, runtimeSource);
+      const hidden = await frame.evaluate(() => globalThis.__bcpRun("read", {}));
+      eq(hidden.value?.text, "", "a frame with no viewport (display:none iframe) shows no text — not its script source either");
     },
   );
 

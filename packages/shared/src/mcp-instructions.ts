@@ -231,7 +231,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
     name: "wait_for",
     annotations: TOOL_HINTS.read,
     description:
-      "Wait until `text` appears (top frame and its open shadow roots; case and spacing ignored, as in snapshot query), until a CSS `selector`'s element is visible or hidden, or — with neither — for a fixed `ms`. Give text or selector, not both. " +
+      "Wait until `text` appears (top frame and its open shadow roots; case and spacing ignored; the text as one piece, not scattered words), until a CSS `selector`'s element is visible or hidden, or — with neither — for a fixed `ms`. Give text or selector, not both. " +
       `When waiting on a condition, \`ms\` is the timeout (default ${WAIT_FOR_DEFAULT_MS}ms, max ${WAIT_FOR_MAX_MS}ms) and the reply says whether it was met. ` +
       "For page loads and browser events use wait_for_event; for any other condition, bcpWait.until inside eval.",
     params: {
@@ -431,7 +431,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
     name: "page_state",
     annotations: TOOL_HINTS.read,
     description:
-      "One consistent read of a tab's state: url and title, loading, element count, scroll position, the focused control, a form summary (filled / required-empty / invalid / dirty), open dialogs, overlay or scroll lock, busy regions, visible errors, and `changed` since your last page_state on this tab. Cheap enough to call after every action to confirm it landed. No elements, text or pixels (snapshot, read_content, screenshot).",
+      "One consistent read of a tab's state: url and title, loading, element count, scroll position, the focused control, a form summary (filled / required-empty / invalid / dirty), open dialogs, overlay or scroll lock, busy regions, invalid fields (marked aria-invalid, with the message they point to), and `changed` since your last page_state on this tab. Cheap enough to call after every action to confirm it landed. No elements, text or pixels (snapshot, read_content, screenshot).",
     params: {
       verbosity: '"detail" adds dialog names, error texts and the fields blocking submit; default "summary"',
       resetDelta: "Reset the `changed` baseline without reporting changes",

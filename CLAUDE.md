@@ -53,7 +53,7 @@ MCP server(Node 后端)暴露 `browser_*` 工具 → WS-RPC → 浏览器扩展�
 
 ## 心得 · 验证(verify)
 
-- **读 `↳ changed:` delta**:变动后工具自带一行(URL 变 / ±元素 / dialog 开 / 新错误 / scroll locked / overlay),读它常省一次重 snapshot。
+- **读 `↳ changed:` delta**:变动后工具自带一行(URL 变 / ±元素 / dialog 开 / 页面 alert·confirm·prompt / 新开 tab / 新错误 / scroll locked / overlay),读它常省一次重 snapshot。**「错误」只认页面用 `aria-invalid` 声明的字段**(不认组件库类名、不认 role=alert):只靠类名标错的库不计入,agent 读正文看见。
 - **`⚠ Verify gate` = 强制重读**:出现即必须在下一动作前重新看页面。
 - **界面文字会骗人**:确认 save/submit 真到了服务器(或某个数字是真的),要 `read_network` 看请求 2xx——metadata only,无 body(CDP-free)。
 - **高风险节点**(提交/确认/导航/dialog 开/新错误)**必须**重新感知再动,别信可能已陈旧的旧视图。
@@ -99,7 +99,7 @@ MCP server(Node 后端)暴露 `browser_*` 工具 → WS-RPC → 浏览器扩展�
   - `pnpm --filter @bcp/comfyui check:nodes` 覆盖 **ComfyUI 自带节点**(`packages/comfyui/nodes/bcp`):出图 / 文本模型请求的组装与结果解码、蒙版与透明度方向、重跑用的 seed、`.env` 配置接口的只写不读。用 ComfyUI 的 venv 跑,假客户端替代真实接口;没 setup 时 exit 2。不叫 `test` 是因为 CI 的 `pnpm -r test` 环境里没有 ComfyUI。
   - **仍无自动化的**:跨 tab 编排 / `runRpc` 里剩下的几个大 case(Eval / WaitSignal / PageState),靠 typecheck + build + 接线 grep + `playwright-live-view` noVNC 手测。
   - 新增或修改 DOM 行为 / book 内联 JS **必须**在对应脚本补断言,并做一次**变异**(把修复改坏,确认断言真的变红)——没验证过证伪能力的防线是假防线。
-- **新增一个 DOM 动作 = 五处接线**:`shared` RpcMethod+contract → `dom-runtime` op 联合+case → `entrypoints/background.ts` DOM_OP+runRpc case → `browser-mcp-tools-*` 注册工具 →(必要时)补 `BROWSER_INSTRUCTIONS`。漏一处 typecheck 未必报,靠 grep 全链核对。
+- **新增一个 DOM 动作 = 四处接线**:`shared` RpcMethod+contract **+ `rpc-traits.ts` 的 `RPC_TRAITS` 条目**(`domOp` / 只读 / 是否录制 / 是否禁止重放 / 是否按活动 tab 兜底,漏写编译失败)→ `dom-runtime` op 联合+case → `browser-mcp-tools-*` 注册工具 →(必要时)补 `BROWSER_INSTRUCTIONS`。background 的 DOM_OP、导航/对话框监视、防重放集合、后端录制集合全部从 `RPC_TRAITS` 派生,不再手写。
 
 ---
 

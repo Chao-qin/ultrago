@@ -76,6 +76,7 @@ export function createInjectDispatch(deps: InjectDeps) {
     } = deps;
     const DOM_OP = deps.domOp;
     const NAV_BARRIER_TIMEOUT_MS = deps.barrierMs ?? 15000;
+    const DIALOG_RESTORE_TIMEOUT_MS = 2000;
 
   async function dispatch(method: RpcMethod, params: unknown): Promise<unknown> {
     const op = DOM_OP[method];
@@ -173,6 +174,7 @@ export function createInjectDispatch(deps: InjectDeps) {
     let navAnnounced = false;
     /** Whether the navigation was announced by the time the injection returned — the part attributable to us. */
     let navAnnouncedAtReturn = false;
+    let tabsOpenedAtReturn = 0;
     // The url the browser COMMITTED in this frame, if it navigated. Announcement
     // alone cannot be the evidence (a cancelled navigation announces too), and
     // neither can url-before vs url-after: a reload, or a POST back to the same
@@ -214,10 +216,14 @@ export function createInjectDispatch(deps: InjectDeps) {
     } finally {
       if (interaction) {
         // Awaited: what it hands back (the dialogs the page opened) is part of the reply. A frame that navigated
-        // away has nothing to restore, and nothing to report from the old document.
-        const restored = await scripting
-          .executeScript({ target: { tabId, frameIds: [frameId] }, world: "MAIN", func: runtime.dialogRestore as never })
-          .catch(() => undefined);
+        // away has nothing to restore, and nothing to report from the old document — but an injection queued
+        // behind a NEW document waits for it to load, so it runs immediately and is given a bounded time.
+        const restored = await Promise.race([
+          scripting
+            .executeScript({ target: { tabId, frameIds: [frameId] }, world: "MAIN", injectImmediately: true, func: runtime.dialogRestore as never })
+            .catch(() => undefined),
+          new Promise<undefined>((r) => setTimeout(() => r(undefined), DIALOG_RESTORE_TIMEOUT_MS)),
+        ]);
         const seen = restored?.[0]?.result;
         if (Array.isArray(seen)) pageDialogs = seen as PageDialog[];
       }
@@ -233,6 +239,8 @@ export function createInjectDispatch(deps: InjectDeps) {
       // announced by the time the injection returned is the part attributable to us.
       const announcedDuringAction = navAnnounced;
       navAnnouncedAtReturn = announcedDuringAction;
+      // The same for tabs: one the page opens later, while the barrier waits, was not opened by this action.
+      tabsOpenedAtReturn = tabsOpened.length;
       // `tab.status` is a WHOLE-TAB property that any actor can set — another
       // session navigating this shared tab makes it read "loading" too. It may
       // therefore only cause us to WAIT; it must never be evidence that OUR action
@@ -308,7 +316,7 @@ export function createInjectDispatch(deps: InjectDeps) {
       const out: ActionDelta = { ...delta };
       if (navAnnouncedAtReturn && navCommittedUrl) out.urlChanged = navCommittedUrl;
       if (pageDialogs.length) out.pageDialogs = pageDialogs;
-      if (tabsOpened.length) out.tabsOpened = tabsOpened;
+      if (tabsOpenedAtReturn) out.tabsOpened = tabsOpened.slice(0, tabsOpenedAtReturn);
       return out;
     }
 }

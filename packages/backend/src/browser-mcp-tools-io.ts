@@ -29,6 +29,8 @@ const eventTabId = z.coerce.number().optional().describe("Only events from this 
 export interface IoToolDeps {
   server: McpServer;
   call: BrowserCall;
+  /** The tab an agent-given [ref] was read in (see call() in browser-mcp.ts), for composites that read on their own. */
+  tabOfRef: (ref: string) => number | undefined;
   events: EventStore;
   evLine: (e: BrowserEvent) => string;
   /** Which events this session has been shown. */
@@ -44,7 +46,7 @@ export interface IoToolDeps {
 /** Registers switch_tab / download / upload_file / pick_option / drag /
  *  read_network / set_network_capture / read_events /
  *  wait_for_event / right_click / double_click / paste_text / hover. */
-export function registerIoTools({ server, call, events, evLine, inbox, sessionSees, callWindow, recordAsOne }: IoToolDeps): void {
+export function registerIoTools({ server, call, tabOfRef, events, evLine, inbox, sessionSees, callWindow, recordAsOne }: IoToolDeps): void {
   registerRpcTool(
     server,
     RpcMethod.SwitchTab,
@@ -151,7 +153,8 @@ export function registerIoTools({ server, call, events, evLine, inbox, sessionSe
     async (args) => {
       try {
         const r = await recordAsOne({ method: LocalMethod.PickOption, params: args as Record<string, unknown> }, () =>
-          pickOption((m, p) => call(m, p as never), args),
+          // The trigger [ref] was read by the agent: the pick reads, opens and picks in that tab.
+          pickOption((m, p) => call(m, p as never), { ...args, tabId: args.tabId ?? (args.ref ? tabOfRef(args.ref) : undefined) }),
         );
         const openEvidence = renderDelta(r.openDelta).trim();
         const opened = r.fromRevealedList

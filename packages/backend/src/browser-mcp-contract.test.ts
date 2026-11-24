@@ -61,6 +61,8 @@ async function connect(opts: {
   /** Milliseconds an RPC takes, for the paths whose order matters; `log` records starts and ends. */
   latency?: Record<string, number>;
   log?: string[];
+  /** Per-call result, for flows where methods must answer differently (takes precedence over `result`). */
+  resultFor?: (method: string, params: Record<string, unknown>) => unknown;
 } = {}): Promise<{ client: Client; calls: CallLog[]; close: () => Promise<void> }> {
   const calls: CallLog[] = [];
   const rawCall = (async (method, params, target) => {
@@ -70,7 +72,7 @@ async function connect(opts: {
     if (ms) await new Promise((r) => setTimeout(r, ms));
     opts.log?.push(`end ${method}`);
     if (method === opts.failOn) throw new Error(`${method} failed`);
-    return (opts.result ?? {}) as never;
+    return (opts.resultFor?.(method, params as Record<string, unknown>) ?? opts.result ?? {}) as never;
   }) as RawBrowserCall;
 
   const events = opts.events ?? ({
@@ -832,5 +834,78 @@ test("wait_for 等文字超时：回复说出文字是在页面上但被隐藏�
       /Timed out after 100ms .* The text is in the page but not shown: inside \[e9\] \(hidden\) "保存成功" — open what hides it/);
     page.textHits = { count: 0, samples: [] };
     assert.match(textOf(await client.callTool({ name: "wait_for", arguments: { text: "保存成功", ms: 100 } })), /The text is not in the page at all/);
+  } finally { await close(); }
+});
+
+test("pick_option 的点选落在它自己读到的标签页与文档上：agent 之前读的是别的标签页、或页面已经跳转，都不会把点选改发过去", async () => {
+  let active = 2;
+  let nav = 0;
+  const opt = { ref: "e2", tag: "li", role: "option", name: "China" };
+  const trigger = { ref: "e1", tag: "div", role: "combobox", name: "Country" };
+  let snaps = 0;
+  const resultFor = (method: string, p: Record<string, unknown>) => {
+    const tab = (p.tabId as number | undefined) ?? active;
+    if (method === RpcMethod.Snapshot)
+      return { tabId: tab, url: "u", title: "t", moreBelow: false, docs: { "0": `doc${tab}.${nav}` }, elements: snaps++ % 2 ? [trigger, opt] : [trigger], ok: true };
+    return { ok: true, tabId: tab };
+  };
+  const { client, calls, close } = await connect({ resultFor });
+  const lastClick = () => calls.filter((c) => c.method === RpcMethod.Click).at(-1)!.params;
+  try {
+    await client.callTool({ name: "snapshot", arguments: { tabId: 1 } });
+    snaps = 0;
+    await client.callTool({ name: "pick_option", arguments: { text: "Country", option: "China" } });
+    assert.equal(lastClick().tabId, 2, "按描述打开的是前台标签页 2，就在 2 上点选");
+    assert.equal(lastClick().expectDoc, "doc2.0");
+
+    active = 1;
+    await client.callTool({ name: "snapshot", arguments: {} });
+    nav = 1; // the agent navigates; its last read is now an old document
+    snaps = 0;
+    await client.callTool({ name: "pick_option", arguments: { text: "Country", option: "China" } });
+    assert.equal(lastClick().expectDoc, "doc1.1", "带的是 pick 自己读到的新文档，不是 agent 读过的旧文档");
+
+    snaps = 0;
+    active = 2;
+    await client.callTool({ name: "pick_option", arguments: { ref: "e1", option: "China" } });
+    assert.equal(lastClick().tabId, 1, "触发器 ref 是在标签页 1 读到的");
+  } finally { await close(); }
+});
+
+test("排队等前一个动作时被客户端取消的调用，轮到它时不再执行；plan_abort 不排在它要中止的工作后面", async () => {
+  const log: string[] = [];
+  const { client, calls, close } = await connect({ result: { ok: true }, latency: { [RpcMethod.Navigate]: 300 }, log });
+  try {
+    const going = client.callTool({ name: "navigate", arguments: { url: "https://x/", tabId: 1 } });
+    const ac = new AbortController();
+    const cancelled = client.callTool({ name: "click", arguments: { text: "Pay", tabId: 1 } }, undefined, { signal: ac.signal }).catch((e) => e);
+    await new Promise((r) => setTimeout(r, 30));
+    ac.abort();
+    const abort = await client.callTool({ name: "plan_abort", arguments: { planId: "plan_missing" } });
+    assert.ok(!log.includes(`end ${RpcMethod.Navigate}`), "plan_abort 在导航结束前就答复了");
+    assert.ok(abort);
+    await going;
+    await cancelled;
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(calls.filter((c) => c.method === RpcMethod.Click).length, 0, "被取消的点击没有发出");
+  } finally { await close(); }
+});
+
+test("计划验证的响应体与请求状态取自同一个标签页：状态读的是哪个标签页的请求，就在哪个标签页找响应体", async () => {
+  const store = new EventStore();
+  let requests: unknown[] = [];
+  const resultFor = (method: string) =>
+    method === RpcMethod.ReadNetwork
+      ? { tabId: 5, requests }
+      : { tabId: 3, url: "u", title: "t", moreBelow: false, elements: [], docs: { "0": "d" }, ok: true };
+  const { client, close } = await connect({ events: store, resultFor });
+  const textOf = (r: unknown) => (r as { content: Array<{ text?: string }> }).content.map((c) => c.text ?? "").join("\n");
+  try {
+    await client.callTool({ name: "snapshot", arguments: {} });
+    const planned = textOf(await client.callTool({ name: "plan", arguments: { goal: "g", steps: [{ goal: "save", verify: { networkOk: { urlIncludes: "/api/save", bodyIncludes: "保存成功" } } }] } }));
+    const planId = /plan_[\w-]+/.exec(planned)?.[0];
+    requests = [{ url: "https://x/api/save", status: 200, ts: Date.now() + 1000 }];
+    store.push({ kind: "network_body", tabId: 5, ts: 1, browser: TARGET_A.instanceId, summary: "body", detail: { url: "https://x/api/save", status: 200, body: "保存成功" } });
+    assert.match(textOf(await client.callTool({ name: "advance", arguments: { planId } })), /Plan complete/, "请求在标签页 5，响应体也在 5");
   } finally { await close(); }
 });

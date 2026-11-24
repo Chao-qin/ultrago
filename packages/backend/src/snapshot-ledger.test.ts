@@ -343,5 +343,13 @@ test("query 一个元素也没命中时，回复给出这段文字在页面上�
   const hits = { count: 3, samples: [{ text: "Deutsch", ref: "e64" }, { text: "Iceland 387,758", hidden: true }] };
   const text = renderSnapshotView(page, { query: "Deutsch" }, hits).text;
   assert.match(text, /\(no element's role, name, value or options contain "Deutsch"\)\nThe words occur 3 time\(s\) in the page's text:\n {2}inside \[e64\]: "Deutsch"\n {2}in page text \(hidden\): "Iceland 387,758"\n {2}… 1 more\nAct on the element they are inside/);
-  assert.match(renderSnapshotView(page, { query: "zz" }, { count: 0, samples: [] }).text, /The words are not in the page's text either — the content may not have loaded yet/);
+  assert.match(renderSnapshotView(page, { query: "zz" }, { count: 0, samples: [] }).text, /The words do not occur in the page's text either\. snapshot/);
+});
+
+test("范围收窄后 query 为空：页面别处有命中时说在别处、有几个，不说「没有元素包含」", () => {
+  const page = [el("e1", { name: "Save", inViewport: false }), el("e2", { name: "首页", inViewport: true })];
+  const off = renderSnapshotView(page, { query: "save", viewportOnly: true }).text;
+  assert.match(off, /\(1 element\(s\) on the page match "save", none of them in the viewport — drop that filter to list them\)/);
+  assert.doesNotMatch(off, /no element's role, name/);
+  assert.match(renderSnapshotView(page, { query: "zz", viewportOnly: true }).text, /no element's role, name, value or options contain "zz"/, "整页都没有时照实说没有");
 });

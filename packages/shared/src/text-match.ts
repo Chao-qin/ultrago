@@ -12,15 +12,16 @@
  * a copy of `normalizeText`; check:dom runs the same cases against both.
  */
 
-/** Case-folded, every run of whitespace (no-break spaces included) one space, zero-width and soft-hyphen
- *  characters removed, trimmed. */
+/** Case-folded, every run of whitespace (no-break spaces included) one space, invisible formatting characters
+ *  (zero-width space / non-joiner / joiner, byte-order mark, soft hyphen) removed, trimmed. */
 export function normalizeText(s: string): string {
-  return s.replace(/[​­]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+  return s.replace(/[\u200b-\u200d\ufeff\u00ad]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
 }
 
-/** How well `text` matches `want`, best first: the whole text equals it; every word of it occurs in the text (for a
- *  query of several words, in any order); it occurs as one piece. Undefined when it does not match at all, or when
- *  `want` normalizes to nothing — an empty expectation matches everything, which is no evidence of anything. */
+/** How well `text` matches `want`, best first: the whole text equals it ("exact"); it occurs in the text as one piece
+ *  ("substring"); every word of a several-word `want` occurs, in any order ("words" — a search ranking only, never
+ *  evidence: "I agree" is in "I don't agree" word by word). Undefined when it does not match at all, or when `want`
+ *  normalizes to nothing — an empty expectation matches everything, which is no evidence of anything. */
 export type MatchGrade = "exact" | "words" | "substring";
 
 export function matchGrade(text: string | undefined, want: string): MatchGrade | undefined {
@@ -49,8 +50,9 @@ export const gradeRank = (g: MatchGrade): number => RANK[g];
  *  backend's text-match.test.ts, the page runtime's in check:dom). */
 export const TEXT_MATCH_CASES: readonly [string, string][] = [
   ["Save Draft", "save draft"],
-  ["  Save  Draft\n", "save draft"],
-  ["保​存", "保存"],
-  ["co­operate", "cooperate"],
+  ["  Save\u00a0\u00a0Draft\n", "save draft"],
+  ["保\u200b存", "保存"],
+  ["co\u00adoperate", "cooperate"],
+  ["\ufeff保\u200c存\u200d", "保存"],
   ["ＡＢＣ", "ａｂｃ"],
 ];

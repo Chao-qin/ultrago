@@ -320,11 +320,14 @@ export function renderPendingRequests(p?: PendingRequests): string {
 /** A query that matched no element: what the page's TEXT says about the words instead — inside which element they
  *  appear (one named otherwise, e.g. by a title), in plain text that read_content reads, hidden, or nowhere. Facts the
  *  reader can act on, where "try other words" sent it guessing. */
-function noElementMatches(query: string, hits?: SnapshotTextHits): string {
+function noElementMatches(query: string, hits: SnapshotTextHits | undefined, elsewhere: number, scope: string): string {
+  // Matches outside the narrowed view are not "no match": say where they are instead.
+  if (elsewhere)
+    return `(${elsewhere} element(s) on the page match ${JSON.stringify(query)}, none of them ${scope} — drop that filter to list them)`;
   const head = `(no element's role, name, value or options contain ${JSON.stringify(query)})`;
   if (!hits) return head;
   if (!hits.count)
-    return `${head}\nThe words are not in the page's text either — the content may not have loaded yet (a collapsed section or a later page often loads when opened), or the page words it differently. snapshot({full: true}) lists every element.`;
+    return `${head}\nThe words do not occur in the page's text either. snapshot({full: true}) lists every element.`;
   const lines = hits.samples.map((h) => `  ${h.ref ? `inside [${h.ref}]` : "in page text"}${h.hidden ? " (hidden)" : ""}: ${JSON.stringify(h.text)}`);
   const more = hits.count > hits.samples.length ? `\n  … ${hits.count - hits.samples.length} more` : "";
   return `${head}\nThe words occur ${hits.count} time(s) in the page's text:\n${lines.join("\n")}${more}\nAct on the element they are inside (snapshot({within: ref}) shows it), or read the text with read_content.`;
@@ -361,15 +364,16 @@ export function renderSnapshotView(
   // A (group) wrapper and a hidden group are named by all the text they hold, so their "name" matches whatever one
   // of their elements matches: the search would return the element and every container around it, and a group that
   // is not one of the page's elements. A query asks for elements by their own name, role, value or options.
-  if (query) {
-    // Graded the way every other text comparison is (text-match.ts): case and whitespace folded, the words of a
-    // several-word query found in any order. Ordered best grade first — an element named exactly what was asked
-    // before the hundreds that merely contain it — and in document order within a grade. Nothing is dropped.
-    const graded = matched
-      .map((e) => ({ e, g: e.container || e.hiddenGroup ? undefined : [e.role, e.name, e.value, ...(e.options ?? [])].reduce<MatchGrade | undefined>((best, v) => bestGrade(best, matchGrade(v, query)), undefined) }))
-      .filter((x): x is { e: SnapshotElement; g: MatchGrade } => !!x.g);
-    matched = graded.map((x, i) => ({ ...x, i })).sort((a, b) => gradeRank(a.g) - gradeRank(b.g) || a.i - b.i).map((x) => x.e);
-  }
+  // Graded the way every other text comparison is (text-match.ts): case and whitespace folded, the words of a
+  // several-word query found in any order. Ordered best grade first — an element named exactly what was asked
+  // before the hundreds that merely contain it — and in document order within a grade. Nothing is dropped.
+  const byQuery = (list: SnapshotElement[]): SnapshotElement[] =>
+    list
+      .map((e, i) => ({ e, i, g: e.container || e.hiddenGroup ? undefined : [e.role, e.name, e.value, ...(e.options ?? [])].reduce<MatchGrade | undefined>((best, v) => bestGrade(best, matchGrade(v, query!)), undefined) }))
+      .filter((x): x is { e: SnapshotElement; i: number; g: MatchGrade } => !!x.g)
+      .sort((a, b) => gradeRank(a.g) - gradeRank(b.g) || a.i - b.i)
+      .map((x) => x.e);
+  if (query) matched = byQuery(matched);
   if (view.viewportOnly) matched = matched.filter((e) => e.inViewport === true);
   const narrowed = !!query || !!view.viewportOnly || !!view.within;
   const filter = [view.within ? `within [${view.within}]` : "", query ? `query=${JSON.stringify(view.query)}` : "", view.viewportOnly ? "viewportOnly" : ""].filter(Boolean).join(" ");
@@ -399,7 +403,8 @@ export function renderSnapshotView(
   const end = start + page.length;
   if (!page.length)
     body = query && !start
-      ? noElementMatches(view.query!, textHits)
+      ? noElementMatches(view.query!, textHits, (view.within || view.viewportOnly) ? byQuery(els).length : 0,
+          [view.within ? `within [${view.within}]` : "", view.viewportOnly ? "in the viewport" : ""].filter(Boolean).join(" and "))
       : narrowed || start
         ? `(nothing to show${filter ? ` for ${filter}` : ""}${start ? ` after [${view.after}]` : ""})`
         : "(no visible interactable elements right now)";
