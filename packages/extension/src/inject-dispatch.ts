@@ -26,6 +26,7 @@
  */
 import type { RpcErrorInfo, RpcMethod } from "@bcp/shared";
 import { domOpError } from "./rpc-errors";
+import { mergeFrameSnapshots } from "./snapshot-merge";
 
 export interface InjectionResultLike {
     frameId: number;
@@ -102,41 +103,7 @@ export function createInjectDispatch(deps: InjectDeps) {
       // "Install on perceive": a snapshot also (re)installs resident page-event
       // probes. Fire-and-forget so it never blocks or fails the snapshot itself.
       void injectEventProbes(tabId);
-      const merged = {
-        tabId, url: "", title: "", elements: [] as unknown[], moreBelow: false,
-        docs: {} as Record<string, string>,
-      };
-      for (const res of results) {
-        const r = res.result as
-          | {
-              value?: {
-                url: string; title: string; moreBelow: boolean;
-                elements: { ref: string; parentRef?: string; controls?: string[] }[];
-                docId?: string;
-              };
-            }
-          | undefined;
-        if (!r?.value) continue;
-        const pfx = (ref: string): string => (res.frameId === 0 ? ref : `${res.frameId}_${ref}`);
-        if (res.frameId === 0) {
-          merged.url = r.value.url;
-          merged.title = r.value.title;
-        }
-        merged.moreBelow ||= r.value.moreBelow; // any frame with more content below counts
-        for (const el of r.value.elements) {
-          // Sub-frame refs are namespaced with the frameId; every ref an element names (parentRef, controls) must be too.
-          merged.elements.push(
-            res.frameId === 0
-              ? el
-              : { ...el, ref: pfx(el.ref), parentRef: el.parentRef ? pfx(el.parentRef) : undefined, ...(el.controls && { controls: el.controls.map(pfx) }) },
-          );
-        }
-        // Each frame is its own document with its own ref numbering, keyed the
-        // same way its refs are prefixed, so a frame that navigated on its own
-        // can be told apart from the rest of the page.
-        if (r.value.docId) merged.docs[String(res.frameId)] = r.value.docId;
-      }
-      return merged;
+      return mergeFrameSnapshots(tabId, results);
     }
 
     // Route a ref-bearing op to the frame its ref came from ("42_e3" -> frame 42, ref "e3").

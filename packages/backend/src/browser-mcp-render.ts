@@ -86,22 +86,23 @@ export function deltaGate(delta?: ActionDelta): string | null {
  *  has to re-scan everything it already read to find the one control that is
  *  new, and pays that scan on every beat. Refs survive re-snapshots, so
  *  "e37 is new" is a durable statement rather than a renumbering artefact. */
-export function renderShownDelta(d?: ShownDiff): string {
+export function renderShownDelta(d?: ShownDiff, opts: { continuation?: boolean } = {}): string {
   if (!d || d.fresh === "first") return "";
   if (d.fresh === "navigated") return "\n\n↳ New document since your last snapshot (navigation or reload) — refs from earlier replies no longer apply.";
-  // A re-render that swapped most nodes is a new page to the reader, whatever the URL says; listing hundreds of
-  // "new" and "gone" refs would only bury that.
-  if (d.gone >= 10 && d.gone * 2 >= d.known)
-    return `\n\n↳ ${d.gone} of the ${d.known} elements you were shown are gone (the page re-rendered or switched view) — read this as a fresh page; earlier refs no longer apply.`;
+  // Facts only — how many of the elements you were shown are gone, which are new or changed. Whether that adds up
+  // to "a different view" is the reader's call: it can see both counts.
   const list = (refs: string[]): string => (refs.length <= 12 ? refs.join(", ") : `${refs.length} (first 12: ${refs.slice(0, 12).join(", ")})`);
   const bits: string[] = [];
-  if (d.appeared.length) bits.push(`NEW to you: ${list(d.appeared)}`);
+  // A continuation page lists what earlier pages did not, so "new to you" would just repeat this page's refs.
+  if (d.appeared.length && !opts.continuation) bits.push(`NEW to you: ${list(d.appeared)}`);
   if (d.changed.length) bits.push(`CHANGED: ${list(d.changed)}`);
-  if (d.gone) bits.push(`${d.gone} gone`);
+  if (d.gone) bits.push(`${d.gone} of the ${d.known} elements you were shown are gone`);
   if (d.hiddenAgain) bits.push(`${d.hiddenAgain} hidden again`);
-  if (d.framesNavigated) bits.push(`${d.framesNavigated} frame(s) loaded a new document — their earlier refs no longer apply`);
+  if (d.framesNavigated.length) bits.push(`${d.framesNavigated.length} frame(s) loaded a new document — their earlier refs no longer apply`);
   if (!bits.length) return "";
-  return `\n\n↳ Since your last snapshot: ${bits.join(" · ")} — start with those; everything else listed here was in an earlier reply.`;
+  return opts.continuation
+    ? `\n\n↳ Since your last snapshot: ${bits.join(" · ")}.`
+    : `\n\n↳ Since your last snapshot: ${bits.join(" · ")} — start with those; everything else listed here was in an earlier reply.`;
 }
 
 export function renderSnapshot(els: SnapshotElement[]): string {
@@ -129,46 +130,51 @@ export function renderSnapshot(els: SnapshotElement[]): string {
     if (pr) (childrenOf.get(pr) ?? childrenOf.set(pr, []).get(pr)!).push(e);
     else roots.push(e);
   }
-  const line = (e: SnapshotElement, depth: number): string => {
-    const parts = [`${"  ".repeat(depth)}[${e.ref}]`, e.role];
-    // A group's name is just its descendants' text concatenated, so show a short
-    // form — but only here. The full name stays on the wire because
-    // orchestrator's elementName predicate matches against it.
-    if (e.name) parts.push(`"${e.container && e.name.length > 30 ? `${e.name.slice(0, 30)}…` : e.name}"`);
-    if (e.container) parts.push("(group)");
-    if (e.value) parts.push(`value="${e.value}"`);
-    if (e.checked !== undefined) parts.push(e.checked ? "[checked]" : "[unchecked]");
-    if (e.options) parts.push(`options=[${e.options.join(" | ")}]`);
-    if (e.expanded !== undefined) parts.push(e.expanded ? "[expanded]" : "[collapsed]");
-    // Right after expanded, because together they are one statement: THAT a
-    // disclosure opened, and WHICH ref it opened. Rendered as a trailing
-    // annotation rather than as nesting — the tree above is built from parentRef
-    // alone, and a second edge type would give a node two parents (a portaled
-    // panel is a <body> child AND controlled by a button deep in the page),
-    // which no single indentation can express.
-    if (e.controls) parts.push(`→[${e.controls.join("][")}]`);
-    if (e.invalid) parts.push(e.invalidMessage ? `[invalid: ${e.invalidMessage}]` : "[invalid]");
-    if (e.busy) parts.push("[busy]");
-    if (e.disabled) parts.push("[disabled]");
-    if (e.hidden) parts.push("[hidden]");
-    if (e.clickable) parts.push("[clickable]");
-    if (e.inViewport === false) parts.push("[offscreen]");
-    if (e.scrollable) parts.push("(scrollable)");
-    // Zone last: it reads as a trailing address, so a column of them stays
-    // scannable when the agent is looking for "what's in the dialog".
-    if (e.zone) parts.push(`@${e.zone}`);
-    // Geometry after the zone — this is what ties a thing seen in a screenshot
-    // to a ref that can be acted on, and vice versa.
-    if (e.rect) parts.push(`(${e.rect[0]},${e.rect[1]} ${e.rect[2]}×${e.rect[3]})`);
-    return parts.join(" ");
-  };
   const out: string[] = [];
   const walk = (e: SnapshotElement, depth: number): void => {
-    out.push(line(e, depth));
+    out.push(`${"  ".repeat(depth)}${elementLine(e)}`);
     for (const c of childrenOf.get(e.ref) ?? []) walk(c, depth + 1);
   };
   for (const e of roots) walk(e, 0);
   return out.join("\n");
+}
+
+/** The line a reply prints for one element. `geometry: false` drops what only says WHERE it is (its box,
+ *  [offscreen]) — what ShownLedger compares, so an element that merely scrolled has not changed, and anything the
+ *  line says about it has. */
+export function elementLine(e: SnapshotElement, opts: { geometry?: boolean } = {}): string {
+  const geometry = opts.geometry ?? true;
+  const parts = [`[${e.ref}]`, e.role];
+  // A group's name is just its descendants' text concatenated, so show a short
+  // form — but only here. The full name stays on the wire because
+  // orchestrator's elementName predicate matches against it.
+  if (e.name) parts.push(`"${e.container && e.name.length > 30 ? `${e.name.slice(0, 30)}…` : e.name}"`);
+  if (e.container) parts.push("(group)");
+  if (e.value) parts.push(`value="${e.value}"`);
+  if (e.checked !== undefined) parts.push(e.checked ? "[checked]" : "[unchecked]");
+  if (e.options) parts.push(`options=[${e.options.join(" | ")}]`);
+  if (e.expanded !== undefined) parts.push(e.expanded ? "[expanded]" : "[collapsed]");
+  // Right after expanded, because together they are one statement: THAT a
+  // disclosure opened, and WHICH ref it opened. Rendered as a trailing
+  // annotation rather than as nesting — the tree above is built from parentRef
+  // alone, and a second edge type would give a node two parents (a portaled
+  // panel is a <body> child AND controlled by a button deep in the page),
+  // which no single indentation can express.
+  if (e.controls) parts.push(`→[${e.controls.join("][")}]`);
+  if (e.invalid) parts.push(e.invalidMessage ? `[invalid: ${e.invalidMessage}]` : "[invalid]");
+  if (e.busy) parts.push("[busy]");
+  if (e.disabled) parts.push("[disabled]");
+  if (e.hidden) parts.push("[hidden]");
+  if (e.clickable) parts.push("[clickable]");
+  if (geometry && e.inViewport === false) parts.push("[offscreen]");
+  if (e.scrollable) parts.push("(scrollable)");
+  // Zone last: it reads as a trailing address, so a column of them stays
+  // scannable when the agent is looking for "what's in the dialog".
+  if (e.zone) parts.push(`@${e.zone}`);
+  // Geometry after the zone — this is what ties a thing seen in a screenshot
+  // to a ref that can be acted on, and vice versa.
+  if (geometry && e.rect) parts.push(`(${e.rect[0]},${e.rect[1]} ${e.rect[2]}×${e.rect[3]})`);
+  return parts.join(" ");
 }
 
 /** Which window the user is on. The browser reports no focused window whenever none of ITS windows has focus —
@@ -198,14 +204,18 @@ export const SNAPSHOT_CHAR_BUDGET = 30_000;
 /** page_state's count is a lower bound of snapshot's (top frame, no cursor:pointer); past this it suggests narrowing. */
 const LARGE_PAGE = 500;
 
-/** Hidden inputs and selects stay listed: a concealed file input is what upload_file targets, a native <select>
- *  under a custom dropdown is what select_option targets, and a zero-size checkbox may be the only place its
- *  checked state shows. Any other hidden element cannot be acted on until it shows, so a default reply summarises
- *  it instead — <textarea> included: hidden ones are data stores (baidu keeps its CSS and trending JSON in three)
- *  or an editor's input sink that takes focus when the visible editor is clicked. */
-const HIDDEN_BUT_LISTED = new Set(["input", "select"]);
-const listedByDefault = (e: SnapshotElement): boolean => !e.hidden || HIDDEN_BUT_LISTED.has(e.tag);
-const shorten = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n)}…` : s);
+/** A default reply lists what can be acted on now — every visible element — and names the rest instead of
+ *  listing it: a hidden element cannot be acted on until it shows, and a hidden group (a closed menu, a collapsed
+ *  section) is the container it waits in. What a reply leaves out is decided by visibility alone, never by tag,
+ *  role or name, and everything it leaves out is still named by [ref] in the summary — or, once the summary's own
+ *  budget runs out, counted with the call that lists it. */
+export const listedByDefault = (e: SnapshotElement): boolean => !e.hidden && !e.hiddenGroup;
+/** Hidden groups are a device for naming hidden elements, not elements of the page: counts leave them out. */
+const countElements = (els: SnapshotElement[]): number => els.reduce((n, e) => n + (e.hiddenGroup ? 0 : 1), 0);
+/** Part of a reply the hidden summary may take; past it the summary counts what it no longer names. */
+const SUMMARY_CHAR_BUDGET = 3_000;
+/** Room kept for the coverage line, which is written once the page is cut. */
+const COVERAGE_RESERVE = 600;
 
 /** `root` and everything nested under it or opened by it, in document order; undefined when `root` is gone. */
 function subtreeOf(els: SnapshotElement[], root: string): SnapshotElement[] | undefined {
@@ -225,10 +235,11 @@ function subtreeOf(els: SnapshotElement[], root: string): SnapshotElement[] | un
   return els.filter((e) => keep.has(e.ref));
 }
 
-/** What a default reply left out, grouped by the hidden subtree each element sits in: a closed menu is one line
- *  naming the menu (github's language picker: 848 hidden options), not one line per option. Lone hidden elements
- *  share a single line with a few of their names, so that "there is a hidden 登录 link" is still visible. */
-function renderHiddenSummary(folded: SnapshotElement[], all: SnapshotElement[]): string {
+/** What a default reply left out, one line per hidden subtree: a closed menu is one line with the [ref] that
+ *  `within` expands (github's language picker: 848 hidden options), a lone hidden element is its own line. Groups
+ *  come first, largest first, so a cut summary still names the most; lone elements follow in document order.
+ *  Returns how many hidden elements it named by ref and how many it only counted — the Coverage line says both. */
+function renderHiddenSummary(folded: SnapshotElement[], all: SnapshotElement[]): { text: string; named: number; total: number } {
   const byRef = new Map(all.map((e) => [e.ref, e] as const));
   const foldedRefs = new Set(folded.map((e) => e.ref));
   const rootOf = (e: SnapshotElement): SnapshotElement => {
@@ -236,37 +247,60 @@ function renderHiddenSummary(folded: SnapshotElement[], all: SnapshotElement[]):
     while (r.parentRef && foldedRefs.has(r.parentRef)) r = byRef.get(r.parentRef)!;
     return r;
   };
-  const size = new Map<string, number>();
+  const held = new Map<string, number>(); // root ref → hidden elements under it, the root included unless only a group
   for (const e of folded) {
     const r = rootOf(e).ref;
-    size.set(r, (size.get(r) ?? 0) + 1);
+    held.set(r, (held.get(r) ?? 0) + (e.hiddenGroup ? 0 : 1));
   }
-  const groups = [...size].filter(([, n]) => n > 1).sort((a, b) => b[1] - a[1]).slice(0, 8);
-  const grouped = new Set(groups.map(([ref]) => ref));
-  const lines = groups.map(([ref, n]) => {
-    const e = byRef.get(ref)!;
-    return `  [${ref}] ${e.role}${e.name ? ` "${shorten(e.name, 30)}"` : ""} — ${n} hidden elements`;
-  });
-  const loose = folded.filter((e) => !grouped.has(rootOf(e).ref));
-  if (loose.length) {
-    const names = [...new Set(loose.map((e) => e.name?.trim()).filter((n): n is string => !!n))].slice(0, 8);
-    lines.push(`  ${loose.length}${groups.length ? " more" : ""} hidden${names.length ? `, e.g. ${names.map((n) => `"${shorten(n, 20)}"`).join(", ")}` : ""}`);
+  const isGroup = ([ref, n]: [string, number]): boolean => n > 1 || !!byRef.get(ref)!.hiddenGroup;
+  const entries = [...[...held].filter(isGroup).sort((a, b) => b[1] - a[1]), ...[...held].filter((g) => !isGroup(g))];
+  const lines: string[] = [];
+  let used = 0;
+  let named = 0;
+  for (const [ref, n] of entries) {
+    const line = `  ${elementLine(byRef.get(ref)!, { geometry: false })}${isGroup([ref, n]) ? ` — holds ${n} hidden` : ""}`;
+    if (used + line.length > SUMMARY_CHAR_BUDGET) break;
+    lines.push(line);
+    used += line.length + 1;
+    named += n;
   }
-  return `\n\nHidden right now (${folded.length}, not listed above; listed once visible) — expand a group with snapshot({within: ref}), search them with query, or list everything with snapshot({full: true}):\n${lines.join("\n")}`;
+  const total = countElements(folded);
+  if (named < total)
+    lines.push(`  … ${total - named} more hidden, counted but not named here — query searches them, snapshot({full: true}) lists them`);
+  return {
+    text: `\n\nHidden right now (${total}, not listed above; listed once visible) — snapshot({within: ref}) lists a group, query searches them all, snapshot({full: true}) lists everything:\n${lines.join("\n")}`,
+    named,
+    total,
+  };
 }
 
-/** Renders a snapshot reply for `tool`, and returns the refs it listed — what the caller records as shown. */
+const WHOLE_PAGE = "snapshot({full: true}) lists every element, page by page";
+
+/** Renders a snapshot reply (snapshot, or analyze_page's snapshot section), and returns the refs it listed — what
+ *  the caller records as shown — and whether it continued an earlier page (`continued`: it started past the first
+ *  element, so everything on it is unread by construction).
+ *
+ *  Every reply opens with one Coverage line in a fixed shape: how many of the page's elements this reply lists and
+ *  which ones, how many are hidden and how many of those it names by ref, and the exact call that returns the rest —
+ *  so a reader can always tell whether it holds the whole page and how to get it, without inferring it from the list.
+ *  Counts are of the page's elements; a hidden group is a device for naming them, not one of them. */
 export function renderSnapshotView(
   els: SnapshotElement[],
   view: SnapshotView = {},
-  opts: { tool?: "snapshot" | "analyze_page" } = {},
-): { text: string; shown: string[] } {
-  const tool = opts.tool ?? "snapshot";
+): { text: string; shown: string[]; continued: boolean } {
+  const total = countElements(els);
+  const coverage = (bits: string[]): string => `Coverage: ${bits.join(" · ")}.`;
+  if (!els.length) return { text: `${coverage(["the page has no interactable elements"])}\n\n${renderSnapshot(els)}`, shown: [], continued: false };
   const query = view.query?.trim().toLowerCase();
   let matched = els;
   if (view.within) {
     const sub = subtreeOf(els, view.within);
-    if (!sub) return { text: `([${view.within}] is no longer on the page — take a fresh snapshot to find what replaced it)`, shown: [] };
+    if (!sub)
+      return {
+        text: coverage([`0 of the page's ${total} elements listed here ([${view.within}] is no longer on the page — take a fresh snapshot to find what replaced it)`, WHOLE_PAGE]),
+        shown: [],
+        continued: false,
+      };
     matched = sub;
   }
   if (query) matched = matched.filter((e) => [e.role, e.name, e.value, ...(e.options ?? [])].some((v) => v?.toLowerCase().includes(query)));
@@ -282,13 +316,13 @@ export function renderSnapshotView(
     const at = matched.findIndex((e) => e.ref === view.after);
     if (at < 0) {
       const why = !els.some((e) => e.ref === view.after) ? "is no longer on the page" : folded.some((e) => e.ref === view.after) ? "is hidden now" : "no longer matches";
-      restarted = `[${view.after}] ${why}, so this starts again from the first element. `;
-    }
-    else start = at + 1;
+      restarted = `[${view.after}] ${why}, so this starts again from the first element`;
+    } else start = at + 1;
   }
-  // The summary belongs to the first page of a reply; later pages continue the list.
-  const summary = folded.length && !view.after ? renderHiddenSummary(folded, els) : "";
-  const budget = SNAPSHOT_CHAR_BUDGET - summary.length;
+  const hiddenSummary = folded.length ? renderHiddenSummary(folded, els) : undefined;
+  // The summary belongs to the first page — including a restarted one; later pages continue the list.
+  const summary = hiddenSummary && start === 0 ? hiddenSummary.text : "";
+  const budget = SNAPSHOT_CHAR_BUDGET - summary.length - COVERAGE_RESERVE;
   let page = matched.slice(start, view.limit ? start + view.limit : undefined);
   // Measured on the real rendering (indentation included), shrinking until it fits.
   let body = renderSnapshot(page);
@@ -297,23 +331,37 @@ export function renderSnapshotView(
     body = renderSnapshot(page);
   }
   const end = start + page.length;
-  if (!page.length) {
-    if (!els.length) return { text: renderSnapshot(els), shown: [] };
-    if (summary) return { text: `(no visible interactable elements right now)${summary}`, shown: [] };
-    return { text: `(${restarted}nothing to show for ${filter || "this page"}${start ? ` after [${view.after}]` : ""} — ${matched.length} of ${els.length} elements match; widen the query or drop \`after\`)`, shown: [] };
-  }
-  const notes: string[] = [];
-  if (narrowed) notes.push(`${matched.length} of ${els.length} elements match ${filter}`);
-  if (start || end < matched.length) notes.push(`showing ${start + 1}–${end} of ${matched.length}`);
+  if (!page.length)
+    body = narrowed || start
+      ? `(nothing to show${filter ? ` for ${filter}` : ""}${start ? ` after [${view.after}]` : ""} — widen the query or drop \`after\`)`
+      : "(no visible interactable elements right now)";
+
+  // ---- Coverage ----
+  const listed = countElements(page);
+  const inScope = countElements(matched);
+  const scope = narrowed ? `elements matching ${filter}` : view.full ? "elements, hidden ones included" : "visible elements";
+  const paged = start > 0 || end < matched.length;
+  const range = !listed
+    ? `none of ${inScope} ${scope}`
+    : paged
+      ? `${countElements(matched.slice(0, start)) + 1}–${countElements(matched.slice(0, end))} of ${inScope} ${scope}`
+      : `all ${inScope} ${scope}`;
+  const bits = [`${listed} of the page's ${total} elements listed here (${range})`];
+  if (restarted) bits.push(restarted);
   if (end < matched.length) {
-    // `full` is part of what is being paged: page 2 without it would summarise hidden elements again.
-    const next = `after: ${JSON.stringify(page[page.length - 1].ref)}${view.full ? ", full: true" : ""}`;
-    notes.push(tool === "snapshot"
-      ? `continue with snapshot({${next}${narrowed ? ", plus the same filters" : ""}})${narrowed ? "" : ", or narrow with query (text/role) / viewportOnly"}`
-      : `this snapshot section is paged — call snapshot({${next}}) for the rest, or snapshot({query}) / snapshot({viewportOnly: true}) to narrow`);
+    // The exact call: `full` and every filter are part of what is being paged — page 2 without them is another view.
+    const args: Record<string, unknown> = { after: page[page.length - 1].ref, full: view.full || undefined, query: view.query, viewportOnly: view.viewportOnly || undefined, within: view.within, limit: view.limit };
+    bits.push(`next page: snapshot({${Object.entries(args).filter(([, v]) => v !== undefined).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join(", ")}})`);
   }
-  const footer = notes.length ? `\n\n… ${restarted}${notes.join(" · ")}. Refs not shown here still work.` : restarted ? `\n\n… ${restarted.trim()}` : "";
-  return { text: body + summary + footer, shown: page.map((e) => e.ref) };
+  if (hiddenSummary) {
+    const where = summary ? `under "Hidden right now" below` : "on the first page";
+    const counted = hiddenSummary.total - hiddenSummary.named;
+    bits.push(counted ? `${hiddenSummary.total} hidden: ${hiddenSummary.named} named by ref ${where}, ${counted} only counted there` : `${hiddenSummary.total} hidden, all named by ref ${where}`);
+  }
+  if (listed === total) bits.push("that is the whole page");
+  else if (narrowed) bits.push("snapshot({full: true}) with no filter lists every element, page by page");
+  else if (!view.full) bits.push(WHOLE_PAGE);
+  return { text: `${coverage(bits)}\n\n${body}${summary}`, shown: page.map((e) => e.ref), continued: start > 0 };
 }
 
 /** One-line summary of what an action changed, appended after action tools so

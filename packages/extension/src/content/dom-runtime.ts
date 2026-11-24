@@ -48,6 +48,13 @@ export async function bcpDomRuntime(
        *  elements that survive a re-snapshot, so the counter cannot restart —
        *  a fresh element must never be handed a number a live element still holds. */
       __bcpRefSeq?: number;
+      /** Every element this document ever handed a ref, with that ref. Not the
+       *  last snapshot's map: an element that drops out of one snapshot (a
+       *  closed menu's container once the menu opens, a control that loses its
+       *  pointer cursor for a moment) must get its own ref back when it returns,
+       *  or a ref the agent holds goes stale while its element is still there.
+       *  Weak, so a removed element is not kept alive by having had a ref. */
+      __bcpRefEver?: WeakMap<Element, string>;
       /** Identity of this document, minted on its first snapshot. Refs only mean
        *  something within one document; see the snapshot's return. */
       __bcpDocId?: string;
@@ -445,23 +452,26 @@ export async function bcpDomRuntime(
       return search(document);
     };
 
+    /** Whether `n` itself CARRIES a rule that hides it and what it holds.
+     *  Deliberately NOT `!isVisible(n)`: an element hidden by an ancestor is
+     *  itself invisible, so that test would name the symptom as the cause. Each
+     *  node is tested on its own declarations. Kept in step with isVisible:
+     *  `opacity:0` is no longer a cause (it does not make anything invisible),
+     *  while content-visibility and a closed <details> now are — the two the old
+     *  rule could not see. Shared by hiddenCause (why an action cannot proceed)
+     *  and snapshot's hidden groups (what a closed menu is), so both name the same
+     *  node. */
+    const carriesHideRule = (n: Element): boolean => {
+      const st = getComputedStyle(n);
+      if (st.display === "none" || st.visibility === "hidden") return true;
+      if (st.getPropertyValue("content-visibility") === "hidden") return true;
+      return n.nodeName === "DETAILS" && !(n as HTMLDetailsElement).open;
+    };
     /** The nearest ancestor (self included) that is genuinely not rendering. The
      *  element's own zero box is the symptom; this is the cause, and the only thing
      *  worth acting on. */
     const hiddenCause = (el: Element): Element => {
-      for (let n: Element | null = el; n; n = climbOut(n)) {
-        // Deliberately NOT `!isVisible(n)`: an element hidden by an ancestor is
-        // itself invisible, so that test would return the element on the first
-        // iteration and report the symptom as the cause. What is asked here is
-        // "which node CARRIES the rule", so each node is tested on its own
-        // declarations. Kept in step with isVisible: `opacity:0` is no longer a
-        // cause (it does not make anything invisible), while content-visibility
-        // and a closed <details> now are — the two the old rule could not see.
-        const st = getComputedStyle(n);
-        if (st.display === "none" || st.visibility === "hidden") return n;
-        if (st.getPropertyValue("content-visibility") === "hidden") return n;
-        if (n.nodeName === "DETAILS" && !(n as HTMLDetailsElement).open) return n;
-      }
+      for (let n: Element | null = el; n; n = climbOut(n)) if (carriesHideRule(n)) return n;
       return el;
     };
     /** aria-controls is the author's own statement of which control opens a
@@ -1200,6 +1210,53 @@ export async function bcpDomRuntime(
       };
       collect(document);
 
+      // ---- Hidden groups. A closed menu is its items plus the container whose
+      // rule hides them, and that container is routinely a role-less <ul>/<div>
+      // that nothing above collects — so the items had no common node, and a
+      // reply could only list or count them one by one. Collect the OUTERMOST
+      // node carrying a hide rule (the same per-node rule hiddenCause names when
+      // an action is refused) whenever it hides two or more collected elements:
+      // its ref then groups them through the ordinary parentRef, and
+      // snapshot({within}) lists what it hides. One hidden element alone needs
+      // no group. A collected container (a role=menu) already is the group.
+      //
+      // The search climbs parentElement — the edge parentRef nests by — so a
+      // group always holds its members (across a shadow boundary nesting does
+      // not follow, so neither does grouping). It stops at the first ancestor
+      // that shows and carries no rule: nothing above that can be what hides
+      // the element (a visibility:visible child of a visibility:hidden node is
+      // shown, and so is what it holds).
+      const visibleOf = new Map<Element, boolean>();
+      for (const el of collected) visibleOf.set(el, isVisible(el));
+      const hiddenRootMemo = new Map<Element, Element | null>();
+      const hiddenRootOf = (n: Element | null): Element | null => {
+        if (!n) return null;
+        if (hiddenRootMemo.has(n)) return hiddenRootMemo.get(n)!;
+        const rule = carriesHideRule(n);
+        const root = !rule && isVisible(n) ? null : (hiddenRootOf(n.parentElement) ?? (rule ? n : null));
+        hiddenRootMemo.set(n, root);
+        return root;
+      };
+      const groupSize = new Map<Element, number>();
+      for (const el of collected) {
+        if (visibleOf.get(el)) continue;
+        const root = hiddenRootOf(el);
+        if (root) groupSize.set(root, (groupSize.get(root) ?? 0) + 1);
+      }
+      const hiddenGroups = new Set([...groupSize].filter(([root, n]) => n >= 2 && !collected.has(root)).map(([root]) => root));
+      if (hiddenGroups.size) {
+        // Each group goes in just before its first member, so a container still
+        // precedes what it holds — the order the tree and paging assume.
+        const ordered = new Set<Element>();
+        for (const el of collected) {
+          const root = visibleOf.get(el) ? null : hiddenRootOf(el);
+          if (root && hiddenGroups.has(root)) ordered.add(root);
+          ordered.add(el);
+        }
+        collected.clear();
+        for (const el of ordered) collected.add(el);
+      }
+
       // Pass 1: assign every ref up front so parentRef resolves regardless of
       // collection order (a parent may be collected after its child).
       //
@@ -1208,13 +1265,14 @@ export async function bcpDomRuntime(
       // caller's refs all went stale on any re-render (its own description said
       // so), and nothing could be compared across two snapshots — so every read
       // handed back the whole page with no indication of what was new. Identity
-      // is what makes both fixable, and the reverse map that provides it was
-      // already being published for page_state.
-      const prevRefOf = store.__bcpRefOf;
+      // is what makes both fixable. An element keeps its ref for as long as it
+      // exists, collected or not in between (see __bcpRefEver).
+      const refEver = (store.__bcpRefEver ??= new WeakMap<Element, string>());
       let seq = store.__bcpRefSeq ?? 0;
       const elToRef = new WeakMap<Element, string>();
       for (const el of collected) {
-        const ref = prevRefOf?.get(el) ?? `e${++seq}`;
+        let ref = refEver.get(el);
+        if (!ref) refEver.set(el, (ref = `e${++seq}`));
         newRefs.set(ref, el);
         elToRef.set(el, ref);
       }
@@ -1316,7 +1374,9 @@ export async function bcpDomRuntime(
         // group caught it. It costs one extra getBoundingClientRect inside
         // isVisible (the layout is already clean, so it is a cache hit), and
         // that is worth more than a predicate that only LOOKS like the others.
-        const visible = isVisible(el);
+        // Already computed for the hidden groups above; a group node is the one
+        // element that was not, and it is the same predicate either way.
+        const visible = visibleOf.get(el) ?? isVisible(el);
         // Never drop an element — a hidden/disabled node is still worth perceiving
         // (e.g. a file <input> concealed behind a styled button). Mark state instead.
         const hidden = !visible || undefined;
@@ -1377,6 +1437,7 @@ export async function bcpDomRuntime(
           // as the clickable body. Flagging either would have the tool text tell
           // the agent to act on its children instead of on the control itself.
           container: (role === "generic" && !clickable && nameFromText(el)) || undefined,
+          hiddenGroup: hiddenGroups.has(el) || undefined,
         });
       }
       // Pass 3: a ref that others point at is a GROUPING node. Combined with the

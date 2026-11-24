@@ -1,37 +1,42 @@
 {
   "baidu-home": {
-    "replyTokens": 802,
+    "replyTokens": 1270,
     "pages": 1,
-    "listed": 42
+    "listed": 40
   },
   "bilibili-home": {
-    "replyTokens": 904,
+    "replyTokens": 1126,
     "pages": 1,
-    "listed": 42
+    "listed": 43
   },
   "github-trending": {
-    "replyTokens": 2632,
+    "replyTokens": 2692,
     "pages": 1,
-    "listed": 218
+    "listed": 216
   },
   "hn-list": {
-    "replyTokens": 2778,
+    "replyTokens": 2742,
     "pages": 1,
-    "listed": 229
+    "listed": 227
   },
   "jd-corporate": {
-    "replyTokens": 820,
+    "replyTokens": 901,
     "pages": 1,
     "listed": 51
   },
   "mdn-select": {
-    "replyTokens": 6920,
+    "replyTokens": 7857,
     "pages": 1,
-    "listed": 482
+    "listed": 485
+  },
+  "w3c-modal-dialog": {
+    "replyTokens": 1446,
+    "pages": 1,
+    "listed": 74
   },
   "wikipedia-list": {
-    "replyTokens": 8018,
+    "replyTokens": 7873,
     "pages": 3,
-    "listed": 1458
+    "listed": 1452
   }
 }

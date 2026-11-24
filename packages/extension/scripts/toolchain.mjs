@@ -57,8 +57,17 @@ export async function loadPlaywright() {
 
 /** The runtime module's exports, bundled from source exactly as the extension ships them. */
 export async function bundleRuntime(esbuild) {
+  return bundle(esbuild, RUNTIME_TS);
+}
+
+/** The dispatcher's frame merge (src/snapshot-merge.ts), bundled from source. */
+export async function bundleFrameMerge(esbuild) {
+  return bundle(esbuild, pathResolve(HERE, "../src/snapshot-merge.ts"));
+}
+
+async function bundle(esbuild, entry) {
   const built = await esbuild.build({
-    entryPoints: [RUNTIME_TS],
+    entryPoints: [entry],
     bundle: true, format: "esm", target: "es2022", write: false, logLevel: "silent",
   });
   return import("data:text/javascript;base64," + Buffer.from(built.outputFiles[0].text).toString("base64"));

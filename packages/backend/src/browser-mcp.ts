@@ -382,13 +382,15 @@ export function createBrowserMcpServer(
   // the tab actually read: with no tabId the read lands on whichever tab is active, and tab ids repeat across
   // browsers. Backend-internal reads (pick_option, plan runners) never touch it.
   const shownLedger = new ShownLedger();
-  const readSnapshot: ReadSnapshot = async (tabId, view, tool) => {
+  const readSnapshot: ReadSnapshot = async (tabId, view) => {
     const target = resolvedTarget() ?? undefined;
     const r = await call(RpcMethod.Snapshot, { tabId }, target);
-    const rendered = renderSnapshotView(r.elements, view, { tool });
-    // A `full` read starts the record over — on its first page only, or paging through it would keep just the last.
-    const seen = shownLedger.read(`${target?.instanceId}:${r.tabId}`, r.docs, r.elements, rendered.shown, { reset: view.full && !view.after });
-    return { ...r, text: rendered.text + renderShownDelta(seen.diff), commit: seen.commit };
+    const rendered = renderSnapshotView(r.elements, view);
+    // A `full` read of the whole page starts the record over: on its first page only, or paging through it would
+    // keep just the last; and not when narrowed, or the record would shrink to what one search matched.
+    const reset = !!view.full && !view.after && !view.query && !view.within && !view.viewportOnly;
+    const seen = shownLedger.read(`${target?.instanceId}:${r.tabId}`, r.docs, r.elements, rendered.shown, { reset });
+    return { ...r, text: rendered.text + renderShownDelta(seen.diff, { continuation: rendered.continued }), commit: seen.commit };
   };
   registerDomTools({ server, call, deltaKey, drainEvents, readDumps, readSnapshot });
   registerCaptureTools({ server, call, deltaKey, drainEvents, captureWithLease, readDumps, readSnapshot });

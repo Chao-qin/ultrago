@@ -174,7 +174,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
     name: "snapshot",
     annotations: TOOL_HINTS.read,
     description:
-      "List the page's interactable elements with [ref] handles, each with its state ([disabled], [checked], [expanded], [invalid: …] …), viewport box (x,y w×h) and visual layer (@dialog:…, @fixed-…). Covers iframes (frame-prefixed refs; elements in cross-origin frames have no box) and open shadow roots. Hidden elements are summarised under \"Hidden right now\" (a closed menu is one line) instead of listed, except inputs and selects; expand one with within, search them with query, or list everything with full. A ref stays valid while its element exists, and the reply names the refs that are new to you or changed since your last snapshot, and says when the page became a new document. Large pages are paged: narrow with query or viewportOnly, or continue with after. " +
+      "List the page's interactable elements with [ref] handles, each with its state ([disabled], [checked], [expanded], [invalid: …] …), viewport box (x,y w×h) and visual layer (@dialog:…, @fixed-…). Covers iframes (frame-prefixed refs; elements in cross-origin frames have no box) and open shadow roots. Hidden elements are named by [ref] under \"Hidden right now\" instead of listed (a closed menu is one line; past the summary's budget the rest are counted); expand one with within, search them with query, or list everything with full. The first line of every reply says what it covers and gives the exact call for the rest. A ref stays valid while its element exists, and the reply names the refs that are new to you or changed since your last snapshot, and says when the page became a new document. Large pages are paged: narrow with query or viewportOnly, or continue with after. " +
       "It has no page text (read_content), pixels (screenshot) or readiness and form state (page_state); analyze_page returns all of them.",
     params: {
       query: "Only elements whose role, name, value or options contain this text (case-insensitive), e.g. \"登录\" or \"textbox\"",
@@ -344,7 +344,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
     annotations: TOOL_HINTS.pageAction,
     description:
       "Attach files to an <input type=file> without the OS file dialog. Source: `url` (fetched by the backend, http(s) only, private and loopback hosts refused, sent with a same-origin Referer), `localPath` (a file on the backend host) or `attachments` (a list of either); 25MB per file. " +
-      "Target the input by ref, or describe the visible upload slot — a slot inside a <label> resolves to its input; otherwise use the input's [ref] (snapshot lists hidden inputs too). " +
+      "Target the input by ref, or describe the visible upload slot — a slot inside a <label> resolves to its input; otherwise use the input's [ref] (a hidden one is named under the snapshot's \"Hidden right now\", or find it with snapshot({query: \"file\"})). " +
       "Each attachment is a separate change event that replaces input.files: uploaders that add one file per change get them all, a plain <input multiple> keeps only the last, and galleries that re-render between files can drop some (give those one file per plan step). " +
       "Uploaders that require a real user gesture reject injected files — ask the user to attach those by hand.",
     params: {

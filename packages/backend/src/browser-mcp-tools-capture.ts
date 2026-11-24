@@ -121,7 +121,7 @@ export function registerCaptureTools({ server, call, deltaKey, drainEvents, capt
         // whole analysis — the snapshot + text are the point; degrade the shot.
         const [{ tabs }, snapshot, content, stateOrErr, shotOrErr] = await Promise.all([
           call(RpcMethod.ListTabs, {}),
-          readSnapshot(tabId, {}, "analyze_page"),
+          readSnapshot(tabId, {}),
           call(RpcMethod.ReadContent, { maxChars, full: true, tabId }),
           // analyze_page composes page_state for its STATE layer (DRY) rather
           // than re-deriving readiness/focus/forms/scroll separately.

@@ -40,13 +40,37 @@ test("pick_option 展开没出现新元素时退回整页匹配并如实标出",
   assert.equal(r.fromRevealedList, false);
 });
 
-test("pick_option 的触发器跳转了页面时，新页面的同名 ref 不被当成展开前就可见的", async () => {
+test("pick_option 的触发器跳转了页面时，什么也不选，直说触发器不是开这个列表的", async () => {
   const opt = { ref: "e1", tag: "li", role: "option", name: "北京" };
   let snaps = 0;
+  const clicks: unknown[] = [];
+  const call = async (method: string, params: unknown) => {
+    if (method === RpcMethod.Click) clicks.push(params);
+    return method === RpcMethod.Snapshot ? { url: "https://x/next", elements: [opt], docs: { "0": snaps++ === 0 ? "old" : "new" } } : { ok: true };
+  };
+  await assert.rejects(pickOption(call, { ref: "e0", option: "北京" }), /navigated to a new document \(https:\/\/x\/next\).*nothing was picked/);
+  assert.equal(clicks.length, 1, "只点了触发器，没有在新页面上点任何选项");
+});
+
+test("pick_option 期间换了文档的子帧（广告、挂件）不算触发器打开的列表", async () => {
+  const before = [{ ref: "e1", tag: "button", role: "button", name: "城市" }, { ref: "42_e1", tag: "a", role: "link", name: "北京" }];
+  const after = [...before, { ref: "e2", tag: "li", role: "option", name: "上海" }];
+  let snaps = 0;
   const call = async (method: string) =>
-    method === RpcMethod.Snapshot ? { elements: [opt], docs: { "0": snaps++ === 0 ? "old" : "new" } } : { ok: true };
-  const r = await pickOption(call, { ref: "e0", option: "北京" });
-  assert.equal(r.fromRevealedList, true, "跳转后 e1 是另一个文档里的元素");
+    method === RpcMethod.Snapshot
+      ? (snaps++ === 0 ? { elements: before, docs: { "0": "top", "42": "ad1" } } : { elements: after, docs: { "0": "top", "42": "ad2" } })
+      : { ok: true };
+  const r = await pickOption(call, { ref: "e1", option: "北京" }).catch((e) => e);
+  assert.match(String(r), /not found in the list the trigger opened/, "重载的子帧里的「北京」不在展开的列表里");
+});
+
+test("pick_option 不把隐藏分组的容器当选项：退回整页匹配时，可见的关着的 details 名字里含选项文字也不选它", async () => {
+  const page = [
+    { ref: "e1", tag: "button", role: "button", name: "城市" },
+    { ref: "e2", tag: "details", role: "generic", name: "城市 北京 上海", container: true, hiddenGroup: true },
+  ];
+  const call = async (method: string) => (method === RpcMethod.Snapshot ? { elements: page, docs: { "0": "d" } } : { ok: true });
+  await assert.rejects(pickOption(call, { ref: "e1", option: "北京" }), /not found on the page/, "触发器什么也没展开，整页上也没有叫「北京」的控件");
 });
 
 test("pick_option 遇到不带 docs 的旧扩展，仍按展开前后的可见性找新显示的选项", async () => {

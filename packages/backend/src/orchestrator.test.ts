@@ -174,6 +174,17 @@ test("verify.textPresent: 编辑器把换行存成零宽字符时，多行正文
   assert.equal(result.kind, "complete", "内容确实在页面上，就不该判失败");
 });
 
+test("verify.elementName: 关着的菜单的分组容器不是控件，它拼起来的文字不能顶替一个叫这个名字的元素", async () => {
+  const runner = new PlanRunner({
+    ...evidence,
+    pageState: async () => settledPage,
+    snapshot: async () => ({ elements: [{ ref: "e1", tag: "ul", role: "generic", name: "北京 上海 保存成功", container: true, hiddenGroup: true, hidden: true }] }),
+  } as unknown as EvidenceReader);
+  const { planId } = await runner.create("g", [{ goal: "save", verify: { elementName: "保存成功" } }]);
+  const result = await runner.advance(planId);
+  assert.notEqual(result.kind, "complete", "页面上没有叫「保存成功」的元素");
+});
+
 test("verify.textPresent: 归一化不放水 —— 页面真没有的文本照样失败", async () => {
   const runner = new PlanRunner({
     ...evidence,

@@ -13,6 +13,7 @@
  * "you already read this".
  */
 import type { SnapshotElement } from "@bcp/shared";
+import { elementLine } from "./browser-mcp-render.js";
 
 export interface ShownDiff {
   /** Nothing earlier to compare with: the first read of this tab, or the top document changed. */
@@ -25,8 +26,8 @@ export interface ShownDiff {
   gone: number;
   /** Listed while visible before, hidden now. */
   hiddenAgain: number;
-  /** Sub-frames whose document changed; their earlier refs are gone. */
-  framesNavigated: number;
+  /** Sub-frames (frameIds, as in `docs`) whose document changed; their earlier refs are gone. */
+  framesNavigated: string[];
   /** How many refs this observer had been shown before this read. */
   known: number;
 }
@@ -34,14 +35,13 @@ export interface ShownDiff {
 /** A read compared with the record, not yet recorded: `commit` once the reply carrying it is delivered. */
 export interface ShownRead { diff: ShownDiff; commit(): void }
 
-/** What a line in the reply asserts about an element, minus geometry: an element that merely scrolled has not
- *  changed. */
-function signature(e: SnapshotElement): string {
-  return JSON.stringify([e.role, e.name, e.value, e.checked, e.expanded, e.disabled, e.hidden, e.invalid, e.invalidMessage, e.busy, e.options, e.controls, e.zone]);
-}
+/** What the reply's line says about an element, minus where it is: CHANGED means the line the reader has would now
+ *  read differently — no more (a name changed past what the line shows), no less (a field the line shows). An
+ *  element that merely scrolled has not changed. */
+const signature = (e: SnapshotElement): string => elementLine(e, { geometry: false });
 
 /** Frame a ref belongs to, in the same keys as `docs`: sub-frame refs carry their frameId as a prefix. */
-const frameOf = (ref: string): string => /^(\d+)_/.exec(ref)?.[1] ?? "0";
+export const frameOf = (ref: string): string => /^(\d+)_/.exec(ref)?.[1] ?? "0";
 
 /** Per listed ref: its line, and whether it was hidden when listed (query/within/full list hidden elements). */
 interface Seen { docs: Record<string, string>; shown: Map<string, { sig: string; hidden: boolean }> }
@@ -61,11 +61,13 @@ export class ShownLedger {
    */
   read(key: string, docs: Record<string, string> | undefined, elements: SnapshotElement[], shown: Iterable<string>, opts: { reset?: boolean } = {}): ShownRead {
     const prev = this.tabs.get(key);
-    const diff: ShownDiff = { appeared: [], changed: [], gone: 0, hiddenAgain: 0, framesNavigated: 0, known: prev?.shown.size ?? 0 };
+    const diff: ShownDiff = { appeared: [], changed: [], gone: 0, hiddenAgain: 0, framesNavigated: [], known: prev?.shown.size ?? 0 };
     if (!docs) return { diff: { ...diff, fresh: "first", known: 0 }, commit: () => void this.tabs.delete(key) };
 
     const byRef = new Map(elements.map((e) => [e.ref, e] as const));
-    const shownNow = [...shown].filter((ref) => byRef.has(ref));
+    // A hidden group is a device for naming hidden elements, not one of the page's elements: recording it would
+    // count its disappearance (the menu opened) as an element gone, against the Coverage line's own count.
+    const shownNow = [...shown].filter((ref) => byRef.has(ref) && !byRef.get(ref)!.hiddenGroup);
     const listedNow = new Set(shownNow);
     const next: Seen = { docs, shown: new Map() };
     if (!prev || opts.reset) diff.fresh = "first";
@@ -73,7 +75,7 @@ export class ShownLedger {
     else {
       // A frame that is gone entirely is not "navigated": its refs fall through and count as gone.
       const navigated = new Set(Object.keys(prev.docs).filter((f) => f in docs && prev.docs[f] !== docs[f]));
-      diff.framesNavigated = navigated.size;
+      diff.framesNavigated = [...navigated];
       for (const [ref, seen] of prev.shown) {
         if (navigated.has(frameOf(ref))) continue;
         const e = byRef.get(ref);

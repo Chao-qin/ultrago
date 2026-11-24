@@ -846,6 +846,13 @@ export interface SnapshotElement {
    * its descendants' text concatenated (the innerText fallback). Its name is
    * truncated hard, because the real targets are its children. */
   container?: boolean;
+  /** Not a control: collected only because it is the outermost node whose own
+   * rule (display:none, visibility:hidden, content-visibility:hidden, a closed
+   * <details>) hides two or more collected elements — a closed menu, a collapsed
+   * section. What it hides nests under it through parentRef, so its ref names the
+   * whole group. `hidden` is its own visibility: a closed <details> still shows
+   * its summary while hiding the rest. */
+  hiddenGroup?: boolean;
 }
 
 /* ------------------------------------------------------------------ *

@@ -37,6 +37,13 @@ function match(actual, re, label) {
   failures.push(`${label}\n    expected to match: ${re}\n    actual:            ${JSON.stringify(actual)}`);
 }
 
+/** The nearest ancestor of `e` (by parentRef) that is a hidden group, or undefined. */
+function climb(els, e) {
+  const byRef = new Map(els.map((x) => [x.ref, x]));
+  for (let p = e && byRef.get(e.parentRef); p; p = byRef.get(p.parentRef)) if (p.hiddenGroup) return p.ref;
+  return undefined;
+}
+
 async function main() {
   const esbuild = await loadEsbuild();
   const pw = await loadPlaywright();
@@ -1130,11 +1137,12 @@ async function main() {
     eq(after.value.docId === before.value.docId, false, "so it must report a different docId");
   });
 
-  // A default reply summarises hidden elements but keeps hidden form fields,
-  // keyed on the tag: a concealed file input is upload_file's target, a native
-  // <select> under a custom dropdown is select_option's. And a menu rendered up
-  // front and hidden by CSS keeps its refs when it opens — only the hidden flag
-  // flips, which is what makes it "new to you" in the backend.
+  // Hidden elements are still collected and reported with their tag — a
+  // concealed file input is upload_file's target, a native <select> under a
+  // custom dropdown is select_option's — and the backend names them by ref. A
+  // menu rendered up front and hidden by CSS keeps its refs when it opens —
+  // only the hidden flag flips, which is what makes it "new to you" in the
+  // backend.
   await withPage(
     `<label>上传<input id="file" type="file" style="display:none"></label>
      <select id="native" style="display:none"><option>北京</option></select>
@@ -1151,6 +1159,62 @@ async function main() {
       const open = await t.call("snapshot", {});
       eq(of(open, t.ref("opt"))?.hidden, undefined, "opening the menu flips it to visible");
       eq(open.value.docId, closed.value.docId, "without changing the document");
+    },
+  );
+
+  // ---- Hidden groups. A closed menu's container is routinely a role-less
+  // <ul>/<div> that nothing else collects, so its items had no common ref and
+  // the backend could only list or count them one by one. The runtime collects
+  // the OUTERMOST node whose own rule hides two or more collected elements —
+  // the same rule hiddenCause names when an action is refused.
+  await withPage(
+    `<button id="trigger">菜单</button>
+     <nav id="outer" style="display:none">
+       <a href="#" id="top">首页</a>
+       <ul id="inner" style="display:none"><li><a href="#" id="a1">甲</a></li><li><a href="#" id="a2">乙</a></li></ul>
+     </nav>
+     <div id="solo-wrap" style="display:none"><a href="#" id="solo">落单</a></div>
+     <div role="menu" id="menu" style="display:none"><a href="#" id="m1">一</a><a href="#" id="m2">二</a></div>
+     <details id="det"><summary id="sum">更多</summary><a href="#" id="d1">导出</a><a href="#" id="d2">删除</a></details>
+     <div style="visibility:hidden"><a href="#" id="vis-back" style="visibility:visible">仍可见</a><a href="#" id="v1">藏</a></div>
+     <div id="va" style="visibility:hidden"><div style="visibility:visible"><button id="vb">可见</button>
+       <ul id="vu" style="display:none"><li><a href="#" id="vu1">x</a></li><li><a href="#" id="vu2">y</a></li></ul></div></div>
+     <div id="sw" style="display:none"><span id="shost"></span></div>
+     <script>document.getElementById("shost").attachShadow({ mode: "open" }).innerHTML = '<a href="#">影一</a><a href="#">影二</a>';</script>`,
+    async (t) => {
+      const els = (await t.call("snapshot", {})).value.elements;
+      const refOfEl = await page.evaluate(() => {
+        const out = {};
+        for (const [ref, el] of globalThis.__bcpRefs) if (el.id) out[el.id] = ref;
+        return out;
+      });
+      const of = (id) => els.find((e) => e.ref === refOfEl[id]);
+      const groups = els.filter((e) => e.hiddenGroup);
+      eq(of("outer")?.hiddenGroup, true, "the outermost hiding node of a role-less menu is collected as its group");
+      eq(of("inner"), undefined, "a hiding node inside another is not a second group: the outermost one names the subtree");
+      for (const id of ["top", "a1", "a2"]) eq(climb(els, of(id)), refOfEl.outer, `${id} nests under the group through parentRef`);
+      eq(of("solo-wrap"), undefined, "a node hiding a single collected element is no group — that element stands alone");
+      eq(of("menu")?.hiddenGroup, undefined, "an already collected container (role=menu) is the group itself, nothing is added");
+      eq(of("det")?.hiddenGroup, true, "a closed <details> groups what it hides");
+      eq(of("det")?.hidden, undefined, "while the <details> itself still shows (its summary)");
+      eq(of("sum")?.parentRef, refOfEl.det, "the summary nests under it too");
+      eq(of("vis-back")?.hidden, undefined, "a child that overrides visibility:hidden is visible and not grouped");
+      eq(of("vu")?.hiddenGroup, true, "under a visibility override the group is the node that really hides the items");
+      eq(of("va"), undefined, "not the visibility:hidden ancestor whose visible child shows them");
+      eq(of("vb")?.hidden, undefined, "and the visible button beside them is no member of anything hidden");
+      eq(of("sw"), undefined, "a host hidden from outside its shadow root is no group: nesting does not cross into the shadow tree, so the group could hold none of it");
+      eq(groups.length, 3, "exactly three groups: the nav, the details and the overridden list");
+      // Whatever the page, a group must hold what it stands for: it is collected only to name them.
+      for (const g of groups) eq(els.filter((e) => climb(els, e) === g.ref).length >= 2, true, `group ${g.ref} holds at least two members through parentRef`);
+      const order = els.map((e) => e.ref);
+      eq(order.indexOf(refOfEl.outer) < order.indexOf(refOfEl.top), true, "a group precedes what it holds, as the tree and paging assume");
+      await page.evaluate(() => { document.getElementById("outer").style.display = "block"; document.getElementById("inner").style.display = "block"; });
+      const open = (await t.call("snapshot", {})).value.elements;
+      eq(open.some((e) => e.hiddenGroup && e.ref === refOfEl.outer), false, "an opened menu is no longer a hidden group");
+      eq(open.find((e) => e.ref === refOfEl.a1)?.hidden, undefined, "and its items keep their refs, now visible");
+      await page.evaluate(() => { document.getElementById("outer").style.display = "none"; });
+      const closedAgain = (await t.call("snapshot", {})).value.elements;
+      eq(closedAgain.find((e) => e.hiddenGroup && e.name?.includes("首页"))?.ref, refOfEl.outer, "closed again, the group gets its own ref back: the agent's ref did not go stale while the node existed");
     },
   );
 

@@ -23,7 +23,6 @@ export type BrowserCall = <M extends RpcMethod>(
 export type ReadSnapshot = (
   tabId: number | undefined,
   view: SnapshotView,
-  tool?: "snapshot" | "analyze_page",
 ) => Promise<RpcContracts[typeof RpcMethod.Snapshot]["result"] & { text: string; commit(): void }>;
 
 /** The injected dispatcher call — target REQUIRED (the readiness gate lives

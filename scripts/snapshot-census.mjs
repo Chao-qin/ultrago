@@ -7,8 +7,8 @@
  * the renderer shows up here as a number instead of an impression. Offline and deterministic.
  *
  *   node scripts/snapshot-census.mjs           # print the table
- *   node scripts/snapshot-census.mjs --check   # CI: fail if a default reply grew >5%, needs more pages, or lists a
- *                                              #     different number of elements than the baseline
+ *   node scripts/snapshot-census.mjs --check   # CI: fail if a default reply moved more than 5% either way, takes a
+ *                                              #     different number of pages, or lists a different number of elements
  *   node scripts/snapshot-census.mjs --write   # record the current numbers as the baseline (bench/snapshot-census.json)
  *
  * Columns: "full" renders every element with no paging and no summary — paging caps a single reply at 30k
@@ -18,9 +18,26 @@
  * Tokens are an ESTIMATE (CJK character ≈ 1 token, other text ≈ 3.5 characters per token): good for comparing two
  * renderings of the same page, not for absolute cost. Nothing is sent to a tokenizer service — page text stays here.
  *
- * Missing data or a missing backend build exits 2: a census that measured nothing must never read as a pass.
+ * The baseline is two-way on purpose. A reply that shrank may have dropped what it must show, and a shrink left out of
+ * the baseline is room a later regression can grow back into unnoticed — so any move past 5% asks for --write, which
+ * puts the new numbers in front of a reviewer.
+ *
+ * Every page is also checked for what a size cannot show: that the refs the renderer says it listed (what the ledger
+ * records as shown) are exactly the refs printed in the reply, and that the Coverage line's hidden accounting adds up
+ * — its hidden total is the page's hidden elements, and what it says is named by ref plus what it says is only
+ * counted is that total, with each named one really a line of the summary. A renderer that printed less than it
+ * reports would otherwise pass every size check while telling the agent it has seen, or can find, what it cannot.
+ *
+ * The snapshots are raw runtime output, so a change to how the runtime collects is only measured after a
+ * re-capture. Each capture records a fingerprint of the runtime it ran; when it differs from the source here, the
+ * census says so (a notice, not a failure: most runtime changes do not touch collection, and capturing needs the
+ * network).
+ *
+ * Missing data, a missing backend build or one older than the renderer's source exits 2: a census that measured
+ * nothing, or measured some other renderer, must never read as a pass.
  */
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -28,11 +45,17 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DATA = resolve(ROOT, "bench/snapshots");
 const BASELINE = resolve(ROOT, "bench/snapshot-census.json");
 const RENDER = resolve(ROOT, "packages/backend/dist/browser-mcp-render.js");
-const GROWTH = 1.05;
+const RENDER_SRC = resolve(ROOT, "packages/backend/src/browser-mcp-render.ts");
+const RUNTIME_SRC = resolve(ROOT, "packages/extension/src/content/dom-runtime.ts");
+const DRIFT = 0.05;
 
 const files = existsSync(DATA) ? readdirSync(DATA).filter((f) => f.endsWith(".json")).sort() : [];
 if (!files.length || !existsSync(RENDER)) {
   console.error(`snapshot-census: ${files.length ? "" : `no snapshots in ${DATA}; `}${existsSync(RENDER) ? "" : `no backend build at ${RENDER} (pnpm --filter @bcp/backend build)`}. Exiting 2.`);
+  process.exit(2);
+}
+if (statSync(RENDER).mtimeMs < statSync(RENDER_SRC).mtimeMs) {
+  console.error(`snapshot-census: the backend build is older than ${RENDER_SRC} — it would measure the previous renderer (pnpm --filter @bcp/backend build). Exiting 2.`);
   process.exit(2);
 }
 const { renderSnapshot, renderSnapshotView } = await import(RENDER);
@@ -41,17 +64,41 @@ const tokens = (s) => {
   const cjk = (s.match(/[　-鿿＀-￯]/g) ?? []).length;
   return Math.round(cjk + (s.length - cjk) / 3.5);
 };
-/** Reading the whole default view by following `after`: how many replies it takes and how many refs they list.
- *  The listed count is the two-way half of the guard — a reply can also shrink by dropping what it must list. */
-const readAll = (els) => {
+/** The refs a reply prints as element lines: after the Coverage line, before the hidden summary (whose lines name
+ *  refs the reply did not list). */
+const printedRefs = (text) => {
+  const body = text.split("\n\nHidden right now (")[0].split("\n").slice(1);
+  return body.map((l) => /^\s*\[([^\]]+)\] /.exec(l)?.[1]).filter(Boolean);
+};
+const mismatches = [];
+/** Reading the whole default view by following `after`: how many replies it takes and how many refs they list. */
+/** The first page's hidden accounting, checked against the page itself and against the summary it prints. */
+const checkHidden = (page, els, text) => {
+  const hidden = els.filter((e) => e.hidden && !e.hiddenGroup).length;
+  const cov = text.split("\n")[0];
+  const all = /· (\d+) hidden, all named by ref/.exec(cov);
+  const part = /· (\d+) hidden: (\d+) named by ref .*?, (\d+) only counted there/.exec(cov);
+  const [total, named, counted] = all ? [+all[1], +all[1], 0] : part ? [+part[1], +part[2], +part[3]] : [0, 0, 0];
+  const summary = text.split("\n\nHidden right now (")[1] ?? "";
+  const lines = summary.split("\n").slice(1);
+  const inLines = lines.reduce((n, l) => n + (/^ {2}\[[^\]]+\] /.test(l) ? Number(/ — holds (\d+) hidden$/.exec(l)?.[1] ?? 1) : 0), 0);
+  const more = Number(/^ {2}… (\d+) more hidden/m.exec(summary)?.[1] ?? 0);
+  if (total !== hidden || named + counted !== total || inLines !== named || more !== counted)
+    mismatches.push(`${page}: hidden accounting — page has ${hidden} hidden; Coverage says ${total} (${named} named, ${counted} counted); the summary names ${inLines} and counts ${more}`);
+};
+const readAll = (page, els) => {
   let pages = 0;
   let listed = 0;
   let after;
   for (;;) {
     pages++;
     const r = renderSnapshotView(els, { after });
+    if (pages === 1) checkHidden(page, els, r.text);
+    const printed = printedRefs(r.text);
+    // The same refs, not the same order: the reply prints a tree, `shown` follows the element list.
+    if ([...printed].sort().join() !== [...r.shown].sort().join()) mismatches.push(`${page} page ${pages}: the reply prints ${printed.length} refs, the renderer reports ${r.shown.length} as listed`);
     listed += r.shown.length;
-    const next = /after: "([^"]+)"/.exec(r.text)?.[1];
+    const next = /next page: snapshot\(\{after: "([^"]+)"/.exec(r.text)?.[1];
     if (!next || pages > 100) return { pages, listed };
     after = next;
   }
@@ -60,16 +107,19 @@ const pct = (part, whole) => (whole ? `${Math.round((part / whole) * 100)}%` : "
 
 const rows = files.map((f) => {
   const { name, elements } = JSON.parse(readFileSync(resolve(DATA, f), "utf8"));
+  const page = name ?? f.replace(/\.json$/, "");
   const full = renderSnapshot(elements);
+  const reply = renderSnapshotView(elements).text;
   const lines = full.split("\n");
   const share = (re) => pct(lines.filter((l) => re.test(l)).length, lines.length);
   const chars = (re) => pct((full.match(re) ?? []).join("").length, full.length);
   return {
-    page: name ?? f.replace(/\.json$/, ""),
+    page,
     elements: elements.length,
     fullTokens: tokens(full),
-    replyTokens: tokens(renderSnapshotView(elements).text),
-    ...readAll(elements),
+    replyChars: reply.length,
+    replyTokens: tokens(reply),
+    ...readAll(page, elements),
     hidden: share(/\[hidden\]/),
     offscreen: share(/\[offscreen\]/),
     group: share(/\(group\)/),
@@ -86,13 +136,23 @@ const median = (k) => {
   return v.length % 2 ? v[m] : Math.round((v[m - 1] + v[m]) / 2);
 };
 const sum = (k) => rows.reduce((t, r) => t + r[k], 0);
-const numeric = ["elements", "listed", "fullTokens", "replyTokens", "pages"];
+const numeric = ["elements", "listed", "fullTokens", "replyChars", "replyTokens", "pages"];
 console.table([
   ...rows,
   Object.fromEntries([["page", "median"], ...numeric.map((k) => [k, median(k)])]),
   Object.fromEntries([["page", "P90"], ...numeric.map((k) => [k, quantile(k, 0.9)])]),
   Object.fromEntries([["page", "total"], ...numeric.map((k) => [k, sum(k)])]),
 ]);
+
+const runtimeHash = createHash("sha256").update(readFileSync(RUNTIME_SRC)).digest("hex").slice(0, 12);
+const stale = files.filter((f) => JSON.parse(readFileSync(resolve(DATA, f), "utf8")).runtime !== runtimeHash);
+if (stale.length)
+  console.log(`snapshot-census: notice — ${stale.length} of ${files.length} snapshots were captured with a different dom-runtime.ts (${runtimeHash} now). If the change touches what a snapshot collects, re-capture: pnpm --filter @bcp/extension snapshot:capture`);
+
+if (mismatches.length) {
+  console.error(`snapshot-census: what the renderer reports as listed is not what it printed:\n  ${mismatches.join("\n  ")}`);
+  process.exit(1);
+}
 
 const mode = process.argv[2];
 const current = Object.fromEntries(rows.map((r) => [r.page, { replyTokens: r.replyTokens, pages: r.pages, listed: r.listed }]));
@@ -110,7 +170,7 @@ if (mode === "--write") {
     const b = base[page];
     const c = current[page];
     if (!b || !c) problems.push(`${page}: ${b ? "snapshot missing" : "not in the baseline"} — re-run with --write if that is intended`);
-    else if (c.replyTokens > b.replyTokens * GROWTH || c.pages > b.pages || c.listed !== b.listed)
+    else if (Math.abs(c.replyTokens - b.replyTokens) > b.replyTokens * DRIFT || c.pages !== b.pages || c.listed !== b.listed)
       problems.push(`${page}: default reply ${b.replyTokens} → ${c.replyTokens} tokens, ${b.pages} → ${c.pages} page(s), ${b.listed} → ${c.listed} listed`);
   }
   if (problems.length) {

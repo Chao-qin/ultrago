@@ -839,7 +839,9 @@ export class PlanRunner {
 
     if (needsSnapshot) {
       const { elements } = await this.evidence.snapshot(planId, page);
-      const named = (q: string) => elements.filter((e) => e.name && e.name.includes(q));
+      // A hidden group is the container of a closed menu, named by all the text it holds: not an element anyone
+      // could interact with, and its name would match any one of its items' names.
+      const named = (q: string) => elements.filter((e) => !e.hiddenGroup && e.name && e.name.includes(q));
       if (v.elementName != null && named(v.elementName).length === 0)
         failed.push(`no interactable element named "${v.elementName}" (plain-text banners aren't in the snapshot — use textPresent for status text)`);
       if (v.elementChecked != null && !named(v.elementChecked).some((e) => e.checked === true))
