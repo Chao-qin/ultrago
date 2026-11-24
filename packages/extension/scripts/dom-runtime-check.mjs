@@ -1218,6 +1218,20 @@ async function main() {
     },
   );
 
+  // ---- A ref acts only in the document it was read in. The backend sends the
+  // docId of the read along with the ref; a document that was replaced since
+  // (navigation, reload) numbers its elements afresh, so its e1 is not the e1
+  // the caller saw.
+  await withPage(`<button id="b" onclick="document.body.dataset.hit = '1'">保存</button>`, async (t) => {
+    const docId = (await t.call("snapshot", {})).value.docId;
+    const stale = await t.call("click", { ref: t.ref("b"), expectDoc: "another-document" });
+    match(stale.error ?? "", /was read from a document this frame no longer shows .* Nothing was done/, "a ref from another document is refused, and says why");
+    eq(await page.evaluate(() => document.body.dataset.hit ?? null), null, "and nothing was clicked");
+    const ok = await t.call("click", { ref: t.ref("b"), expectDoc: docId });
+    eq(ok.error, undefined, "the same document acts normally");
+    eq(await page.evaluate(() => document.body.dataset.hit ?? null), "1");
+  });
+
   // ---- Page dialogs during an action are answered AND reported. The shim runs in
   // the page's MAIN world around every in-page action (the extension installs it
   // and calls the restore afterwards); here both run in the page the same way.

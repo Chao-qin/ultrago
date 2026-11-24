@@ -28,6 +28,8 @@ export async function bcpDomRuntime(
      toRef?: string; dragMethod?: "html5" | "pointer"; filename?: string; mimeType?: string; dataBase64?: string; dataBase64s?: string[];
     exact?: boolean; nth?: number;
     verbosity?: "summary" | "detail"; resetDelta?: boolean; deltaKey?: string;
+    /** The document this call's [ref] was read in (the snapshot's docId for this frame). */
+    expectDoc?: string;
   },
 ): Promise<{ value?: unknown; error?: string }> {
   try {
@@ -1929,6 +1931,12 @@ export async function bcpDomRuntime(
       return locateOne(params, opName);
     };
 
+    // A ref only means something in the document it was read in: after a navigation or reload this frame numbers
+    // its elements afresh, and the old "e5" would name whatever the new page's e5 is.
+    if (params.expectDoc && params.expectDoc !== store.__bcpDocId)
+      throw new Error(
+        `[${params.ref}] was read from a document this frame no longer shows — the page navigated or reloaded since. Nothing was done; take a snapshot for current refs.`,
+      );
     switch (op) {
       case "snapshot":
         await settleDom();

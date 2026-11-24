@@ -5,7 +5,7 @@ import { resolve, dirname, relative, isAbsolute } from "node:path";
 import { tmpdir } from "node:os";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { LocalMethod, RpcMethod, browserLabel, isAgentHiddenEvent, isTopologyEvent, type ActionDelta, type BrowserEvent, type BrowserStatus, type BrowserTarget, type PageState, type ParamMap, type Playbook, type PlanStep, type RpcContracts, type SnapshotElement, type StepVerify, type TabInfo } from "@bcp/shared";
+import { LocalMethod, RPC_TRAITS, RpcMethod, browserLabel, isAgentHiddenEvent, isTopologyEvent, type ActionDelta, type BrowserEvent, type BrowserStatus, type BrowserTarget, type PageState, type ParamMap, type Playbook, type PlanStep, type RpcContracts, type SnapshotElement, type StepVerify, type TabInfo } from "@bcp/shared";
 import { MCP_TOOL_INSTRUCTIONS, validateBookV2, EVAL_TIMEOUT_MS } from "@bcp/shared";
 import { config, domainAllowed, EVAL_DISABLED } from "./config.js";
 import { PlanRunner, type RecordingNote } from "./orchestrator.js";
@@ -64,10 +64,24 @@ export function createBrowserMcpServer(
   // tool calls that overlap in one session never read each other's.
   const inbox = new EventInbox(events);
   const toolCall = new AsyncLocalStorage<{ window: CallWindow; actedTab?: number }>();
+  // One session's tool calls run in the order they arrived. A client sends several calls in one turn (click +
+  // snapshot, navigate + snapshot, click + click) and the transport delivers them concurrently: the snapshot read
+  // the page before the click landed, and two clicks interleaved — with a claimed tab or an explicit tabId nothing
+  // else ordered them. Every call that is not declared read-only runs after the previous one finished; a read runs
+  // after every such call that arrived before it, so it sees what they did. An action does not wait for reads that
+  // arrived earlier, so "wait_for_event, then click what fires it" in one turn does not block on itself.
+  let lastAction: Promise<unknown> = Promise.resolve();
+  const inArrivalOrder = (readOnly: boolean, run: () => unknown): Promise<unknown> => {
+    const p = lastAction.then(run);
+    if (!readOnly) lastAction = p.catch(() => {});
+    return p;
+  };
   const registerTool = server.registerTool.bind(server);
-  server.registerTool = ((name: string, toolConfig: unknown, cb: (...args: unknown[]) => unknown) =>
-    registerTool(name, toolConfig as never, ((...args: unknown[]) =>
-      toolCall.run({ window: inbox.beginCall() }, () => cb(...args))) as never)) as typeof server.registerTool;
+  server.registerTool = ((name: string, toolConfig: unknown, cb: (...args: unknown[]) => unknown) => {
+    const readOnly = (toolConfig as { annotations?: { readOnlyHint?: boolean } } | undefined)?.annotations?.readOnlyHint === true;
+    return registerTool(name, toolConfig as never, ((...args: unknown[]) =>
+      inArrivalOrder(readOnly, () => toolCall.run({ window: inbox.beginCall() }, () => cb(...args)))) as never);
+  }) as typeof server.registerTool;
 
   // ── Per-MCP-session routing state (this closure IS the session) ──────────
   /** Target this session drives; null = follow the backend's global default. */
@@ -84,6 +98,13 @@ export function createBrowserMcpServer(
   /** Stable per-session key so page_state's change baseline is observer-scoped.
    * Process-prefixed so a backend restart never reads a stale in-page baseline. */
   const deltaKey = `${PROCESS_KEY}.s${++sessionSeq}`;
+
+  /** What this session last perceived: the browser and tab of its latest delivered snapshot, and the documents each
+   *  tab's frames held at its latest delivered read. Refs are numbered per document and only mean something where
+   *  they were read, so an action by ref goes to the tab it was read in — not to whatever tab is active by then —
+   *  and only while that tab still holds the same document. */
+  let lastRead: { instanceId?: string; tabId: number } | null = null;
+  const readDocs = new Map<string, Record<string, string>>();
 
   /** The target this session's calls actually land on right now. */
   const resolvedTarget = (): BrowserTarget | null => sessionTarget ?? browsers?.current() ?? null;
@@ -157,6 +178,27 @@ export function createBrowserMcpServer(
     const claimTab = claimFor(resolved);
     if (!resolved) {
       throw new Error("no browser target — call launch_browser / use_browser first (or wait for one to connect)");
+    }
+    // The session's browser changed under it (the claimed browser went offline and the default moved on): a call
+    // that would have gone to the claimed tab must not land on another browser's active tab instead.
+    if (claimed && claimed.target && claimed.target.instanceId !== resolved.instanceId && TAB_SCOPED.has(method) && p?.tabId == null) {
+      throw new Error(
+        `this session's claimed tab ${claimed.tabId} is in browser "${browserLabel(claimed.target)}", but calls now go to "${browserLabel(resolved)}" (the claimed browser went offline or another became the default). Nothing was done. use_browser to go back to it, or claim_tab / new_tab here.`,
+      );
+    }
+    // An action by [ref] acts where that ref was read.
+    const ref = typeof p?.ref === "string" ? p.ref : undefined;
+    if (ref && RPC_TRAITS[method].domOp && !RPC_TRAITS[method].readOnly) {
+      if (p.tabId == null && claimTab == null && lastRead) {
+        if (lastRead.instanceId !== resolved.instanceId)
+          throw new Error(
+            `[${ref}] was read in another browser than the one this session now drives ("${browserLabel(resolved)}"). Nothing was done. Take a snapshot here for its refs, or use_browser to go back.`,
+          );
+        p = { ...p, tabId: lastRead.tabId };
+      }
+      const docs = readDocs.get(`${resolved.instanceId}:${p.tabId ?? claimTab}`);
+      const frame = /^(\d+)_/.exec(ref)?.[1] ?? "0";
+      if (docs?.[frame]) p = { ...p, expectDoc: docs[frame] };
     }
     if (claimTab != null && TAB_SCOPED.has(method) && p?.tabId == null) {
       p = { ...p, tabId: claimTab };
@@ -390,7 +432,12 @@ export function createBrowserMcpServer(
     // keep just the last; and not when narrowed, or the record would shrink to what one search matched.
     const reset = !!view.full && !view.after && !view.query && !view.within && !view.viewportOnly;
     const seen = shownLedger.read(`${target?.instanceId}:${r.tabId}`, r.docs, r.elements, rendered.shown, { reset });
-    return { ...r, text: rendered.text + renderShownDelta(seen.diff, { continuation: rendered.continued }), commit: seen.commit };
+    const commit = (): void => {
+      seen.commit();
+      lastRead = { instanceId: target?.instanceId, tabId: r.tabId };
+      if (r.docs) readDocs.set(`${target?.instanceId}:${r.tabId}`, r.docs);
+    };
+    return { ...r, text: rendered.text + renderShownDelta(seen.diff, { continuation: rendered.continued }), commit };
   };
   registerDomTools({ server, call, deltaKey, drainEvents, readDumps, readSnapshot });
   registerCaptureTools({ server, call, deltaKey, drainEvents, captureWithLease, readDumps, readSnapshot });

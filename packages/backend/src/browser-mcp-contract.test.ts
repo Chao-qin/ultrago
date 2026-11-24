@@ -58,10 +58,17 @@ async function connect(opts: {
   events?: EventStore;
   /** An RPC that rejects, for the paths that must survive a failing leg. */
   failOn?: string;
+  /** Milliseconds an RPC takes, for the paths whose order matters; `log` records starts and ends. */
+  latency?: Record<string, number>;
+  log?: string[];
 } = {}): Promise<{ client: Client; calls: CallLog[]; close: () => Promise<void> }> {
   const calls: CallLog[] = [];
   const rawCall = (async (method, params, target) => {
     calls.push({ method, params: params as Record<string, unknown>, target });
+    opts.log?.push(`start ${method}`);
+    const ms = opts.latency?.[method];
+    if (ms) await new Promise((r) => setTimeout(r, ms));
+    opts.log?.push(`end ${method}`);
     if (method === opts.failOn) throw new Error(`${method} failed`);
     return (opts.result ?? {}) as never;
   }) as RawBrowserCall;
@@ -739,5 +746,57 @@ test("batch 某一步导航了就停下：后面的步骤是照着已经不在�
     assert.equal(calls.filter((c) => c.method === RpcMethod.Click).length, 1, "第二步没有执行");
     assert.match(out, /^Batch stopped after step 1\/2 — the page navigated; steps 2–2 were not run/);
     assert.match(out, /⚠ Verify gate — the page navigated/);
+  } finally { await close(); }
+});
+
+test("同一会话同一轮里的调用按到达顺序执行：读取等之前到达的动作落地；动作一个接一个；动作不等之前到达的读取", async () => {
+  const log: string[] = [];
+  const page = { tabId: 1, url: "u", title: "t", moreBelow: false, elements: [{ ref: "e1", tag: "a", role: "link", name: "x" }], docs: { "0": "d" }, ok: true };
+  const { client, close } = await connect({ result: page, latency: { [RpcMethod.Click]: 50, [RpcMethod.Snapshot]: 30 }, log });
+  try {
+    await client.callTool({ name: "claim_tab", arguments: { tabId: 1 } }).catch(() => {});
+    log.length = 0;
+    await Promise.all([
+      client.callTool({ name: "click", arguments: { ref: "e1", tabId: 1 } }),
+      client.callTool({ name: "snapshot", arguments: { tabId: 1 } }),
+      client.callTool({ name: "click", arguments: { ref: "e1", tabId: 1 } }),
+    ]);
+    const at = (entry: string, nth = 0) => log.map((l, i) => (l === entry ? i : -1)).filter((i) => i >= 0)[nth];
+    assert.ok(at(`start ${RpcMethod.Snapshot}`) > at(`end ${RpcMethod.Click}`, 0), "快照在第一个点击落地之后才读");
+    assert.ok(at(`start ${RpcMethod.Click}`, 1) > at(`end ${RpcMethod.Click}`, 0), "第二个点击等第一个点击结束");
+    assert.ok(at(`start ${RpcMethod.Click}`, 1) < at(`end ${RpcMethod.Snapshot}`), "动作不等之前到达的读取：先发的等待不会挡住后发的点击");
+  } finally { await close(); }
+});
+
+test("按 ref 的动作落在这个 ref 被读到的标签页，并带上那份文档的身份 —— 不是此刻碰巧在前台的标签页", async () => {
+  const page = { tabId: 2, url: "u", title: "t", moreBelow: false, elements: [{ ref: "e5", tag: "a", role: "link", name: "x" }, { ref: "42_e1", tag: "a", role: "link", name: "y" }], docs: { "0": "doc-top", "42": "doc-frame" }, ok: true };
+  const { client, calls, close } = await connect({ result: page });
+  try {
+    await client.callTool({ name: "snapshot", arguments: {} });
+    await client.callTool({ name: "click", arguments: { ref: "e5" } });
+    const click = calls.filter((c) => c.method === RpcMethod.Click).at(-1)!;
+    assert.equal(click.params.tabId, 2, "读的是标签页 2，就点标签页 2");
+    assert.equal(click.params.expectDoc, "doc-top");
+    await client.callTool({ name: "click", arguments: { ref: "42_e1" } });
+    assert.equal(calls.filter((c) => c.method === RpcMethod.Click).at(-1)!.params.expectDoc, "doc-frame", "子帧的 ref 带子帧的文档身份");
+  } finally { await close(); }
+});
+
+test("会话的浏览器在它不知情时换了：按旧 ref 的动作、以及本该落到认领标签页的动作都拒绝并说明，不打到别的浏览器上", async () => {
+  let current: BrowserTarget = TARGET_A;
+  const page = { tabId: 3, url: "u", title: "t", moreBelow: false, elements: [{ ref: "e1", tag: "a", role: "link", name: "x" }], docs: { "0": "d" }, ok: true };
+  const { client, calls, close } = await connect({ result: page, registry: makeRegistry(null, { current: () => current }) });
+  const textOf = (r: unknown) => (r as { content: Array<{ text: string }> }).content[0].text;
+  try {
+    await client.callTool({ name: "snapshot", arguments: {} });
+    current = TARGET_B;
+    const before = calls.length;
+    assert.match(textOf(await client.callTool({ name: "click", arguments: { ref: "e1" } })), /\[e1\] was read in another browser .* Nothing was done/);
+    assert.equal(calls.length, before, "什么都没派发");
+
+    current = TARGET_A;
+    await client.callTool({ name: "claim_tab", arguments: { tabId: 3 } });
+    current = TARGET_B;
+    assert.match(textOf(await client.callTool({ name: "click", arguments: { text: "保存" } })), /claimed tab 3 is in browser .* Nothing was done/);
   } finally { await close(); }
 });
