@@ -13,12 +13,14 @@ interface FrameSnapshot {
   url: string; title: string; moreBelow: boolean;
   elements: { ref: string; parentRef?: string; controls?: string[] }[];
   docId?: string;
+  textHits?: { count: number; samples: { text: string; ref?: string; hidden?: boolean }[] };
 }
 
 export function mergeFrameSnapshots(tabId: number, results: FrameSnapshotResult[]) {
   const merged = {
     tabId, url: "", title: "", elements: [] as unknown[], moreBelow: false,
     docs: {} as Record<string, string>,
+    textHits: undefined as FrameSnapshot["textHits"],
   };
   for (const res of results) {
     const r = res.result as { value?: FrameSnapshot } | undefined;
@@ -41,7 +43,15 @@ export function mergeFrameSnapshots(tabId: number, results: FrameSnapshotResult[
     // same way its refs are prefixed, so a frame that navigated on its own
     // can be told apart from the rest of the page.
     if (r.value.docId) merged.docs[String(res.frameId)] = r.value.docId;
+    // Where a query's words occur, summed over frames; a sample's ref carries its frame's prefix like every ref.
+    if (r.value.textHits) {
+      merged.textHits ??= { count: 0, samples: [] };
+      merged.textHits.count += r.value.textHits.count;
+      for (const h of r.value.textHits.samples)
+        if (merged.textHits.samples.length < 5) merged.textHits.samples.push(h.ref ? { ...h, ref: pfx(h.ref) } : h);
+    }
   }
+  if (!merged.textHits) delete (merged as { textHits?: unknown }).textHits;
   return merged;
 }
 

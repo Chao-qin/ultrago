@@ -25,7 +25,7 @@ import type { BrowserSetupService } from "./browser-setup-service.js";
 import type { BrowserCall, BrowserLifecycle, BrowserRegistry, RawBrowserCall, ReadSnapshot } from "./browser-mcp-types.js";
 export type { BrowserCall, BrowserLifecycle, BrowserRegistry, RawBrowserCall } from "./browser-mcp-types.js";
 import { BROWSER_INSTRUCTIONS } from "./browser-mcp-instructions.js";
-import { deltaGate, mergeDeltas, describeRecording, describeVerify, fail, gateNote, renderDelta, renderHistoryNav, renderPageState, renderSnapshot, renderShownDelta, renderSnapshotView, renderTabsByWindow, text } from "./browser-mcp-render.js";
+import { deltaGate, mergeDeltas, renderPendingRequests, describeRecording, describeVerify, fail, gateNote, renderDelta, renderHistoryNav, renderPageState, renderSnapshot, renderShownDelta, renderSnapshotView, renderTabsByWindow, text } from "./browser-mcp-render.js";
 import { looseBool, stepShape, tabId, verifyShape } from "./browser-mcp-shapes.js";
 import { registerPlanTools } from "./browser-mcp-tools-plan.js";
 import { registerDomTools } from "./browser-mcp-tools-dom.js";
@@ -426,8 +426,8 @@ export function createBrowserMcpServer(
   const shownLedger = new ShownLedger();
   const readSnapshot: ReadSnapshot = async (tabId, view) => {
     const target = resolvedTarget() ?? undefined;
-    const r = await call(RpcMethod.Snapshot, { tabId }, target);
-    const rendered = renderSnapshotView(r.elements, view);
+    const r = await call(RpcMethod.Snapshot, view.query?.trim() ? { tabId, query: view.query } : { tabId }, target);
+    const rendered = renderSnapshotView(r.elements, view, r.textHits);
     // A `full` read of the whole page starts the record over: on its first page only, or paging through it would
     // keep just the last; and not when narrowed, or the record would shrink to what one search matched.
     const reset = !!view.full && !view.after && !view.query && !view.within && !view.viewportOnly;
@@ -437,7 +437,7 @@ export function createBrowserMcpServer(
       lastRead = { instanceId: target?.instanceId, tabId: r.tabId };
       if (r.docs) readDocs.set(`${target?.instanceId}:${r.tabId}`, r.docs);
     };
-    return { ...r, text: rendered.text + renderShownDelta(seen.diff, { continuation: rendered.continued }), commit };
+    return { ...r, text: rendered.text + renderShownDelta(seen.diff, { continuation: rendered.continued }) + renderPendingRequests(r.pendingRequests), commit };
   };
   registerDomTools({ server, call, deltaKey, drainEvents, readDumps, readSnapshot });
   registerCaptureTools({ server, call, deltaKey, drainEvents, captureWithLease, readDumps, readSnapshot });

@@ -607,6 +607,7 @@ export default defineBackground(() => {
     tabCreated: cx.tabs.onCreated as unknown as InjectDeps["tabCreated"],
     resolveTab,
     waitNetworkIdle,
+    openRequests: (t) => netIdle.openRequests(t),
     waitTabComplete,
     liveFrames,
     injectEventProbes: (t) => void injectEventProbes(t),

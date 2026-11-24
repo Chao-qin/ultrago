@@ -1215,6 +1215,35 @@ async function main() {
     },
   );
 
+  // ---- Where a query's words are, when no element is named by them: the
+  // facts a zero-hit reply gives instead of "try other words".
+  await withPage(
+    `<button id="named" aria-label="提交订单">去 Deutsch 版</button>
+     <table><tr><td>Iceland</td><td>387,758</td></tr></table>
+     <div style="display:none">Iceland (hidden copy)</div>
+     <span id="sh"></span>
+     <script>document.getElementById("sh").attachShadow({ mode: "open" }).innerHTML = "<p>iceland in a component</p>";</script>`,
+    async (t) => {
+      const de = (await t.call("snapshot", { query: "deutsch" })).value.textHits;
+      eq(de?.count, 1, "the words inside a control named otherwise are found");
+      eq(de?.samples[0]?.ref, t.ref("named"), "with the ref of the control they are inside");
+      const ice = (await t.call("snapshot", { query: "ICELAND" })).value.textHits;
+      eq(ice?.count, 3, "case folded; table text, hidden text and a shadow root's text all count");
+      eq(ice?.samples.filter((h) => h.hidden).length, 1, "the hidden copy says it is hidden");
+      eq(ice?.samples.some((h) => h.ref), false, "plain text carries no ref");
+      eq((await t.call("snapshot", { query: "不在页面上" })).value.textHits?.count, 0, "absent words count zero");
+      eq((await t.call("snapshot", {})).value.textHits, undefined, "no query, no text search");
+      const miss = await t.call("click", { name: "387,758" });
+      match(miss.error ?? "", /nothing matches .*the words occur 1 time\(s\) in this frame's text: in page text "387,758"/s,
+        "a locator that finds no control says where the words are instead");
+      const gone = await t.call("click", { name: "不在页面上" });
+      match(gone.error ?? "", /the words are not in this frame's text at all/, "or that they are nowhere");
+      const waited = await t.call("wait", { waitText: "hidden copy", ms: 100 });
+      eq(waited.value?.matched, false);
+      eq(waited.value?.textHits?.samples?.[0]?.hidden, true, "a wait that ran out reports the text is there but hidden");
+    },
+  );
+
   // ---- Names and states as the platform defines them, one predicate each,
   // shared by the snapshot and the actions.
   await withPage(

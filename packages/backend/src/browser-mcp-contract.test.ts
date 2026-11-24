@@ -822,3 +822,15 @@ test("计划验证的响应体只取本会话浏览器里、本计划所在标�
     assert.match(own, /Plan complete — all 1 step\(s\) verified/, "本会话、本标签页的成功响应体算数");
   } finally { await close(); }
 });
+
+test("wait_for 等文字超时：回复说出文字是在页面上但被隐藏（在哪），还是根本不在", async () => {
+  const page: Record<string, unknown> = { matched: false, textHits: { count: 1, samples: [{ text: "保存成功", ref: "e9", hidden: true }] } };
+  const { client, close } = await connect({ result: page });
+  const textOf = (r: unknown) => (r as { content: Array<{ text: string }> }).content[0].text;
+  try {
+    assert.match(textOf(await client.callTool({ name: "wait_for", arguments: { text: "保存成功", ms: 100 } })),
+      /Timed out after 100ms .* The text is in the page but not shown: inside \[e9\] \(hidden\) "保存成功" — open what hides it/);
+    page.textHits = { count: 0, samples: [] };
+    assert.match(textOf(await client.callTool({ name: "wait_for", arguments: { text: "保存成功", ms: 100 } })), /The text is not in the page at all/);
+  } finally { await close(); }
+});

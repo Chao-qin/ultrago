@@ -7,7 +7,7 @@
  * closure — so they are the part of that file that can be read, and tested,
  * on its own.
  */
-import { CHROME_RENDERING_FLAGS, RpcMethod, bestGrade, gradeRank, matchGrade, toolNameOf, type MatchGrade, type ActionDelta, type PageState, type SnapshotElement, type StepVerify, type TabInfo } from "@bcp/shared";
+import { CHROME_RENDERING_FLAGS, RpcMethod, bestGrade, gradeRank, matchGrade, toolNameOf, type MatchGrade, type SnapshotTextHits, type PendingRequests, type ActionDelta, type PageState, type SnapshotElement, type StepVerify, type TabInfo } from "@bcp/shared";
 import type { RecordingNote } from "./orchestrator.js";
 import type { ReadDump } from "./browser-read-dump.js";
 import type { ShownDiff } from "./snapshot-ledger.js";
@@ -304,6 +304,32 @@ function renderHiddenSummary(folded: SnapshotElement[], all: SnapshotElement[]):
 
 const WHOLE_PAGE = "snapshot({full: true}) lists every element, page by page";
 
+/** One line for a read taken while the tab still had requests open — the content may still be arriving. */
+export function renderPendingRequests(p?: PendingRequests): string {
+  if (!p?.count) return "";
+  let where = p.oldestUrl;
+  try {
+    const u = new URL(p.oldestUrl);
+    where = u.host + u.pathname;
+  } catch {
+    /* not a URL — show as is */
+  }
+  return `\n\n⏳ ${p.count} request(s) were still open when this was read (oldest ${(p.oldestMs / 1000).toFixed(1)}s: ${where.slice(0, 80)}) — if what you need looks missing or partial, it may still be loading: read again.`;
+}
+
+/** A query that matched no element: what the page's TEXT says about the words instead — inside which element they
+ *  appear (one named otherwise, e.g. by a title), in plain text that read_content reads, hidden, or nowhere. Facts the
+ *  reader can act on, where "try other words" sent it guessing. */
+function noElementMatches(query: string, hits?: SnapshotTextHits): string {
+  const head = `(no element's role, name, value or options contain ${JSON.stringify(query)})`;
+  if (!hits) return head;
+  if (!hits.count)
+    return `${head}\nThe words are not in the page's text either — the content may not have loaded yet (a collapsed section or a later page often loads when opened), or the page words it differently. snapshot({full: true}) lists every element.`;
+  const lines = hits.samples.map((h) => `  ${h.ref ? `inside [${h.ref}]` : "in page text"}${h.hidden ? " (hidden)" : ""}: ${JSON.stringify(h.text)}`);
+  const more = hits.count > hits.samples.length ? `\n  … ${hits.count - hits.samples.length} more` : "";
+  return `${head}\nThe words occur ${hits.count} time(s) in the page's text:\n${lines.join("\n")}${more}\nAct on the element they are inside (snapshot({within: ref}) shows it), or read the text with read_content.`;
+}
+
 /** Renders a snapshot reply (snapshot, or analyze_page's snapshot section), and returns the refs it listed — what
  *  the caller records as shown — and whether it continued an earlier page (`continued`: it started past the first
  *  element, so everything on it is unread by construction).
@@ -315,6 +341,7 @@ const WHOLE_PAGE = "snapshot({full: true}) lists every element, page by page";
 export function renderSnapshotView(
   els: SnapshotElement[],
   view: SnapshotView = {},
+  textHits?: SnapshotTextHits,
 ): { text: string; shown: string[]; continued: boolean } {
   const total = countElements(els);
   const coverage = (bits: string[]): string => `Coverage: ${bits.join(" · ")}.`;
@@ -371,9 +398,11 @@ export function renderSnapshotView(
   }
   const end = start + page.length;
   if (!page.length)
-    body = narrowed || start
-      ? `(nothing to show${filter ? ` for ${filter}` : ""}${start ? ` after [${view.after}]` : ""} — widen the query or drop \`after\`)`
-      : "(no visible interactable elements right now)";
+    body = query && !start
+      ? noElementMatches(view.query!, textHits)
+      : narrowed || start
+        ? `(nothing to show${filter ? ` for ${filter}` : ""}${start ? ` after [${view.after}]` : ""})`
+        : "(no visible interactable elements right now)";
 
   // ---- Coverage ----
   const listed = countElements(page);

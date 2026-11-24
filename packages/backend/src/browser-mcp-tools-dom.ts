@@ -11,7 +11,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { RpcMethod, WAIT_FOR_DEFAULT_MS, WAIT_FOR_MAX_MS, type PageState, type SnapshotElement, TOOL_HINTS } from "@bcp/shared";
 import { config, EVAL_DISABLED } from "./config.js";
 import type { BrowserCall, ReadSnapshot } from "./browser-mcp-types.js";
-import { deltaGate, describeTarget, fail, gateNote, renderDelta, renderHistoryNav, renderPageState, renderReadDump, text } from "./browser-mcp-render.js";
+import { deltaGate, describeTarget, fail, gateNote, renderDelta, renderHistoryNav, renderPageState, renderPendingRequests, renderReadDump, text } from "./browser-mcp-render.js";
 import { PageReadDumpStore } from "./browser-read-dump.js";
 import { locatorShape, looseBool, tabId } from "./browser-mcp-shapes.js";
 import { registerRpcTool } from "./browser-mcp-tool-spec.js";
@@ -129,7 +129,7 @@ export function registerDomTools({ server, call, deltaKey, drainEvents, readDump
       try {
         const r = await call(RpcMethod.ReadContent, { maxChars, full: true, tabId });
         if (!r.text.trim() && r.totalChars === 0)
-          return text(`# ${r.title}\n${r.url}\n\n(no visible text after waiting for the DOM to settle — the page may still be loading slowly, be behind a login/consent wall, or render inside a canvas/iframe. Try wait_for a known element, or screenshot to see it.)`);
+          return text(`# ${r.title}\n${r.url}\n\n(no visible text after waiting for the DOM to settle — the page may still be loading slowly, be behind a login/consent wall, or render inside a canvas/iframe. Try wait_for a known element, or screenshot to see it.)${renderPendingRequests(r.pendingRequests)}`);
         const dump = await readDumps.create({
           url: r.url,
           title: r.title,
@@ -138,7 +138,7 @@ export function registerDomTools({ server, call, deltaKey, drainEvents, readDump
           overview: r.overview,
           maxChars,
         });
-        return text(`# ${r.title}\n${r.url}\n\n${renderReadDump(dump)}${drainEvents()}`);
+        return text(`# ${r.title}\n${r.url}\n\n${renderReadDump(dump)}${renderPendingRequests(r.pendingRequests)}${drainEvents()}`);
       } catch (e) {
         return fail(e);
       }
@@ -185,7 +185,14 @@ export function registerDomTools({ server, call, deltaKey, drainEvents, readDump
         const r = await call(RpcMethod.WaitFor, { text: t, selector, state, ms: timeout, tabId });
         if (!condition) return text(`Waited ${timeout}ms.`);
         const what = t ? `text ${JSON.stringify(t)}` : `${selector} to be ${state ?? "visible"}`;
-        return text(r.matched ? `Condition met: ${what}.` : `Timed out after ${timeout}ms waiting for ${what}.`);
+        if (r.matched) return text(`Condition met: ${what}.`);
+        const hits = r.textHits;
+        const facts = !hits
+          ? ""
+          : hits.count
+            ? ` The text is in the page but not shown: ${hits.samples.slice(0, 3).map((h) => `${h.ref ? `inside [${h.ref}]` : "in page text"}${h.hidden ? " (hidden)" : ""} ${JSON.stringify(h.text)}`).join("; ")} — open what hides it, or read it with read_content.`
+            : " The text is not in the page at all (this frame and its open shadow roots) — take a snapshot to see what it shows instead.";
+        return text(`Timed out after ${timeout}ms waiting for ${what}.${facts}`);
       } catch (e) {
         return fail(e);
       }

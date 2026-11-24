@@ -303,7 +303,9 @@ export interface RpcContracts {
     result: { dataUrl: string; warning?: string; activated?: boolean; keptInFront?: boolean };
   };
   [RpcMethod.Snapshot]: {
-    params: TabTarget;
+    /** `query`: also report where this text occurs in the page's text (`textHits`), so a reply whose query matches
+     *  no element's name can say whether the words are on the page at all, and inside which element. */
+    params: TabTarget & { query?: string };
     /** Compact interactable-element tree with stable refs for this snapshot.
      * `moreBelow` flags that the page can still scroll down (content below the
      * fold / lazy-loaded) so the agent knows to scroll rather than assume it saw all. */
@@ -314,6 +316,9 @@ export interface RpcContracts {
     result: {
       tabId: number; url: string; title: string; elements: SnapshotElement[]; moreBelow: boolean;
       docs?: Record<string, string>;
+      /** With `query`: text nodes containing it (case-insensitive), across frames and open shadow roots. */
+      textHits?: SnapshotTextHits;
+      pendingRequests?: PendingRequests;
     };
   };
   [RpcMethod.Click]: {
@@ -345,6 +350,7 @@ export interface RpcContracts {
       url: string;
       title: string;
       text: string;
+      pendingRequests?: PendingRequests;
       /** Offset of this chunk in the normalized page text. */
       offset: number;
       /** Total length of the normalized page text. */
@@ -360,7 +366,8 @@ export interface RpcContracts {
   [RpcMethod.WaitFor]: {
     /** Wait until: text appears, OR a selector's element is visible/hidden, OR a fixed delay. */
     params: TabTarget & { text?: string; selector?: string; state?: "visible" | "hidden"; ms?: number };
-    result: { matched: boolean };
+    /** `textHits`: when a wait for text ran out, where those words are in the page's text (hidden, or nowhere). */
+    result: { matched: boolean; textHits?: SnapshotTextHits };
   };
   [RpcMethod.WaitSignal]: {
     /** Event-driven wait for a declarative Book v2 signal condition in this tab:
@@ -867,6 +874,19 @@ export interface SnapshotElement {
    * whole group. `hidden` is its own visibility: a closed <details> still shows
    * its summary while hiding the rest. */
   hiddenGroup?: boolean;
+}
+
+/** Where a query's words occur in the page's text. `count` is every text node containing them; `samples` are the
+ *  first few, each with its surrounding words, the [ref] of the element it sits inside (absent when it is in no
+ *  element the snapshot lists — plain page text) and whether it is hidden. */
+/** Requests the tab still had open when it was read (hung ones excluded): the readiness wait stops counting one that
+ *  stays open long (a long poll would hold every read to the ceiling), so the read reports them rather than deciding
+ *  they do not matter — a slow search the page is still waiting on looks the same. */
+export interface PendingRequests { count: number; oldestMs: number; oldestUrl: string }
+
+export interface SnapshotTextHits {
+  count: number;
+  samples: { text: string; ref?: string; hidden?: boolean }[];
 }
 
 /* ------------------------------------------------------------------ *

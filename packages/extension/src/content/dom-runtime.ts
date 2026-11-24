@@ -30,6 +30,8 @@ export async function bcpDomRuntime(
     verbosity?: "summary" | "detail"; resetDelta?: boolean; deltaKey?: string;
     /** The document this call's [ref] was read in (the snapshot's docId for this frame). */
     expectDoc?: string;
+    /** snapshot: also report where this text occurs in the page's text. */
+    query?: string;
   },
 ): Promise<{ value?: unknown; error?: string }> {
   try {
@@ -1239,7 +1241,37 @@ export async function bcpDomRuntime(
       }
     };
 
-    const snapshot = () => {
+    /** Where `want` occurs in the page's text — this frame's document and its open shadow roots: every text node
+     *  holding it (case, spacing and invisible characters folded, as text is compared everywhere — shared
+     *  text-match.ts), counted; the first few with their surrounding words, the [ref] of the element they sit inside
+     *  if any, and whether they show. What a "nothing matched" reply owes its reader instead of "try other words": the
+     *  words may be inside a control named otherwise, in plain text that read_content reads, hidden, or absent. */
+    const textFacts = (want: string, refOf: (el: Element) => string | undefined): { count: number; samples: { text: string; ref?: string; hidden?: boolean }[] } => {
+      const w = normText(want).toLowerCase();
+      const out = { count: 0, samples: [] as { text: string; ref?: string; hidden?: boolean }[] };
+      if (!w) return out;
+      for (const root of pageRoots(false)) {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+          const parent = n.parentElement;
+          if (!parent || SKIP_TEXT_TAGS.has(parent.tagName) || parent.closest("head")) continue;
+          const t = normText(n.nodeValue ?? "");
+          const at = t.toLowerCase().indexOf(w);
+          if (at < 0) continue;
+          out.count++;
+          if (out.samples.length >= 5) continue;
+          let ref: string | undefined;
+          for (let host: Element | null = parent; host && !ref; host = climbOut(host)) ref = refOf(host);
+          out.samples.push({
+            text: truncate(t.slice(Math.max(0, at - 30), at + w.length + 30), 90),
+            ...(ref ? { ref } : {}),
+            ...(isVisible(parent) ? {} : { hidden: true }),
+          });
+        }
+      }
+      return out;
+    };
+    const snapshot = (query?: string) => {
       const topView = frameOffset();
       const newRefs = new Map<string, Element>();
       const elements: SnapshotElement[] = [];
@@ -1572,7 +1604,10 @@ export async function bcpDomRuntime(
 
       const se = document.scrollingElement ?? document.documentElement;
       const moreBelow = se.scrollTop + se.clientHeight < se.scrollHeight - 4;
-      return { url: location.href, title: document.title, elements, moreBelow, docId: store.__bcpDocId };
+      return {
+        url: location.href, title: document.title, elements, moreBelow, docId: store.__bcpDocId,
+        ...(query?.trim() ? { textHits: textFacts(query, (el) => elToRef.get(el)) } : {}),
+      };
     };
 
     // ---- Descriptive locators -------------------------------------------
@@ -1920,11 +1955,20 @@ export async function bcpDomRuntime(
       // id, a description has nowhere to put one. Only VISIBLE iframes are counted:
       // a 0×0 analytics beacon sits on most pages and would fire this line
       // everywhere. snapshot pierces frames and hands back "42_e7"-style refs.
+      // What the page's text says about the words, as a zero-hit snapshot query reports it: inside which element
+      // they are (one named otherwise), in plain text, hidden, or absent — where nothing more used to be said.
+      const words = q.text || q.name;
+      const f = words ? textFacts(words, (el) => store.__bcpRefOf?.get(el)) : undefined;
+      const facts = !f
+        ? ""
+        : f.count
+          ? `\n  → the words occur ${f.count} time(s) in this frame's text: ${f.samples.slice(0, 3).map((h) => `${h.ref ? `inside [${h.ref}]` : "in page text"}${h.hidden ? " (hidden)" : ""} ${JSON.stringify(h.text)}`).join("; ")} — act on that [ref], or read the text with read_content`
+          : `\n  → the words are not in this frame's text at all — the content may not have loaded yet, or the page words it differently; take a snapshot to see what is there`;
       const frames = [...document.querySelectorAll("iframe")].filter((f) => isVisible(f)).length;
       if (frames)
-        return `\n  → nothing in this frame matches, and ${frames} visible iframe(s) here were NOT searched:` +
+        return facts + `\n  → nothing in this frame matches, and ${frames} visible iframe(s) here were NOT searched:` +
           ` a description resolves in the main frame only. snapshot covers every frame and returns sub-frame refs like "42_e7" — act by [ref] instead`;
-      return "";
+      return facts;
     };
 
     /** Resolve to exactly one element, or fail with the candidates listed.
@@ -2044,7 +2088,7 @@ export async function bcpDomRuntime(
     switch (op) {
       case "snapshot":
         await settleDom();
-        return { value: snapshot() };
+        return { value: snapshot(params.query) };
       case "state": {
         await settleDom();
         const detail = params.verbosity === "detail";
@@ -2333,7 +2377,9 @@ export async function bcpDomRuntime(
           if (check()) return { value: { matched: true } };
           await sleep(200);
         }
-        return { value: { matched: false } };
+        // A wait that ran out says why, in facts: the text is on the page but hidden (in what), or nowhere on it —
+        // "timed out" alone was answered by waiting again for the same thing.
+        return { value: { matched: false, ...(params.waitText ? { textHits: textFacts(params.waitText, (el) => store.__bcpRefOf?.get(el)) } : {}) } };
       }
       case "select": {
         const el = followLabel(resolve(params.ref!));

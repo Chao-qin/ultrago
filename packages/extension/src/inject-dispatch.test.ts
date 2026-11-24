@@ -392,3 +392,24 @@ test("整页读取覆盖每一帧：iframe 里显示的报错也在验证读到�
   assert.equal(r.totalChars, r.text.length);
   assert.equal((h.execCalls[0] as { target: { allFrames?: boolean } }).target.allFrames, true);
 });
+
+test("query 的文字出现位置按帧合并：次数相加，子帧样本里的 ref 带帧前缀", async () => {
+  const h = harness();
+  h.setExec(async () => [
+    { frameId: 0, result: { value: { url: "u", title: "t", moreBelow: false, elements: [], docId: "a", textHits: { count: 1, samples: [{ text: "Deutsch", ref: "e64" }] } } } },
+    { frameId: 7, result: { value: { url: "f", title: "", moreBelow: false, elements: [], docId: "b", textHits: { count: 2, samples: [{ text: "Deutsch", ref: "e1" }, { text: "Deutsch x" }] } } } },
+  ]);
+  const r = (await h.dispatch(RpcMethod.Snapshot, { query: "deutsch" })) as { textHits?: { count: number; samples: { ref?: string }[] } };
+  assert.equal(r.textHits?.count, 3);
+  assert.deepEqual(r.textHits?.samples.map((s) => s.ref), ["e64", "7_e1", undefined]);
+});
+
+test("快照与整页读取附上读取那一刻还开着的请求；没有开着的就不附", async () => {
+  let open = { count: 1, oldestMs: 4000, oldestUrl: "https://x/api/search" };
+  const h = harness({ openRequests: () => open });
+  h.setExec(async () => [{ frameId: 0, result: { value: { url: "u", title: "t", text: "", offset: 0, totalChars: 0, truncated: false, moreBelow: false, elements: [] } } }]);
+  assert.deepEqual(((await h.dispatch(RpcMethod.Snapshot, {})) as { pendingRequests?: unknown }).pendingRequests, open);
+  assert.deepEqual(((await h.dispatch(RpcMethod.ReadContent, { full: true })) as { pendingRequests?: unknown }).pendingRequests, open);
+  open = { count: 0, oldestMs: 0, oldestUrl: "" };
+  assert.equal(((await h.dispatch(RpcMethod.Snapshot, {})) as { pendingRequests?: unknown }).pendingRequests, undefined);
+});

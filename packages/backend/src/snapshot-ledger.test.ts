@@ -291,7 +291,7 @@ test("全是隐藏元素时如实说没有可见的，并点名隐藏的；续�
 test("viewportOnly 下视口里只有隐藏元素时，说的是这个过滤条件下没有，不说整页没有可见的", () => {
   const page = [el("e1", { inViewport: false }), el("e2", { hidden: true, inViewport: true })];
   const text = renderSnapshotView(page, { viewportOnly: true }).text;
-  assert.match(text, /\(nothing to show for viewportOnly — widen the query or drop `after`\)/);
+  assert.match(text, /\(nothing to show for viewportOnly\)/);
   assert.doesNotMatch(text, /no visible interactable elements right now/);
   assert.match(text, /Hidden right now \(1/);
 });
@@ -336,4 +336,12 @@ test("query 只按元素自己的名字找：包住它的 (group) 与隐藏分�
   assert.deepEqual(inGroup.shown, []);
   assert.match(inGroup.text, /^Coverage: 0 of the page's 4 elements listed here \(none of 0 elements matching within \[h1\] query="deutsch"\)/);
   assert.doesNotMatch(inGroup.text, /^\[h1\]/m, "正文不能印出覆盖行说没列的分组");
+});
+
+test("query 一个元素也没命中时，回复给出这段文字在页面上的事实：在哪个元素里、在正文里、是否隐藏；根本不在页面上也如实说", () => {
+  const page = [el("e64", { name: "Liste der Länder – German" }), el("e2", { name: "首页" })];
+  const hits = { count: 3, samples: [{ text: "Deutsch", ref: "e64" }, { text: "Iceland 387,758", hidden: true }] };
+  const text = renderSnapshotView(page, { query: "Deutsch" }, hits).text;
+  assert.match(text, /\(no element's role, name, value or options contain "Deutsch"\)\nThe words occur 3 time\(s\) in the page's text:\n {2}inside \[e64\]: "Deutsch"\n {2}in page text \(hidden\): "Iceland 387,758"\n {2}… 1 more\nAct on the element they are inside/);
+  assert.match(renderSnapshotView(page, { query: "zz" }, { count: 0, samples: [] }).text, /The words are not in the page's text either — the content may not have loaded yet/);
 });

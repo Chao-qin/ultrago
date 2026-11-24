@@ -49,6 +49,8 @@ export interface InjectDeps {
     resolveTab(tabId?: number): Promise<{ id?: number }>;
     /** Readiness before a read; falls through instantly when the view is unknown. */
     waitNetworkIdle(tabId: number): Promise<void>;
+    /** Requests still open after that wait (see net-idle.ts) — reported with a read, not decided away. */
+    openRequests?(tabId: number): { count: number; oldestMs: number; oldestUrl: string } | null;
     waitTabComplete(tabId: number, timeoutMs: number, ignoreCurrentStatus: boolean): Promise<void>;
     liveFrames(tabId: number): Promise<{ ids: number[]; listing: string } | null>;
     /** "Install on perceive" — fire-and-forget, never blocks the snapshot. */
@@ -92,6 +94,11 @@ export function createInjectDispatch(deps: InjectDeps) {
     // arrived" far better than DOM quiescence can — falls through instantly when
     // the in-flight view is unknown, leaving settleDom as the fallback.
     if (op === "snapshot" || op === "read") await waitNetworkIdle(tabId);
+    // The wait stops counting a request open past its stream threshold (a long poll would otherwise hold every read
+    // to the ceiling) — but that request may be a slow search the page is still waiting on. Say what is still open
+    // when the page is read; the reader can tell a /search from a /poll by its address.
+    const open = op === "snapshot" || op === "read" ? deps.openRequests?.(tabId) : undefined;
+    const pendingRequests = open?.count ? open : undefined;
 
     // Snapshot pierces iframes: inject into ALL frames, merge, and prefix sub-frame
     // refs with their frameId ("42_e3") so click/type/etc. can route back to that frame.
@@ -107,7 +114,7 @@ export function createInjectDispatch(deps: InjectDeps) {
       // "Install on perceive": a snapshot also (re)installs resident page-event
       // probes. Fire-and-forget so it never blocks or fails the snapshot itself.
       void injectEventProbes(tabId);
-      return mergeFrameSnapshots(tabId, results);
+      return { ...mergeFrameSnapshots(tabId, results), ...(pendingRequests ? { pendingRequests } : {}) };
     }
 
     // A whole-page read covers every frame, as the snapshot does — verification reads the page through it, and a
@@ -123,7 +130,7 @@ export function createInjectDispatch(deps: InjectDeps) {
       if (topError?.error) throw domOpError(topError);
       const merged = mergeFrameReads(results);
       if (!merged) throw new Error(`read: the top frame of tab ${tabId} returned no result — take a snapshot to see what the tab holds now.`);
-      return { ...merged, tabId };
+      return { ...merged, tabId, ...(pendingRequests ? { pendingRequests } : {}) };
     }
 
     // Route a ref-bearing op to the frame its ref came from ("42_e3" -> frame 42, ref "e3").

@@ -123,7 +123,8 @@ test("a huge page pages under the budget by ref cursor, and query / viewportOnly
   assert.match(renderSnapshotView(page, { viewportOnly: true }).text, /\(all 40 elements matching viewportOnly\)/);
   const none = renderSnapshotView(page, { query: "不存在" }).text;
   assert.match(none, /^Coverage: 0 of the page's 2581 elements listed here \(none of 0 elements matching query="不存在"\)/);
-  assert.match(none, /nothing to show for query="不存在"/);
+  assert.match(none, /\(no element's role, name, value or options contain "不存在"\)/);
+  assert.doesNotMatch(none, /widen the query/, "不再叫读者换词再猜");
   const small = elements(3);
   assert.equal(renderSnapshotView(small).shown.length, 3, "the reply reports exactly the refs it listed");
   assert.doesNotMatch(renderSnapshotView(small).text, /next page/);
@@ -232,4 +233,11 @@ test("必须先验证由观察到的事实推导：导航、页面自己的对�
   assert.doesNotMatch(renderHistoryNav("back", { navigated: false }), /Verify gate/, "没动就不拦");
   const merged = mergeDeltas({ newErrors: ["文件过大"], elementDelta: 1 }, { elementDelta: 2 });
   assert.deepEqual([merged?.newErrors, merged?.elementDelta], [["文件过大"], 3], "后一个文件的回执不能抹掉前一个的报错");
+});
+
+test("读取时还有请求开着：回复说出几个、最久多久、哪个地址（主机加路径，不带查询参数）", async () => {
+  const { renderPendingRequests } = await import("./browser-mcp-render.js");
+  assert.match(renderPendingRequests({ count: 2, oldestMs: 4100, oldestUrl: "https://shop.x/api/search?token=secret" }),
+    /⏳ 2 request\(s\) were still open when this was read \(oldest 4\.1s: shop\.x\/api\/search\) — .* read again/);
+  assert.equal(renderPendingRequests({ count: 0, oldestMs: 0, oldestUrl: "" }), "");
 });
