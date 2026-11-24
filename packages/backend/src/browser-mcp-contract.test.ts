@@ -727,3 +727,17 @@ test("每个工具都声明四项 annotations，且只读工具清单不变", as
   );
   await close();
 });
+
+test("batch 某一步导航了就停下：后面的步骤是照着已经不在的页面排的，不再执行，回复说明停在哪、为什么", async () => {
+  const { client, calls, close } = await connect({ result: { ok: true, delta: { urlChanged: "https://next/" } } });
+  try {
+    const r = (await client.callTool({ name: "batch", arguments: { steps: [
+      { action: "click", text: "下一页" },
+      { action: "click", text: "保存" },
+    ] } })) as { content: Array<{ text?: string }> };
+    const out = r.content[0]?.text ?? "";
+    assert.equal(calls.filter((c) => c.method === RpcMethod.Click).length, 1, "第二步没有执行");
+    assert.match(out, /^Batch stopped after step 1\/2 — the page navigated; steps 2–2 were not run/);
+    assert.match(out, /⚠ Verify gate — the page navigated/);
+  } finally { await close(); }
+});

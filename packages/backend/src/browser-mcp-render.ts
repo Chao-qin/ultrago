@@ -72,13 +72,39 @@ export function gateNote(reason: string | null): string {
     : "";
 }
 
-/** Gate ③/④: the action's own delta reported a modal, a selector-free
- * interruption (scroll lock / center overlay), or new errors. */
+/** Several actions taken as one (a multi-file upload): what any of them did is what the whole did — a later file's
+ *  reply must not erase the error or navigation an earlier one caused. */
+export function mergeDeltas(a: ActionDelta | undefined, b: ActionDelta | undefined): ActionDelta | undefined {
+  if (!a || !b) return a ?? b;
+  const list = <T>(x?: T[], y?: T[]): T[] | undefined => (x?.length || y?.length ? [...(x ?? []), ...(y ?? [])] : undefined);
+  const sum = (x?: number, y?: number): number | undefined => (x || y ? (x ?? 0) + (y ?? 0) : undefined);
+  return {
+    ...a,
+    ...b,
+    elementDelta: sum(a.elementDelta, b.elementDelta),
+    dialogsOpened: sum(a.dialogsOpened, b.dialogsOpened),
+    scrollLocked: a.scrollLocked || b.scrollLocked || undefined,
+    overlay: a.overlay || b.overlay || undefined,
+    newErrors: list(a.newErrors, b.newErrors),
+    stateChanged: list(a.stateChanged, b.stateChanged),
+    pageDialogs: list(a.pageDialogs, b.pageDialogs),
+    tabsOpened: list(a.tabsOpened, b.tabsOpened),
+  };
+}
+
+/** Whether what an action was OBSERVED to do means the page the agent read is no longer the page it is on: a new
+ *  document, a dialog (in the page or the page's own alert/confirm), a new tab, a selector-free interruption (scroll
+ *  lock / center overlay), or new errors. The one rule every action reply and batch applies — a navigation counts
+ *  like any of them, whichever action caused it. */
 export function deltaGate(delta?: ActionDelta): string | null {
   if (!delta) return null;
-  if (delta.dialogsOpened || delta.scrollLocked || delta.overlay || delta.newErrors?.length)
-    return "a dialog/overlay appeared or new errors showed up";
-  return null;
+  const why: string[] = [];
+  if (delta.urlChanged) why.push("the page navigated");
+  if (delta.pageDialogs?.length) why.push("the page opened its own dialog");
+  if (delta.tabsOpened?.length) why.push("a new tab opened");
+  if (delta.dialogsOpened || delta.scrollLocked || delta.overlay) why.push("a dialog/overlay appeared");
+  if (delta.newErrors?.length) why.push("new errors showed up");
+  return why.length ? why.join(", ") : null;
 }
 
 /** One line naming what this reply lists that the caller has not been shown before (see ShownLedger).
@@ -377,7 +403,7 @@ export function renderHistoryNav(
   r: { navigated: boolean; url?: string; title?: string },
 ): string {
   const verb = kind === "reload" ? "Reloaded" : kind === "back" ? "Went back" : "Went forward";
-  if (r.navigated) return `${verb} → ${r.title ? `${r.title} — ` : ""}${r.url ?? "(url unknown)"}`;
+  if (r.navigated) return `${verb} → ${r.title ? `${r.title} — ` : ""}${r.url ?? "(url unknown)"}${gateNote("the page navigated")}`;
   const why = kind === "reload"
     ? "no new document committed — the reload may have been cancelled by a beforeunload handler"
     : `nothing committed — this tab has no ${kind} history, or a beforeunload handler cancelled the move`;
@@ -388,6 +414,11 @@ export function renderDelta(delta?: ActionDelta): string {
   if (!delta) return "";
   const bits: string[] = [];
   if (delta.urlChanged) bits.push(`navigated → ${delta.urlChanged}`);
+  // The page's own alert/confirm/prompt: nobody can see it while an agent drives, so it was answered on the spot —
+  // and the answer can be what decided the outcome.
+  for (const d of delta.pageDialogs ?? [])
+    bits.push(`page ${d.kind}(${JSON.stringify(d.message)})${d.answered ? ` answered ${d.answered}${d.kind !== "alert" && d.answered === "Cancel" ? " — what it guarded did not proceed" : ""}` : ""}`);
+  for (const t of delta.tabsOpened ?? []) bits.push(`opened tab ${t.tabId}${t.url ? ` (${t.url})` : ""}`);
   if (delta.elementDelta) bits.push(`${delta.elementDelta > 0 ? "+" : ""}${delta.elementDelta} elements`);
   if (delta.dialogsOpened) bits.push(`${delta.dialogsOpened} dialog(s) opened`);
   if (delta.scrollLocked) bits.push("page scroll locked (a modal/overlay likely opened)");

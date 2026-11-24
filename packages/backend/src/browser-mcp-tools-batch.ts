@@ -46,7 +46,7 @@ export function registerBatchTools({ server, call, drainEvents }: BatchToolDeps)
     {
       annotations: TOOL_HINTS.pageAction,
       description:
-        "Run a known sequence of actions in one call, e.g. fill three fields and click submit. Each step is {action, ...that tool's arguments}, with action one of click, type_text, select_option, press_key, hover or scroll; tabId is set once for the whole batch. Steps run in order and stop at the first error. If a step changes the page unpredictably (opens a dialog, navigates), target later steps by description, or act one step at a time.",
+        "Run a known sequence of actions in one call, e.g. fill three fields and click submit. Each step is {action, ...that tool's arguments}, with action one of click, type_text, select_option, press_key, hover or scroll; tabId is set once for the whole batch. Steps run in order and stop at the first error, or right after a step that navigates, opens a dialog or a tab, or raises new errors — the remaining steps were planned against a page that is gone, so they are not run and the reply says which.",
       inputSchema: {
         steps: z.array(stepShape).min(1).describe("Ordered steps, each {action, ...that tool's arguments}"),
         tabId,
@@ -98,6 +98,10 @@ export function registerBatchTools({ server, call, drainEvents }: BatchToolDeps)
           }
           gate ??= deltaGate(stepDelta);
           results.push(`${i + 1}. ${s.action} ${label}${renderDelta(stepDelta) || "  (nothing observably changed)"}`);
+          // The rest of the batch was planned against the page as it was read. Once a step changed it in a way that
+          // calls for a re-read, running the remaining steps would act on a page nobody has looked at.
+          if (gate && i < steps.length - 1)
+            return text(`Batch stopped after step ${i + 1}/${steps.length} — ${gate}; steps ${i + 2}–${steps.length} were not run:\n${results.join("\n")}${gateNote(gate)}${drainEvents()}`);
         } catch (e) {
           results.push(`${i + 1}. ${s.action} ✗ ${e instanceof Error ? e.message : String(e)}`);
           return text(`Batch stopped at step ${i + 1}/${steps.length}:\n${results.join("\n")}${gateNote(gate)}`);

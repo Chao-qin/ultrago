@@ -24,7 +24,7 @@
  * Split out of background.ts so those decisions can be asserted against fake
  * scripting/webNavigation APIs.
  */
-import { isPageAction, type RpcErrorInfo, type RpcMethod } from "@bcp/shared";
+import { isPageAction, type ActionDelta, type RpcErrorInfo, type RpcMethod } from "@bcp/shared";
 import { domOpError } from "./rpc-errors";
 import { mergeFrameSnapshots } from "./snapshot-merge";
 
@@ -34,6 +34,8 @@ export interface InjectionResultLike {
 }
 
 type NavListener = (d: { tabId: number; frameId: number; url: string }) => void;
+type TabCreatedListener = (t: { id?: number; openerTabId?: number; pendingUrl?: string; url?: string }) => void;
+type PageDialog = NonNullable<ActionDelta["pageDialogs"]>[number];
 
 export interface InjectDeps {
     scripting: { executeScript(o: unknown): Promise<InjectionResultLike[]> };
@@ -42,6 +44,8 @@ export interface InjectDeps {
       onCommitted: { addListener(l: NavListener): void; removeListener(l: NavListener): void };
     };
     tabs: { get(tabId: number): Promise<{ status?: string }> };
+    /** Tabs created while an action runs — the ones this tab opened are part of what the action did. */
+    tabCreated?: { addListener(l: TabCreatedListener): void; removeListener(l: TabCreatedListener): void };
     resolveTab(tabId?: number): Promise<{ id?: number }>;
     /** Readiness before a read; falls through instantly when the view is unknown. */
     waitNetworkIdle(tabId: number): Promise<void>;
@@ -144,6 +148,8 @@ export function createInjectDispatch(deps: InjectDeps) {
     // from. Announced-navigation is watched rather than polled, so this costs
     // nothing when nothing navigates. (Playwright's SignalBarrier, minus CDP.)
     let navAnnounced = false;
+    /** Whether the navigation was announced by the time the injection returned — the part attributable to us. */
+    let navAnnouncedAtReturn = false;
     // The url the browser COMMITTED in this frame, if it navigated. Announcement
     // alone cannot be the evidence (a cancelled navigation announces too), and
     // neither can url-before vs url-after: a reload, or a POST back to the same
@@ -155,10 +161,17 @@ export function createInjectDispatch(deps: InjectDeps) {
     const onCommitNav = (d: { tabId: number; frameId: number; url: string }) => {
       if (d.tabId === tabId && d.frameId === frameId) navCommittedUrl = d.url;
     };
+    // Tabs this tab opens while the action runs (target=_blank, window.open).
+    const tabsOpened: { tabId: number; url?: string }[] = [];
+    const onTabCreated: TabCreatedListener = (t) => {
+      if (t.openerTabId === tabId && t.id != null) tabsOpened.push({ tabId: t.id, url: t.pendingUrl || t.url || undefined });
+    };
     if (interaction) {
       webNavigation.onBeforeNavigate.addListener(onBeforeNav);
       webNavigation.onCommitted.addListener(onCommitNav);
+      deps.tabCreated?.addListener(onTabCreated);
     }
+    let pageDialogs: PageDialog[] = [];
 
     let res: InjectionResultLike | undefined;
     let execErr: unknown;
@@ -177,9 +190,13 @@ export function createInjectDispatch(deps: InjectDeps) {
       execErr = e;
     } finally {
       if (interaction) {
-        scripting
+        // Awaited: what it hands back (the dialogs the page opened) is part of the reply. A frame that navigated
+        // away has nothing to restore, and nothing to report from the old document.
+        const restored = await scripting
           .executeScript({ target: { tabId, frameIds: [frameId] }, world: "MAIN", func: runtime.dialogRestore as never })
-          .catch(() => {});
+          .catch(() => undefined);
+        const seen = restored?.[0]?.result;
+        if (Array.isArray(seen)) pageDialogs = seen as PageDialog[];
       }
     }
 
@@ -192,6 +209,7 @@ export function createInjectDispatch(deps: InjectDeps) {
       // starts seconds later would otherwise be credited to this action. What was
       // announced by the time the injection returned is the part attributable to us.
       const announcedDuringAction = navAnnounced;
+      navAnnouncedAtReturn = announcedDuringAction;
       // `tab.status` is a WHOLE-TAB property that any actor can set — another
       // session navigating this shared tab makes it read "loading" too. It may
       // therefore only cause us to WAIT; it must never be evidence that OUR action
@@ -205,6 +223,7 @@ export function createInjectDispatch(deps: InjectDeps) {
       // construction.
       webNavigation.onBeforeNavigate.removeListener(onBeforeNav);
       webNavigation.onCommitted.removeListener(onCommitNav);
+      deps.tabCreated?.removeListener(onTabCreated);
       // Synthesize a success only when a NEW DOCUMENT actually took over THIS frame.
       // A url diff cannot be that test: a reload, or a POST back to the same address,
       // navigates WITHOUT changing the url — read as "did not navigate", that turned
@@ -216,7 +235,7 @@ export function createInjectDispatch(deps: InjectDeps) {
       // wrong success is cached by persistResult and replayed on every resend of
       // this RPC id.
       if ((execErr || !res) && announcedDuringAction && navCommittedUrl) {
-        return { ok: true, delta: { urlChanged: navCommittedUrl }, tabId };
+        return { ok: true, delta: observed({}), tabId };
       }
     }
 
@@ -254,7 +273,21 @@ export function createInjectDispatch(deps: InjectDeps) {
     // can tell which tab a reply is about without guessing.
     const v = r?.value;
     if (!v || typeof v !== "object" || Array.isArray(v)) return v;
-    return { ...v, ...(r?.resolved ? { resolved: r.resolved } : {}), tabId: (v as { tabId?: number }).tabId ?? tabId };
+    const own = (v as { delta?: ActionDelta }).delta;
+    const seen = interaction ? observed(own ?? {}) : undefined;
+    const withDelta = seen && (own || Object.keys(seen).length) ? { ...v, delta: seen } : v;
+    return { ...withDelta, ...(r?.resolved ? { resolved: r.resolved } : {}), tabId: (v as { tabId?: number }).tabId ?? tabId };
+
+    /** What the browser saw this action do, folded into what the page reported. The commit is authoritative over
+     *  the runtime's own url check: the runtime reads location ~50ms after the event, before a link's or a
+     *  submit's new document has committed, so it reports no navigation for most of them. */
+    function observed(delta: ActionDelta): ActionDelta {
+      const out: ActionDelta = { ...delta };
+      if (navAnnouncedAtReturn && navCommittedUrl) out.urlChanged = navCommittedUrl;
+      if (pageDialogs.length) out.pageDialogs = pageDialogs;
+      if (tabsOpened.length) out.tabsOpened = tabsOpened;
+      return out;
+    }
 }
 
     return dispatch;

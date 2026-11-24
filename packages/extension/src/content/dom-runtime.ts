@@ -2585,32 +2585,46 @@ export function bcpOverlay(show: boolean): void {
 }
 
 /**
- * Injected into the page's MAIN world before interaction ops so a page dialog
- * (alert/confirm/prompt) fired from a click handler can't block our synthetic
- * dispatch. Idempotent. Destructive confirms are already gated upstream by the
- * risky-click classifier, so auto-accepting here is safe.
+ * Injected into the page's MAIN world before every in-page action so a page dialog
+ * (alert/confirm/prompt) fired from a handler can't block our synthetic dispatch.
+ * Idempotent. Each dialog is answered on the spot (confirm/prompt: Cancel unless the
+ * caller passed confirm) AND recorded, so the action's reply can say what the page
+ * asked and how it was answered — a confirm answered Cancel cancels what it guarded,
+ * and an alert is often the only place a failure is announced.
  */
 type NativeDialogs = { a: typeof window.alert; c: typeof window.confirm; p: typeof window.prompt };
+type PageDialog = { kind: "alert" | "confirm" | "prompt"; message: string; answered?: "OK" | "Cancel" };
 
 export function bcpDialogShim(accept: boolean): void {
-  const w = window as unknown as { __bcpNative?: NativeDialogs };
+  const w = window as unknown as { __bcpNative?: NativeDialogs; __bcpDialogs?: PageDialog[] };
   if (!w.__bcpNative) w.__bcpNative = { a: window.alert, c: window.confirm, p: window.prompt };
-  window.alert = () => undefined;
-  // Tie the dialog response to the caller's explicit confirm intent — fail-safe
-  // CANCEL by default so an unexpected confirm() can't auto-proceed a destructive action.
-  window.confirm = () => accept;
-  window.prompt = () => (accept ? "" : null);
+  w.__bcpDialogs = [];
+  const seen = w.__bcpDialogs;
+  const text = (m: unknown): string => String(m ?? "").slice(0, 300);
+  window.alert = (m?: unknown) => void seen.push({ kind: "alert", message: text(m) });
+  window.confirm = (m?: unknown) => {
+    seen.push({ kind: "confirm", message: text(m), answered: accept ? "OK" : "Cancel" });
+    return accept;
+  };
+  window.prompt = (m?: unknown) => {
+    seen.push({ kind: "prompt", message: text(m), answered: accept ? "OK" : "Cancel" });
+    return accept ? "" : null;
+  };
 }
 
-/** Restore native dialogs after the op so real user interaction isn't affected. */
-export function bcpDialogRestore(): void {
-  const w = window as unknown as { __bcpNative?: NativeDialogs };
+/** Restore native dialogs after the op so real user interaction isn't affected, and hand back the dialogs the page
+ *  opened meanwhile. */
+export function bcpDialogRestore(): PageDialog[] {
+  const w = window as unknown as { __bcpNative?: NativeDialogs; __bcpDialogs?: PageDialog[] };
   if (w.__bcpNative) {
     window.alert = w.__bcpNative.a;
     window.confirm = w.__bcpNative.c;
     window.prompt = w.__bcpNative.p;
     w.__bcpNative = undefined;
   }
+  const seen = w.__bcpDialogs ?? [];
+  w.__bcpDialogs = undefined;
+  return seen;
 }
 
 /**

@@ -343,3 +343,40 @@ test("会改页面的页面内动作都不能被重发再执行一次", async ()
     if (t.domOp && t.mutating) assert.equal(t.unsafeToRepeat, true, `${m} 重发会再执行一次`);
   }
 });
+
+test("链接点击：注入正常返回、新文档稍后才提交，回执照样报出跳转 —— 以本帧提交为准，不靠 runtime 50ms 时读的地址", async () => {
+  let commitLater: () => void = () => {};
+  const h = harness({ waitTabComplete: async () => commitLater() });
+  commitLater = () => h.commit(1, 0, "https://after/");
+  h.setExec(async (o: { world?: string }) => {
+    if (o.world === "MAIN") return [{ frameId: 0, result: undefined }];
+    h.announce();
+    return [{ frameId: 0, result: { value: { ok: true, delta: { dispatchedTo: "a" } } } }];
+  });
+  const r = (await h.dispatch(RpcMethod.Click, { ref: "e1" })) as { delta?: { urlChanged?: string; dispatchedTo?: string } };
+  assert.equal(r.delta?.urlChanged, "https://after/");
+  assert.equal(r.delta?.dispatchedTo, "a", "页面自己报的事实保留");
+});
+
+test("页面在动作里弹的 alert / confirm 写进回执：说了什么、怎么应答的", async () => {
+  const h = harness();
+  const dialogs = [{ kind: "confirm", message: "确定删除?", answered: "Cancel" }, { kind: "alert", message: "保存失败" }];
+  h.setExec(async (o: { world?: string; func?: unknown }) =>
+    o.func === "RESTORE" ? [{ frameId: 0, result: dialogs }] : [{ frameId: 0, result: o.world === "MAIN" ? undefined : { value: { ok: true } } }],
+  );
+  const r = (await h.dispatch(RpcMethod.Click, { ref: "e1" })) as { delta?: { pageDialogs?: unknown } };
+  assert.deepEqual(r.delta?.pageDialogs, dialogs);
+});
+
+test("动作里由本标签页打开的新标签页写进回执；别的标签页打开的不算", async () => {
+  const listeners = new Set<(t: { id?: number; openerTabId?: number; pendingUrl?: string }) => void>();
+  const h = harness({ tabCreated: { addListener: (l) => void listeners.add(l), removeListener: (l) => void listeners.delete(l) } });
+  h.setExec(async (o: { world?: string }) => {
+    if (o.world === "MAIN") return [{ frameId: 0, result: undefined }];
+    listeners.forEach((l) => { l({ id: 7, openerTabId: 1, pendingUrl: "https://new/" }); l({ id: 8, openerTabId: 99 }); });
+    return [{ frameId: 0, result: { value: { ok: true } } }];
+  });
+  const r = (await h.dispatch(RpcMethod.Click, { ref: "e1" })) as { delta?: { tabsOpened?: unknown } };
+  assert.deepEqual(r.delta?.tabsOpened, [{ tabId: 7, url: "https://new/" }]);
+  assert.equal(listeners.size, 0, "监听用完即撤");
+});

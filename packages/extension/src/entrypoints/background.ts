@@ -604,6 +604,7 @@ export default defineBackground(() => {
     scripting: cx.scripting as unknown as InjectDeps["scripting"],
     webNavigation: cx.webNavigation as unknown as InjectDeps["webNavigation"],
     tabs: cx.tabs as unknown as InjectDeps["tabs"],
+    tabCreated: cx.tabs.onCreated as unknown as InjectDeps["tabCreated"],
     resolveTab,
     waitNetworkIdle,
     waitTabComplete,

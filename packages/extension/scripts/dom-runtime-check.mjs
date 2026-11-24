@@ -56,7 +56,7 @@ async function main() {
     process.exit(2);
   }
 
-  const { bcpDomRuntime, bcpSignalWait, bcpWaitFactory, bcpEventProbes, bcpDomHelpersFactory, bcpReadOnlyGuard } = await bundleRuntime(esbuild);
+  const { bcpDomRuntime, bcpSignalWait, bcpWaitFactory, bcpEventProbes, bcpDomHelpersFactory, bcpReadOnlyGuard, bcpDialogShim, bcpDialogRestore } = await bundleRuntime(esbuild);
   const runtimeSource = bcpDomRuntime.toString();
   const probesSource = bcpEventProbes.toString();
   const signalSource = bcpSignalWait.toString();
@@ -1215,6 +1215,22 @@ async function main() {
       await page.evaluate(() => { document.getElementById("outer").style.display = "none"; });
       const closedAgain = (await t.call("snapshot", {})).value.elements;
       eq(closedAgain.find((e) => e.hiddenGroup && e.name?.includes("首页"))?.ref, refOfEl.outer, "closed again, the group gets its own ref back: the agent's ref did not go stale while the node existed");
+    },
+  );
+
+  // ---- Page dialogs during an action are answered AND reported. The shim runs in
+  // the page's MAIN world around every in-page action (the extension installs it
+  // and calls the restore afterwards); here both run in the page the same way.
+  await withPage(
+    `<button id="del" onclick="if (confirm('确定删除?')) document.body.dataset.deleted = '1'; alert('保存失败')">删除</button>`,
+    async (t) => {
+      await page.evaluate(([shim]) => { (0, eval)(`(${shim})`)(false); }, [bcpDialogShim.toString()]);
+      await t.call("click", { ref: t.ref("del"), confirm: true });
+      const seen = await page.evaluate(([restore]) => (0, eval)(`(${restore})`)(), [bcpDialogRestore.toString()]);
+      eq(JSON.stringify(seen), JSON.stringify([{ kind: "confirm", message: "确定删除?", answered: "Cancel" }, { kind: "alert", message: "保存失败" }]),
+        "the restore hands back what the page asked and how it was answered");
+      eq(await page.evaluate(() => document.body.dataset.deleted ?? null), null, "and the confirm answered Cancel really cancelled what it guarded");
+      eq(await page.evaluate(() => window.confirm.toString().includes("native code")), true, "native dialogs are back");
     },
   );
 

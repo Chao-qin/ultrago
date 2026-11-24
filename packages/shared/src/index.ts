@@ -579,8 +579,15 @@ export interface CaptchaSignal {
  * agent can verify an outcome without a full re-snapshot. Fields are omitted
  * when nothing changed on that axis. Best-effort signal, not authoritative. */
 export interface ActionDelta {
-  /** New URL, set only when the action caused navigation. */
+  /** New URL, set only when the action caused navigation: the document this frame COMMITTED while the action ran
+   *  (a link or submit whose new page commits after the injection returned included). */
   urlChanged?: string;
+  /** Page dialogs (alert / confirm / prompt) the page opened during the action. They cannot be shown while an agent
+   *  drives the page, so each was answered on the spot — `answered` says how, which can be what decided the
+   *  outcome (a confirm answered Cancel cancels what it guarded). */
+  pageDialogs?: { kind: "alert" | "confirm" | "prompt"; message: string; answered?: "OK" | "Cancel" }[];
+  /** Tabs this tab opened during the action (target=_blank, window.open). */
+  tabsOpened?: { tabId: number; url?: string }[];
   /** Net change in interactable-element count (positive = elements appeared,
    * e.g. a dropdown/panel opened or lazy content loaded). */
   elementDelta?: number;

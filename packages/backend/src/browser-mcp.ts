@@ -25,7 +25,7 @@ import type { BrowserSetupService } from "./browser-setup-service.js";
 import type { BrowserCall, BrowserLifecycle, BrowserRegistry, RawBrowserCall, ReadSnapshot } from "./browser-mcp-types.js";
 export type { BrowserCall, BrowserLifecycle, BrowserRegistry, RawBrowserCall } from "./browser-mcp-types.js";
 import { BROWSER_INSTRUCTIONS } from "./browser-mcp-instructions.js";
-import { deltaGate, describeRecording, describeVerify, fail, gateNote, renderDelta, renderHistoryNav, renderPageState, renderSnapshot, renderShownDelta, renderSnapshotView, renderTabsByWindow, text } from "./browser-mcp-render.js";
+import { deltaGate, mergeDeltas, describeRecording, describeVerify, fail, gateNote, renderDelta, renderHistoryNav, renderPageState, renderSnapshot, renderShownDelta, renderSnapshotView, renderTabsByWindow, text } from "./browser-mcp-render.js";
 import { looseBool, stepShape, tabId, verifyShape } from "./browser-mcp-shapes.js";
 import { registerPlanTools } from "./browser-mcp-tools-plan.js";
 import { registerDomTools } from "./browser-mcp-tools-dom.js";
@@ -252,7 +252,7 @@ export function createBrowserMcpServer(
             dataBase64s: sources.map((source) => source.dataBase64),
           } as never, route);
           files.push(...uploaded.files);
-          delta = uploaded.delta ?? delta;
+          delta = mergeDeltas(delta, uploaded.delta);
         } else {
           for (const source of sources) {
             const uploaded = await rawCall(RpcMethod.Upload, {
@@ -262,7 +262,7 @@ export function createBrowserMcpServer(
               dataBase64: source.dataBase64,
             } as never, route);
             files.push(...uploaded.files);
-            delta = uploaded.delta ?? delta;
+            delta = mergeDeltas(delta, uploaded.delta);
           }
         }
       }
