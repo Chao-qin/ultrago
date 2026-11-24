@@ -10,8 +10,11 @@ import { Supervisor } from '../src/supervisor.mjs';
 
 const settle = () => new Promise((done) => setImmediate(done));
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
-async function until(condition, label) {
-  for (let attempt = 0; attempt < 500 && !condition(); attempt++) await sleep(2);
+// A real-time deadline rather than a count of polls: on a loaded machine each poll takes longer, and a fixed count ran
+// out before the stand-in services forked. performance.now(), because some tests mock Date.
+async function until(condition, label, timeoutMs = 15_000) {
+  const deadline = performance.now() + timeoutMs;
+  while (!condition() && performance.now() < deadline) await sleep(2);
   assert.ok(condition(), label);
 }
 
@@ -504,16 +507,24 @@ test('page and backend eval are on by default, reach the backend through one cha
     assert.deepEqual(policies, [], '服务未就绪时只保存设置');
     assert.equal(JSON.parse(await readFile(paths.settings, 'utf8')).allowEval, false);
     await prepare();
-    assert.deepEqual(policies.at(-1), { eval: false, localEval: false, screenshotDir: join(paths.userData, 'shots') }, '服务起来后推送一次当前策略');
+    assert.deepEqual(policies.at(-1), { eval: false, localEval: false, screenshotDir: join(paths.userData, 'shots'), cloudCaptcha: false }, '服务起来后推送一次当前策略；云端识别验证码默认关闭');
     assert.ok(children.every((child) => !Object.hasOwn(child.env, 'BCP_EVAL') && !Object.hasOwn(child.env, 'BCP_LOCAL_EVAL')), '策略只走推送这一个通道，不再写进环境变量');
     assert.ok(live('backend').env.BCP_POLICY_TOKEN && live('backend').env.BCP_POLICY_TOKEN === coordinator.policyToken, '后端拿到客户端独有的策略令牌');
+    assert.deepEqual(children.filter((child) => Object.hasOwn(child.env, 'BCP_POLICY_TOKEN')).map((child) => child.service).filter((service) => service !== 'backend'), [], '策略令牌只给后端，工作台、网关等其他进程拿不到');
     assert.equal(coordinator.snapshot().allowEval, false);
     await coordinator.savePolicy({ allowEval: true });
-    assert.deepEqual(policies.at(-1), { eval: true, localEval: false, screenshotDir: join(paths.userData, 'shots') }, '运行中切换立即推送，不重启');
+    assert.deepEqual(policies.at(-1), { eval: true, localEval: false, screenshotDir: join(paths.userData, 'shots'), cloudCaptcha: false }, '运行中切换立即推送，不重启');
+    assert.equal(coordinator.snapshot().allowCloudCaptcha, false);
+    await coordinator.savePolicy({ allowCloudCaptcha: true });
+    assert.equal(policies.at(-1).cloudCaptcha, true, '打开云端识别验证码立即推送');
+    assert.equal(coordinator.snapshot().allowCloudCaptcha, true);
+    assert.equal(JSON.parse(await readFile(paths.settings, 'utf8')).allowCloudCaptcha, true, '重启客户端后仍保留');
+    await coordinator.savePolicy({ allowCloudCaptcha: false });
 
     delete coordinator.settings.allowEval;
     delete coordinator.settings.allowLocalEval;
     delete coordinator.settings.screenshotDir;
+    delete coordinator.settings.allowCloudCaptcha;
     const started = children.length;
     const running = coordinator.prepare();
     await until(() => children.slice(started).some((child) => child.service === 'backend'), 'backend forked');
@@ -522,9 +533,10 @@ test('page and backend eval are on by default, reach the backend through one cha
     await until(() => ['console'].every((service) => children.slice(started).some((child) => child.service === service)), 'console forked');
     for (const child of children.slice(started)) child.ready();
     await running;
-    assert.deepEqual(policies.at(-1), { eval: true, localEval: false, screenshotDir: null }, '准备途中关闭的开关在服务起来后生效；从未设置的默认开启');
+    assert.deepEqual(policies.at(-1), { eval: true, localEval: false, screenshotDir: null, cloudCaptcha: false }, '准备途中关闭的开关在服务起来后生效；从未设置的默认开启，云端识别验证码除外');
     await assert.rejects(coordinator.savePolicy({ allowEval: 'yes' }), /开关无效/);
     await assert.rejects(coordinator.savePolicy({ allowLocalEval: 1 }), /本机脚本开关无效/);
+    await assert.rejects(coordinator.savePolicy({ allowCloudCaptcha: 'on' }), /云端识别验证码开关无效/);
   } finally { await coordinator.close(); }
 });
 

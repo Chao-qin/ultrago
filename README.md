@@ -397,6 +397,7 @@ Schema Records（按契约落地的数据）· Database（内嵌 Prisma Studio�
 | `BCP_ALLOWED_DOMAINS` / `BCP_BLOCKED_DOMAINS` | 空 | 导航白 / 黑名单（逗号分隔）；`javascript:` `data:` `file:` 等协议一律拒绝 |
 | `BCP_EVAL` | 开 | 页面内任意 JS 的 `eval` 工具（MAIN world）与 `evalCheck` / `evalUntil`；设 `off` 关闭。桌面客户端在准备页的“允许页面脚本”中开关，运行中切换立即生效 |
 | `BCP_LOCAL_EVAL` | 开 | `local.eval` 步骤和 `local_eval` 工具（在 **backend 进程**里跑 JS，影响面比页面 eval 更大）；设 `off` 关闭。桌面客户端在准备页的“允许本机脚本”中开关，运行中切换立即生效 |
+| `BCP_CLOUD_CAPTCHA` | 关 | 验证码提醒默认只把截图交给本机模型（Ollama / LM Studio）确认；设 `on` 后，本机没有可用模型时允许交给网关里的云端模型。截图是已登录的页面，会离开本机。桌面客户端在准备页“权限与偏好”的“允许云端模型识别验证码”中开关，运行中切换立即生效 |
 | `BCP_FORCE_PLAN` | 关 | 设 `on` 后，没有活跃计划就拒绝一切改动性动作 |
 | `BCP_SCREENSHOT_DIR` | 空 | 截图 `savePath` 允许写入的额外目录；系统临时目录始终允许。桌面客户端在准备页选择 |
 | `BCP_INTERNAL_PORT` / `BCP_INTERNAL_TOKEN` | `8789` / `bcp-internal-dev-token` | Console 用的 loopback 内部接口 |

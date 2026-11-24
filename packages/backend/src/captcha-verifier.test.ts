@@ -11,13 +11,15 @@ const completion = (content: unknown, finishReason = 'stop') => ({
   choices: [{ finish_reason: finishReason, message: { content } }],
 });
 
-function fixture(answer: unknown, models: unknown[] = [local]) {
+const cloud = { id: 'gpt-vision', bcp: { sources: [{ adapter: 'openai', baseUrl: 'https://vendor.example' }] } };
+
+function fixture(answer: unknown, models: unknown[] = [local], allowCloud = () => false) {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const fetcher: typeof fetch = async (url, init) => {
     calls.push({ url: String(url), init });
     return Response.json(String(url).endsWith('/models') ? { data: models } : answer);
   };
-  const verify = createCaptchaVerifier({ baseUrl: 'http://127.0.0.1:11435', fetch: fetcher });
+  const verify = createCaptchaVerifier({ baseUrl: 'http://127.0.0.1:11435', fetch: fetcher, allowCloud });
   return { verify, calls };
 }
 
@@ -29,6 +31,7 @@ test('local visual verification sends the compressed image and parses an explici
     'http://127.0.0.1:11435/v1/models',
     'http://127.0.0.1:11435/v1/chat/completions',
   ]);
+  assert.equal((calls[1].init?.headers as Record<string, string>)['X-BCP-Caller'], 'captcha-verifier');
   const body = JSON.parse(String(calls[1].init?.body));
   assert.equal(body.model, 'qwen3.5:4b');
   assert.equal(body.stream, false);
@@ -160,4 +163,69 @@ test('candidate invalidation aborts the model request', async () => {
     },
   });
   await assert.rejects(verify(IMAGE, controller.signal), /candidate expired/);
+});
+
+test('with cloud verification allowed, a cloud model is used only when no local one exists', async () => {
+  const verdict = completion('{"isCaptcha":true,"reason":"Slider"}');
+  const onlyCloud = fixture(verdict, [cloud], () => true);
+  await onlyCloud.verify(IMAGE, new AbortController().signal);
+  const body = JSON.parse(String(onlyCloud.calls[1].init?.body));
+  assert.equal(body.model, cloud.id);
+  assert.equal('reasoning_effort' in body, false, 'Ollama 专用参数不发给云端');
+  const both = fixture(verdict, [cloud, local], () => true);
+  await both.verify(IMAGE, new AbortController().signal);
+  assert.equal(JSON.parse(String(both.calls[1].init?.body)).model, local.id, '本机模型可用时始终优先');
+});
+
+test('the cloud switch is read on every verification, not when the verifier is built', async () => {
+  let allowed = false;
+  const { verify, calls } = fixture(completion('{"isCaptcha":true,"reason":"Slider"}'), [cloud], () => allowed);
+  await assert.rejects(verify(IMAGE, new AbortController().signal), /local.*model/i);
+  assert.equal(calls.length, 1, '关闭时截图不发出');
+  allowed = true;
+  await verify(IMAGE, new AbortController().signal);
+  assert.equal(JSON.parse(String(calls.at(-1)?.init?.body)).model, cloud.id);
+});
+
+test('with cloud verification allowed, a channel without an HTTP endpoint is still refused', async () => {
+  // opencode channels can carry a baseUrl too: only the adapter type keeps them out.
+  const cli = { id: 'opencode/free', bcp: { sources: [{ adapter: 'opencode', baseUrl: 'https://opencode.example' }] } };
+  const { verify, calls } = fixture(completion('{"isCaptcha":true,"reason":"yes"}'), [cli], () => true);
+  await assert.rejects(verify(IMAGE, new AbortController().signal), /local or cloud model/i);
+  assert.equal(calls.length, 1);
+});
+
+test('with cloud verification allowed, a remote endpoint must be https', async () => {
+  const plain = { id: 'plain', bcp: { sources: [{ adapter: 'openai', baseUrl: 'http://vendor.example' }] } };
+  const { verify, calls } = fixture(completion('{"isCaptcha":true,"reason":"yes"}'), [plain], () => true);
+  await assert.rejects(verify(IMAGE, new AbortController().signal), /local or cloud model/i);
+  assert.equal(calls.length, 1, '明文 http 的远程地址收不到截图');
+});
+
+test('allowing cloud verification never accepts a remote gateway', async () => {
+  let called = false;
+  const verify = createCaptchaVerifier({
+    baseUrl: 'https://vendor.example', allowCloud: () => true,
+    fetch: async () => { called = true; return Response.json({}); },
+  });
+  await assert.rejects(verify(IMAGE, new AbortController().signal), /local.*gateway/i);
+  assert.equal(called, false);
+});
+
+test('by default the switch is the backend setting BCP_CLOUD_CAPTCHA, off unless set', async () => {
+  const saved = process.env.BCP_CLOUD_CAPTCHA;
+  const calls: string[] = [];
+  const verify = createCaptchaVerifier({ baseUrl: 'http://127.0.0.1:11435', fetch: async (url, init) => {
+    calls.push(String(init?.body ?? ''));
+    return Response.json(String(url).endsWith('/models') ? { data: [cloud] } : completion('{"isCaptcha":true,"reason":"Slider"}'));
+  } });
+  try {
+    delete process.env.BCP_CLOUD_CAPTCHA;
+    await assert.rejects(verify(IMAGE, new AbortController().signal), /local.*model/i);
+    process.env.BCP_CLOUD_CAPTCHA = 'on';
+    await verify(IMAGE, new AbortController().signal);
+    assert.equal(JSON.parse(calls.at(-1) ?? '{}').model, cloud.id);
+  } finally {
+    if (saved === undefined) delete process.env.BCP_CLOUD_CAPTCHA; else process.env.BCP_CLOUD_CAPTCHA = saved;
+  }
 });

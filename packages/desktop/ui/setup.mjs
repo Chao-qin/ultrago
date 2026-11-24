@@ -8,13 +8,17 @@ let mcpCheckGeneration = 0;
 let activeStep = 0;
 let stepInitialized = false;
 // One fixed order. Model and assistants can be skipped but still sit in line, so nobody has to find them.
-const stepIds = ['environment', 'browser', 'model', 'agents', 'experience'];
+// Preferences sit outside the line: they are settings rather than a step, and saving them needs no running service.
+const stepIds = ['environment', 'browser', 'model', 'agents', 'experience', 'preferences'];
 const stepNames = ['准备工作台', '连接 Chrome', 'AI 模型', '接入 AI 助手', '开始使用'];
-const LAST = stepIds.length - 1;
+const LAST = 4;
+const PREFERENCES = 5;
 const optional = (step) => step === 2 || step === 3;
 const reachable = (state) => state.phase === 'ready' ? state.browserReady ? LAST : 1 : 0;
 // A failed preparation can be caused by the model settings, so the model step stays open to fix them.
-const canOpen = (step, state) => step <= reachable(state) || step === 2 && state.phase === 'failed';
+// Preferences open before the first preparation; a returning user whose services stopped is sent back to restart them.
+const canOpen = (step, state) => step === PREFERENCES ? !state.setupCompleted || state.phase === 'ready'
+  : step <= reachable(state) || step === 2 && state.phase === 'failed';
 const onlineAssistants = (state) => (state.connections?.assistants || []).filter((client) => client.state === 'connected');
 const modelReady = (state) => state.modelMode === 'local' ? !!state.localModel?.configured : state.modelMode === 'cloud' && !!state.modelConfigured;
 function stepDone(step, state) {
@@ -26,7 +30,7 @@ function stepDone(step, state) {
 }
 
 function showStep(index, focus = true) {
-  const step = Math.max(0, Math.min(LAST, index));
+  const step = Math.max(0, Math.min(PREFERENCES, index));
   activeStep = canOpen(step, current) ? step : Math.min(step, reachable(current));
   sessionStorage.setItem('setupStep', String(activeStep));
   renderWizard();
@@ -37,19 +41,31 @@ function showStep(index, focus = true) {
 function renderWizard() {
   const ready = current.phase === 'ready';
   const available = reachable(current);
+  const failed = current.phase === 'failed';
   stepIds.forEach((id, index) => { $(id).hidden = index !== activeStep; });
-  document.querySelectorAll('.stepper [data-step-target]').forEach((button) => {
+  // The required step still to do is the one the user is waiting on; it stands out wherever they are.
+  const pending = !ready ? 0 : current.browserReady ? -1 : 1;
+  document.querySelectorAll('.checklist [data-step-target]').forEach((button) => {
     const step = Number(button.dataset.stepTarget);
     const done = stepDone(step, current) && step !== activeStep;
     button.disabled = !canOpen(step, current);
     button.classList.toggle('complete', done);
-    button.querySelector('.step-dot').textContent = done ? '✓' : step + 1;
+    button.classList.toggle('failed', step === 0 && failed);
+    button.classList.toggle('attention', step === pending && !failed);
+    button.querySelector('.step-dot').textContent = done ? '✓' : step === PREFERENCES ? '⋯' : step + 1;
+    const status = button.querySelector('.step-status');
+    status.textContent = status.title = stepStatus(step, current);
     if (step === activeStep) button.setAttribute('aria-current', 'step');
     else button.removeAttribute('aria-current');
   });
+  $('checklist-title').textContent = failed ? '工作台没能启动' : !ready ? '先准备工作台' : !stepDone(1, current) ? '还差一步就能开始' : '一切就绪';
+  $('checklist-sub').textContent = failed ? '先看看日志，修好后重试；模型设置也可以先去检查。'
+    : !stepDone(1, current) ? '必需两项完成后即可运行任务，增强项可以以后再设。' : '随时回来改任何一项，进入工作台即可开始。';
   const next = activeStep + 1;
+  // Preferences are not a step: nothing comes before or after them.
+  document.querySelector('.wizard-footer').hidden = activeStep === PREFERENCES;
   $('previous-step').hidden = activeStep === 0;
-  $('next-step').hidden = activeStep === LAST;
+  $('next-step').hidden = activeStep >= LAST;
   $('next-step').disabled = !!current.busy || next > available;
   $('next-step').textContent = optional(activeStep) && !stepDone(activeStep, current) ? `跳过，下一步：${stepNames[next]} →` : `下一步：${stepNames[next]} →`;
   $('workbench').hidden = activeStep !== LAST;
@@ -59,8 +75,21 @@ function renderWizard() {
   $('step-help').textContent = activeStep === 0 ? (ready ? '' : '准备完成后进入下一步。')
     : activeStep === 1 ? (current.browserReady ? '' : '确认 Chrome 后进入下一步。')
     : activeStep === 2 && editingModel ? '设置尚未保存，跳过将不使用这次的修改。'
-    : optional(activeStep) ? '可跳过，之后随时从上方步骤回来设置。'
+    : optional(activeStep) ? '可跳过，之后随时从步骤清单回来设置。'
     : current.browserReady ? '示例可跳过，直接进入工作台即可开始。' : '';
+}
+
+/** One line per checklist item, so a skipped or pending setting is visible from every step. */
+function stepStatus(step, state) {
+  if (step === 0) return state.phase === 'ready' ? '已启动' : phaseNames[state.phase] || '等待准备';
+  if (step === 1) return stepDone(1, state) ? '已连接' : state.phase === 'ready' ? '等待确认 Chrome' : '准备完成后连接';
+  if (step === 2) return modelReady(state) ? modelLabel(state) : '未设置：任务卡在验证码时不会提醒';
+  if (step === 3) {
+    const online = onlineAssistants(state);
+    return online.length ? online.map((client) => client.name).join('、') : '未接入：助手还不能使用这台电脑的浏览器';
+  }
+  if (step === LAST) return state.browserReady ? '可以运行示例' : 'Chrome 连接后可运行示例';
+  return `页面脚本${state.allowEval === false ? '关' : '开'} · 本机脚本${state.allowLocalEval === false ? '关' : '开'}${state.allowCloudCaptcha === true ? ' · 云端识别验证码开' : ''}`;
 }
 const phaseNames = { waiting: '等待准备', checking: '检查中', initializing: '初始化中', starting: '启动中', registering: '检查模板', ready: '工作台已启动', failed: '准备失败' };
 const services = { backend: '浏览器服务', console: '工作台', llm: '模型网关', migrate: '数据库初始化', desktop: '客户端' };
@@ -75,7 +104,7 @@ function renderModelMode(mode) {
   $('cloud-fields').querySelectorAll('input').forEach((input) => { input.disabled = mode !== 'cloud'; });
   $('local-setup').hidden = mode !== 'local';
   $('model-hint').textContent = mode === 'skip' ? '不使用模型：任务卡在验证码时不会提醒，其他功能照常使用。'
-    : mode === 'cloud' ? '填写你自己的服务地址、模型和 API Key。'
+    : mode === 'cloud' ? (current.allowCloudCaptcha === true ? '已在「权限与偏好」允许云端识别验证码：保存后，验证码截图也会发到这里填写的地址。' : '填写你自己的服务地址、模型和 API Key。')
     : localReady ? (current.modelMode === 'local' && !editingModel ? '本机模型已启用。' : '本机模型已就绪，点击下方按钮启用。') : '完成上面两项后即可启用。';
   $('model-save').textContent = mode === 'local' ? '使用本机模型' : mode === 'cloud' ? '保存云 API' : '保存：不使用模型';
   // Nothing to save when the choice is the saved one; a cloud form can still be resubmitted to change its key.
@@ -153,33 +182,6 @@ function modelLabel(state) {
   return '未设置';
 }
 
-/** The last step lists every setting, so a skipped one is visible and one click away. */
-function renderSummary(state) {
-  const online = onlineAssistants(state);
-  const rows = [
-    ['工作台', state.phase === 'ready' ? '已启动' : '未启动', state.phase === 'ready', 0, '去准备'],
-    ['Chrome', state.browserReady ? '已连接' : '未连接，任务要连接后才能运行', !!state.browserReady, 1, '去连接'],
-    ['AI 模型', modelReady(state) ? modelLabel(state) : '未设置：任务卡在验证码时不会提醒', modelReady(state), 2, modelReady(state) ? '修改' : '去设置'],
-    ['AI 助手', online.length ? online.map((client) => client.name).join('、') : '未接入：Claude、Cursor 等助手还不能使用这台电脑的浏览器', online.length > 0, 3, online.length ? '管理' : '去接入'],
-  ];
-  $('setup-summary').replaceChildren(...rows.map(([label, value, ok, step, verb]) => {
-    const item = document.createElement('li');
-    item.className = ok ? 'ok' : '';
-    const mark = document.createElement('span'); mark.className = 'summary-mark'; mark.textContent = ok ? '✓' : '·'; mark.setAttribute('aria-hidden', 'true');
-    const text = document.createElement('span'); text.className = 'summary-text';
-    const title = document.createElement('strong'); title.textContent = label;
-    const detail = document.createElement('small'); detail.textContent = value;
-    text.append(title, detail);
-    item.append(mark, text);
-    if (!ok || step >= 2) {
-      const go = document.createElement('button'); go.type = 'button'; go.className = 'secondary'; go.textContent = verb;
-      go.addEventListener('click', () => showStep(step));
-      item.append(go);
-    }
-    return item;
-  }));
-}
-
 function render(state) {
   const previousPhase = current.phase;
   const previouslyConnected = current.browserReady;
@@ -190,10 +192,12 @@ function render(state) {
   }
   current = state;
   const resuming = state.setupCompleted && state.busy && !['ready', 'failed'].includes(state.phase);
-  document.querySelector('.stepper').hidden = !!resuming;
+  document.querySelector('.sidebar').hidden = !!resuming;
   $('environment-title').textContent = resuming ? '正在恢复工作台' : '准备工作台';
   $('overall').textContent = state.phase === 'ready' && !state.browserReady ? '下一步 · 连接 Chrome' : phaseNames[state.phase] || '等待准备';
-  $('overall').classList.toggle('ok', state.phase === 'ready');
+  $('overall').classList.toggle('ok', state.phase === 'ready' && !!state.browserReady);
+  $('overall').classList.toggle('warn', state.phase === 'ready' && !state.browserReady);
+  $('overall').classList.toggle('failed', state.phase === 'failed');
   if (state.phase === 'failed') { $('error').textContent = state.detail || '工作台准备失败，请查看日志。'; $('error').hidden = false; }
   else if (previousPhase === 'failed') $('error').hidden = true;
   $('prepare').disabled = !!state.busy;
@@ -201,6 +205,7 @@ function render(state) {
   $('prepare').textContent = state.phase === 'failed' ? '重试准备' : state.phase === 'ready' ? '恢复本地服务' : '准备工作台';
   $('browser-status').textContent = state.browserReady ? '已确认连接' : state.browserId ? '所选浏览器离线' : '等待确认';
   $('browser-status').classList.toggle('ok', !!state.browserReady);
+  $('browser-status').classList.toggle('warn', state.phase === 'ready' && !state.browserReady);
   const browsers = (state.browsers || []).filter((b) => b.kind === 'chrome' && b.ready);
   const selection = $('browser-select').value || state.browserId;
   $('browser-select').replaceChildren(...(browsers.length ? browsers.map((browser, index) => {
@@ -211,6 +216,19 @@ function render(state) {
   if (browsers.some((b) => b.instanceId === selection)) $('browser-select').value = selection;
   $('select-browser').disabled = !!state.busy || browsers.length === 0;
   if (!previouslyConnected && state.browserReady) $('install-guide').open = false;
+  document.querySelector('.connection-box').classList.toggle('waiting', state.phase === 'ready' && !state.browserReady);
+  document.querySelector('.connection-box').classList.toggle('ok', !!state.browserReady);
+  // One card per long-running service, from the services the client reports as up.
+  const running = new Set(state.services || []);
+  $('service-list').replaceChildren(...['backend', 'console', 'llm'].map((id) => {
+    const item = document.createElement('li');
+    item.className = running.has(id) ? 'ok' : state.phase === 'failed' ? 'failed' : '';
+    const name = document.createElement('small'); name.textContent = services[id];
+    const value = document.createElement('strong');
+    value.textContent = running.has(id) ? '运行中' : state.busy ? '启动中' : id === 'llm' && state.phase === 'ready' ? '未启用（没有设置模型）' : '未启动';
+    item.append(name, value);
+    return item;
+  }));
   $('bridge-repair').hidden = !state.bridgeError;
   $('bridge-status').textContent = state.bridgeError || '';
   $('repair-bridge').disabled = !!state.bridgeBusy || !!state.busy;
@@ -237,13 +255,18 @@ function render(state) {
     ['Chrome', state.browserReady ? `已确认 · ${(state.browserId || '').slice(0, 8)}` : '未确认连接'],
     ['MCP 助手', online.length ? online.map((client) => `${client.name}${client.toolCount ? ` · ${client.toolCount} 工具` : ' · 已握手'}`).join('、') : assistants.some((client) => client.state === 'connecting') ? '正在握手' : '尚无助手连接'],
   ];
-  $('connection-summary').replaceChildren(...summary.flatMap(([label, value]) => { const term = document.createElement('dt'); term.textContent = label; const detail = document.createElement('dd'); detail.textContent = value; return [term, detail]; }));
+  $('connection-summary').replaceChildren(...summary.map(([label, value]) => { const row = document.createElement('div'); const term = document.createElement('dt'); term.textContent = label; const detail = document.createElement('dd'); detail.textContent = value; row.append(term, detail); return row; }));
   const connectionError = connections?.lastError;
   $('connection-error').hidden = !connectionError;
   $('connection-error').textContent = connectionError || '';
   $('directory').textContent = state.dataDirectory || '';
   $('allow-eval').checked = state.allowEval !== false;
   $('allow-local-eval').checked = state.allowLocalEval !== false;
+  $('allow-cloud-captcha').checked = state.allowCloudCaptcha === true;
+  // Say where the screenshot would go, so the switch is never flipped blind.
+  $('cloud-captcha-target').textContent = state.modelMode === 'local' ? '当前用的是本机模型，截图不会离开这台电脑。'
+    : state.modelMode === 'cloud' && state.modelConfigured ? `开启后截图会发到：${state.modelUrl}（模型 ${state.model}）`
+    : '当前没有启用云 API：开启后也没有可用的模型，验证码提醒仍不生效。';
   $('screenshot-dir-value').textContent = `截图保存位置：${state.screenshotDir || '系统临时目录'}（另可随时写入系统临时目录）`;
   $('screenshot-dir-clear').hidden = !state.screenshotDir;
   $('logs').textContent = (state.logs || []).map((entry) => `${entry.time ? new Date(entry.time).toLocaleTimeString() : ''} [${services[entry.service] || entry.service}] ${entry.text}`).join('\n') || '尚无准备日志。';
@@ -266,12 +289,11 @@ function render(state) {
     if (content?.raw) { try { content = JSON.parse(content.raw); } catch { content = { text: content.raw }; } }
     $('result').textContent = run.error || content?.value?.text || content?.text || (run.status === 'success' ? '读取完成。你可以查看示例窗口中的商品清单。' : '任务需要处理，请查看当前步骤。');
   }
-  renderSummary(state);
   if (!stepInitialized) {
     stepInitialized = true;
     // Without a remembered step, open on the first one still to do rather than on a finished one.
     const saved = Number(sessionStorage.getItem('setupStep') ?? NaN);
-    activeStep = Number.isInteger(saved) && saved >= 0 && saved <= LAST ? saved
+    activeStep = Number.isInteger(saved) && saved >= 0 && saved <= PREFERENCES ? saved
       : state.phase !== 'ready' ? 0 : !state.browserReady ? 1 : state.setupCompleted ? LAST : 2;
   }
   if (state.setupCompleted && state.phase === 'ready' && previousPhase !== 'ready' && activeStep === 0) activeStep = state.browserReady ? LAST : 1;
@@ -430,6 +452,7 @@ $('agent-connect').addEventListener('click', async () => {
 });
 $('allow-eval').addEventListener('change', () => void action('policy', { allowEval: $('allow-eval').checked }));
 $('allow-local-eval').addEventListener('change', () => void action('policy', { allowLocalEval: $('allow-local-eval').checked }));
+$('allow-cloud-captcha').addEventListener('change', () => void action('policy', { allowCloudCaptcha: $('allow-cloud-captcha').checked }));
 $('screenshot-dir').addEventListener('click', () => void action('chooseScreenshotDir'));
 $('screenshot-dir-clear').addEventListener('click', () => void action('policy', { screenshotDir: null }));
 $('autostart').addEventListener('change', async () => {

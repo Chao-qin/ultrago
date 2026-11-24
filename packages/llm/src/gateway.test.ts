@@ -80,6 +80,34 @@ after(() => {
   globalThis.fetch = realFetch;
 });
 
+test('in the desktop build the gateway answers only the desktop token, and never when that token is missing', async () => {
+  const saved = { desktop: process.env.BCP_DESKTOP, token: process.env.BCP_DESKTOP_TOKEN };
+  try {
+    process.env.BCP_DESKTOP = '1';
+    delete process.env.BCP_DESKTOP_TOKEN;
+    await withGateway([LOCAL], async (base) => {
+      const unset = await realFetch(`${base}/v1/models`, { headers: { Authorization: 'Bearer undefined' } });
+      assert.equal(unset.status, 401, '令牌没有下发时，"Bearer undefined" 不能当成正确令牌');
+      process.env.BCP_DESKTOP_TOKEN = 'desktop-token-fixture';
+      assert.equal((await realFetch(`${base}/v1/models`)).status, 401);
+      assert.equal((await realFetch(`${base}/v1/models`, { headers: { Authorization: 'Bearer wrong-token' } })).status, 401);
+      assert.equal((await realFetch(`${base}/v1/models`, { headers: { Authorization: 'Bearer desktop-token-fixture' } })).status, 200);
+      assert.equal((await realFetch(`${base}/v1/models`, { headers: { Authorization: 'Bearer desktop-token-fixturE' } })).status, 401, '同长度、只差一位也拒绝');
+      // The desktop client configures channels and keys itself; a caller holding its token still may not.
+      const auth = { Authorization: 'Bearer desktop-token-fixture', 'Content-Type': 'application/json' };
+      for (const [method, path] of [['POST', '/admin/keys'], ['PUT', '/admin/channels'], ['DELETE', '/admin/keys/k1'], ['POST', '/ADMIN/keys']]) {
+        const response = await realFetch(`${base}${path}`, { method, headers: auth, body: method === 'DELETE' ? undefined : '{}' });
+        assert.equal(response.status, 409, `${method} ${path} 应被拒绝`);
+      }
+      assert.equal((await realFetch(`${base}/admin/runtime`, { headers: auth })).status, 200, '只读的管理接口照常可用');
+    });
+  } finally {
+    for (const [key, value] of [['BCP_DESKTOP', saved.desktop], ['BCP_DESKTOP_TOKEN', saved.token]] as const) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
+
 /**
  * 测试中正在监听的网关自身地址。
  *

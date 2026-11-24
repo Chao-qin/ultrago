@@ -143,7 +143,7 @@ test("the window the user is on is named even while Chrome is in the background"
 });
 
 test("the desktop client switches eval and the screenshot folder in a running backend through its ingress", async () => {
-  const restore = restoreEnv(["BCP_EVAL", "BCP_LOCAL_EVAL", "BCP_SCREENSHOT_DIR", "BCP_POLICY_TOKEN", "BCP_DESKTOP", "BCP_DESKTOP_TOKEN"]);
+  const restore = restoreEnv(["BCP_EVAL", "BCP_LOCAL_EVAL", "BCP_SCREENSHOT_DIR", "BCP_CLOUD_CAPTCHA", "BCP_POLICY_TOKEN", "BCP_DESKTOP", "BCP_DESKTOP_TOKEN"]);
   const dynamicImport = new Function("url", "return import(url)") as (url: string) => Promise<Record<string, any>>;
   const { Coordinator } = await dynamicImport(new URL("../../desktop/src/coordinator.mjs", import.meta.url).href);
   const { createIngress } = await dynamicImport(new URL("../../desktop/src/ingress.mjs", import.meta.url).href);
@@ -177,12 +177,28 @@ test("the desktop client switches eval and the screenshot folder in a running ba
     await coordinator.savePolicy({ screenshotDir: null });
     assert.equal(process.env.BCP_SCREENSHOT_DIR, undefined);
     await assert.rejects(coordinator.savePolicy({ screenshotDir: "relative/dir" }), /完整路径/);
+    delete process.env.BCP_CLOUD_CAPTCHA;
+    assert.equal(config.cloudCaptchaEnabled, false, "云端识别验证码默认关闭");
+    await coordinator.savePolicy({ allowCloudCaptcha: true });
+    assert.equal(config.cloudCaptchaEnabled, true, "打开后运行中的后端立即允许");
+    await coordinator.savePolicy({ allowEval: true });
+    assert.equal(config.cloudCaptchaEnabled, true, "改别的开关不会把它推回关闭");
+    await coordinator.savePolicy({ allowCloudCaptcha: false });
+    assert.equal(config.cloudCaptchaEnabled, false);
+    await assert.rejects(coordinator.savePolicy({ allowCloudCaptcha: "yes" }), /云端识别验证码开关无效/);
+    const policyHeaders = { Authorization: `Bearer ${config.internalToken}`, "X-BCP-Policy-Token": coordinator.policyToken, "Content-Type": "application/json" };
+    const invalid = await fetch(`http://127.0.0.1:${address.port}/internal/browsers/policy`, { method: "POST", headers: policyHeaders, body: '{"cloudCaptcha":"on"}' });
+    assert.equal(invalid.status, 400, "后端只接受布尔值");
+    assert.equal(config.cloudCaptchaEnabled, false);
     // The token MCP clients hold opens the ingress, but never the policy: only the coordinator's own secret does.
     const headers = { Authorization: `Bearer ${config.internalToken}`, "X-BCP-Internal-Token": config.internalToken, "Content-Type": "application/json" };
     const proxied = await fetch(`${ingress.origin}/__bcp/backend/internal/browsers/POLICY`, { method: "POST", headers, body: '{"eval":false}' });
     assert.equal(proxied.status, 403, "经入口代理改策略一律拒绝");
     const direct = await fetch(`http://127.0.0.1:${address.port}/internal/browsers/policy`, { method: "POST", headers, body: '{"eval":false}' });
     assert.equal(direct.status, 403, "只有内部令牌、没有策略令牌也改不了");
+    const lookalike = `é${coordinator.policyToken.slice(1)}`;
+    const nonAscii = await fetch(`http://127.0.0.1:${address.port}/internal/browsers/policy`, { method: "POST", headers: { ...headers, "X-BCP-Policy-Token": lookalike }, body: '{"eval":false}' });
+    assert.equal(nonAscii.status, 403, "长度相同但含非 ASCII 字符的令牌是拒绝，不是 500");
     assert.equal(config.evalEnabled, true);
   } finally {
     restore();

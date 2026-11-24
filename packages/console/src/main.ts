@@ -8,6 +8,7 @@ import { Logger } from "@nestjs/common";
 import { NestExpressApplication } from "@nestjs/platform-express";
 import express from "express";
 import { UPLOAD_MAX_BYTES, desktopHttpGuard, desktopReady, runtimePort } from "@bcp/shared";
+import { desktopPolicyGuard } from "./settings/desktop-policy.js";
 import { AppModule } from "./app.module.js";
 import { IMAGE_BED_MAX_BYTES } from "./image-bed/github-image-bed.service.js";
 import { PrismaExceptionFilter } from "./prisma/prisma-exception.filter.js";
@@ -62,6 +63,7 @@ async function main(): Promise<void> {
     logger: ["log", "warn", "error"],
   });
   app.use(desktopHttpGuard);
+  app.use(desktopPolicyGuard);
   app.enableShutdownHooks();
 
   // Mount static React build at / and let the SPA's hash router handle
