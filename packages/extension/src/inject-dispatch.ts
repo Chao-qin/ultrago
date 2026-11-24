@@ -26,7 +26,7 @@
  */
 import { isPageAction, type ActionDelta, type RpcErrorInfo, type RpcMethod } from "@bcp/shared";
 import { domOpError } from "./rpc-errors";
-import { mergeFrameSnapshots } from "./snapshot-merge";
+import { mergeFrameReads, mergeFrameSnapshots } from "./snapshot-merge";
 
 export interface InjectionResultLike {
     frameId: number;
@@ -108,6 +108,22 @@ export function createInjectDispatch(deps: InjectDeps) {
       // probes. Fire-and-forget so it never blocks or fails the snapshot itself.
       void injectEventProbes(tabId);
       return mergeFrameSnapshots(tabId, results);
+    }
+
+    // A whole-page read covers every frame, as the snapshot does — verification reads the page through it, and a
+    // message shown inside an iframe was invisible to textPresent / textAbsent. A paged read stays in the top frame.
+    if (op === "read" && p.full) {
+      const results = await scripting.executeScript({
+        target: { tabId, allFrames: true },
+        world: "ISOLATED",
+        func: runtime.dom as never,
+        args: ["read", withoutRouting(params)],
+      });
+      const topError = (results.find((r) => r.frameId === 0)?.result as { error?: string; errorInfo?: RpcErrorInfo } | undefined);
+      if (topError?.error) throw domOpError(topError);
+      const merged = mergeFrameReads(results);
+      if (!merged) throw new Error(`read: the top frame of tab ${tabId} returned no result — take a snapshot to see what the tab holds now.`);
+      return { ...merged, tabId };
     }
 
     // Route a ref-bearing op to the frame its ref came from ("42_e3" -> frame 42, ref "e3").

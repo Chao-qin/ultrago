@@ -380,3 +380,15 @@ test("动作里由本标签页打开的新标签页写进回执；别的标签�
   assert.deepEqual(r.delta?.tabsOpened, [{ tabId: 7, url: "https://new/" }]);
   assert.equal(listeners.size, 0, "监听用完即撤");
 });
+
+test("整页读取覆盖每一帧：iframe 里显示的报错也在验证读到的正文里", async () => {
+  const h = harness();
+  h.setExec(async () => [
+    { frameId: 0, result: { value: { url: "https://top/", title: "t", text: "表单", offset: 0, totalChars: 2, truncated: false } } },
+    { frameId: 9, result: { value: { url: "https://pay/", title: "", text: "支付失败", offset: 0, totalChars: 4, truncated: false } } },
+  ]);
+  const r = (await h.dispatch(RpcMethod.ReadContent, { full: true })) as { text: string; totalChars: number };
+  assert.equal(r.text, "表单\n\n[frame https://pay/]\n支付失败");
+  assert.equal(r.totalChars, r.text.length);
+  assert.equal((h.execCalls[0] as { target: { allFrames?: boolean } }).target.allFrames, true);
+});

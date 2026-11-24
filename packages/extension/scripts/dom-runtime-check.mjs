@@ -1218,6 +1218,28 @@ async function main() {
     },
   );
 
+  // ---- What judges the page sees what the snapshot sees: text, errors and
+  // waits reach into open shadow roots (a web component's error toast used to
+  // be invisible to textAbsent, noErrors and the action's newErrors).
+  await withPage(
+    `<button id="go">继续</button><span id="toast-host"></span><span id="hidden-host" style="display:none"></span>
+     <script>
+       document.getElementById("hidden-host").attachShadow({ mode: "open" }).innerHTML = '<p>隐藏的提示</p>';
+       document.getElementById("go").onclick = () => {
+         document.getElementById("toast-host").attachShadow({ mode: "open" }).innerHTML = '<p class="error">提交失败</p>';
+       };
+     </script>`,
+    async (t) => {
+      const acted = await t.call("click", { ref: t.ref("go") });
+      eq(JSON.stringify(acted.value?.delta?.newErrors ?? []), JSON.stringify(["提交失败"]), "an error shown inside a shadow root is a new error of the action");
+      const read = (await t.call("read", { full: true })).value.text;
+      match(read, /提交失败/, "the page text includes what a shadow root shows");
+      eq(read.includes("隐藏的提示"), false, "but not what it holds hidden");
+      const waited = await t.call("wait", { waitText: "提交失败", ms: 500 });
+      eq(waited.error, undefined, "wait_for finds text a shadow root shows");
+    },
+  );
+
   // ---- A ref acts only in the document it was read in. The backend sends the
   // docId of the read along with the ref; a document that was replaced since
   // (navigation, reload) numbers its elements afresh, so its e1 is not the e1

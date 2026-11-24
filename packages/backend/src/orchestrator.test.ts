@@ -247,3 +247,22 @@ test("同时声明 visualAssert 和 assert 时，两条都交给 agent 判断", 
   assert.equal(r.kind, "judgeVisual");
   assert.match((r as { claim: string }).claim, /图片正常.*标题已更新/);
 });
+
+test("verify.networkOk.bodyIncludes：响应体必须来自成功的那类响应 —— 同地址的 GET 200 加上 POST 500 的报错体不算保存成功", async () => {
+  let phase: "before" | "after" = "before";
+  const runner = new PlanRunner({
+    ...evidence,
+    pageState: async () => settledPage,
+    readNetwork: async () => ({
+      requests: phase === "before" ? [] : [
+        { url: "https://x/api/save", status: 200, ts: 10 },
+        { url: "https://x/api/save", status: 500, ts: 11 },
+      ],
+    }),
+    networkBodies: () => ({ bodies: phase === "before" ? [] : [{ url: "https://x/api/save", status: 500, body: '{"msg":"保存成功?不,失败"}' }], maxSeq: phase === "before" ? 0 : 1 }),
+  } as unknown as EvidenceReader);
+  const { planId } = await runner.create("g", [{ goal: "save", verify: { networkOk: { urlIncludes: "/api/save", bodyIncludes: "保存成功" } } }]);
+  phase = "after";
+  const result = await runner.advance(planId);
+  assert.notEqual(result.kind, "complete", "500 的响应体不能证明保存成功");
+});

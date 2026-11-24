@@ -800,3 +800,25 @@ test("会话的浏览器在它不知情时换了：按旧 ref 的动作、以及
     assert.match(textOf(await client.callTool({ name: "click", arguments: { text: "保存" } })), /claimed tab 3 is in browser .* Nothing was done/);
   } finally { await close(); }
 });
+
+test("计划验证的响应体只取本会话浏览器里、本计划所在标签页的：别的浏览器里的成功响应体不能证明这里保存成功", async () => {
+  const store = new EventStore();
+  const page: Record<string, unknown> = { tabId: 3, url: "u", title: "t", moreBelow: false, elements: [], docs: { "0": "d" }, ok: true, requests: [] };
+  const { client, close } = await connect({ events: store, result: page });
+  const textOf = (r: unknown) => (r as { content: Array<{ text?: string }> }).content.map((c) => c.text ?? "").join("\n");
+  try {
+    await client.callTool({ name: "snapshot", arguments: {} });
+    const planned = textOf(await client.callTool({ name: "plan", arguments: { goal: "g", steps: [{ goal: "save", verify: { networkOk: { urlIncludes: "/api/save", bodyIncludes: "保存成功" } } }] } }));
+    const planId = /plan_[\w-]+/.exec(planned)?.[0];
+    page.requests = [{ url: "https://x/api/save", status: 200, ts: Date.now() + 1000 }];
+    // Each foreign body differs in one way only, so each filter has to hold on its own.
+    store.push({ kind: "network_body", tabId: 9, ts: 1, browser: TARGET_A.instanceId, summary: "body", detail: { url: "https://x/api/save", status: 200, body: "保存成功" } });
+    store.push({ kind: "network_body", tabId: 3, ts: 1, browser: TARGET_B.instanceId, summary: "body", detail: { url: "https://x/api/save", status: 200, body: "保存成功" } });
+    const other = textOf(await client.callTool({ name: "advance", arguments: { planId } }));
+    assert.ok(planId, planned);
+    assert.match(other, /FAILED verification: response body for "\/api\/save" does not contain "保存成功" \(0 matching/, "另一个浏览器、另一个标签页的响应体不算");
+    store.push({ kind: "network_body", tabId: 3, ts: 2, browser: TARGET_A.instanceId, summary: "body", detail: { url: "https://x/api/save", status: 200, body: "保存成功" } });
+    const own = textOf(await client.callTool({ name: "advance", arguments: { planId } }));
+    assert.match(own, /Plan complete — all 1 step\(s\) verified/, "本会话、本标签页的成功响应体算数");
+  } finally { await close(); }
+});

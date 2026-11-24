@@ -44,3 +44,25 @@ export function mergeFrameSnapshots(tabId: number, results: FrameSnapshotResult[
   }
   return merged;
 }
+
+interface FrameRead {
+  url: string; title: string; text: string; offset: number; totalChars: number; truncated: boolean;
+  overview?: unknown;
+}
+
+/** One whole-page read out of per-frame reads: the top frame's text, then each other frame's, marked with its
+ *  address. Verification reads the page through this (textPresent / textAbsent), so a message an iframe shows — a
+ *  payment form's error, an embedded editor — must be in it, as it is in the snapshot. Returns undefined when the top
+ *  frame produced no read, so the caller fails the way a top-frame-only read would. */
+export function mergeFrameReads(results: FrameSnapshotResult[]): FrameRead | undefined {
+  const reads = results
+    .map((res) => ({ frameId: res.frameId, value: (res.result as { value?: FrameRead } | undefined)?.value }))
+    .filter((r): r is { frameId: number; value: FrameRead } => !!r.value)
+    .sort((a, b) => a.frameId - b.frameId);
+  const top = reads.find((r) => r.frameId === 0)?.value;
+  if (!top) return undefined;
+  const rest = reads.filter((r) => r.frameId !== 0 && r.value.text.trim());
+  if (!rest.length) return top;
+  const text = [top.text, ...rest.map((r) => `[frame ${r.value.url}]\n${r.value.text}`)].join("\n\n");
+  return { ...top, text, totalChars: text.length };
+}

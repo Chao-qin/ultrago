@@ -474,9 +474,17 @@ export function createBrowserMcpServer(
     },
     setNetworkCapture: (planId, enabled, page) => call(RpcMethod.SetNetworkCapture, routePlaybackEvidence(planId, RpcMethod.SetNetworkCapture, { enabled }, page) as unknown as RpcContracts[typeof RpcMethod.SetNetworkCapture]["params"]).then(() => undefined),
     networkBodies: (planId, sinceSeq, page) => {
-      const { events: evs, maxSeq } = events.since(sinceSeq, playbackContexts.get(planId)?.currentTabId(page));
+      // The bodies of the tab this plan works in, in this session's browser. A live plan has no playback context,
+      // and with no tab the store hands back every tab's, every browser's and every session's bodies — another
+      // session's success then confirmed this one's save.
+      const tgt = resolvedTarget();
+      const tab = playbackContexts.get(planId)?.currentTabId(page)
+        ?? claimFor(tgt)
+        ?? (lastRead && lastRead.instanceId === tgt?.instanceId ? lastRead.tabId : undefined);
+      const { events: evs, maxSeq } = events.since(sinceSeq, tab);
+      const sees = sessionSees();
       const bodies = evs
-        .filter((e) => e.kind === "network_body")
+        .filter((e) => e.kind === "network_body" && sees(e))
         .map((e) => {
           const d = (e.detail ?? {}) as { url?: string; status?: number; body?: string };
           return { url: String(d.url ?? ""), status: Number(d.status ?? 0), body: String(d.body ?? "") };

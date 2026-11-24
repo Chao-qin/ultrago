@@ -248,9 +248,9 @@ export async function bcpDomRuntime(
     // is lost; genuine alerts remain visible in the snapshot as `alert` elements.
     const ERROR_SELECTOR =
       '[aria-invalid="true"], [aria-errormessage], .error, .ant-form-item-explain-error, .arco-form-message-error, .el-form-item__error';
-    const collectErrors = (): string[] => {
+    const collectErrors = (roots?: (Document | ShadowRoot)[]): string[] => {
       const out: string[] = [];
-      for (const el of document.querySelectorAll(ERROR_SELECTOR)) {
+      for (const el of queryDeepAll(ERROR_SELECTOR, roots)) {
         if (!isVisible(el)) continue;
         const t = (el as HTMLElement).innerText?.trim();
         if (t) out.push(truncate(t, 80));
@@ -273,16 +273,16 @@ export async function bcpDomRuntime(
     // mounted (display:none). Shared by captureSig (→ delta's dialogsOpened) and
     // page_state's `dialogs` field so the two never disagree. A native
     // <dialog open> is open by definition, so trust the attribute.
-    const visibleDialogs = (): Element[] =>
-      [...document.querySelectorAll('[role="dialog"],[role="alertdialog"],dialog[open]')].filter(
+    const visibleDialogs = (roots?: (Document | ShadowRoot)[]): Element[] =>
+      queryDeepAll('[role="dialog"],[role="alertdialog"],dialog[open]', roots).filter(
         (d) => (d as HTMLElement).matches("dialog[open]") || isVisible(d),
       );
     type Sig = { url: string; count: number; dialogs: number; errors: string[]; locked: boolean; overlay: boolean };
-    const captureSig = (): Sig => ({
+    const captureSig = (roots = [...pageRoots(true)]): Sig => ({
       url: location.href,
-      count: document.querySelectorAll(SNAP_SELECTOR).length,
-      dialogs: visibleDialogs().length,
-      errors: collectErrors(),
+      count: queryDeepAll(SNAP_SELECTOR, roots).length,
+      dialogs: visibleDialogs(roots).length,
+      errors: collectErrors(roots),
       locked: scrollLocked(),
       overlay: centerOverlay(),
     });
@@ -427,6 +427,46 @@ export async function bcpDomRuntime(
     };
 
     // Shadow-piercing querySelector (first match across document + open shadow roots).
+    /** Every root that renders part of this page: the document, each open shadow root and — with `frames` — each
+     *  same-origin iframe's document, depth first. Whatever judges the page (errors, dialogs, form fields, busy
+     *  markers, headings, text) runs over all of them, as the snapshot does: a document-only query cannot see what a
+     *  web component renders, so a check built on it passes on a page it never read. Cross-origin frames are out of
+     *  reach here; the dispatcher reads them by injecting into each frame. */
+    function* pageRoots(frames: boolean, root: Document | ShadowRoot = document): Generator<Document | ShadowRoot> {
+      yield root;
+      for (const host of root.querySelectorAll("*")) {
+        const sr = (host as HTMLElement).shadowRoot;
+        if (sr) yield* pageRoots(frames, sr);
+        if (frames && host instanceof HTMLIFrameElement) {
+          try {
+            const doc = host.contentDocument; // same-origin only; cross-origin throws
+            if (doc) yield* pageRoots(frames, doc);
+          } catch {
+            /* cross-origin iframe — out of reach */
+          }
+        }
+      }
+    }
+    /** querySelectorAll over every root of the page (see pageRoots). Collecting the roots walks the whole document,
+     *  so a caller running several queries over one moment of the page passes the roots it collected once. */
+    function queryDeepAll<E extends Element = Element>(sel: string, roots: (Document | ShadowRoot)[] = [...pageRoots(true)]): E[] {
+      return roots.flatMap((r) => [...r.querySelectorAll<E>(sel)]);
+    }
+    /** The page's visible text: the document's, then each open shadow root's — innerText stops at a shadow boundary,
+     *  so a message a web component shows (an error toast) was absent from every read. Text a shadow root holds but
+     *  does not show is left out, as innerText leaves out hidden light-DOM text. Placed after the document's text:
+     *  where it sits on screen is not recoverable from here; that it is on the page is. */
+    function pageText(): string {
+      const parts = [document.body?.innerText ?? ""];
+      for (const r of pageRoots(false)) {
+        if (!(r instanceof ShadowRoot)) continue;
+        for (const c of r.children) {
+          const t = isVisible(c) ? (c as HTMLElement).innerText?.trim() : "";
+          if (t) parts.push(t);
+        }
+      }
+      return parts.join("\n\n");
+    }
     const queryDeep = (sel: string): Element | null => {
       const search = (root: Document | ShadowRoot): Element | null => {
         const m = root.querySelector(sel);
@@ -1992,7 +2032,7 @@ export async function bcpDomRuntime(
         const blockers: Array<Record<string, unknown>> = [];
         const countedGroups = new Set<string>();
         const refOf = (c: Element): string | undefined => store.__bcpRefOf?.get(c);
-        for (const c of document.querySelectorAll("input, select, textarea")) {
+        for (const c of queryDeepAll("input, select, textarea")) {
           if (!isVisible(c)) continue;
           const el = c as HTMLInputElement;
           const type = (el.getAttribute("type") ?? "").toLowerCase();
@@ -2005,7 +2045,7 @@ export async function bcpDomRuntime(
           if (gkey) countedGroups.add(gkey);
           const isCheck = type === "checkbox" || isRadio;
           const radios = gkey
-            ? ([...document.querySelectorAll(`input[type="radio"][name="${CSS.escape(el.name)}"]`)] as HTMLInputElement[])
+            ? ([...(el.getRootNode() as Document | ShadowRoot).querySelectorAll(`input[type="radio"][name="${CSS.escape(el.name)}"]`)] as HTMLInputElement[])
             : [el];
           const empty = isRadio
             ? !radios.some((r) => r.checked)
@@ -2071,7 +2111,7 @@ export async function bcpDomRuntime(
         sigStore.__bcpStateSig[key] = nowSig;
 
         const dialogEls = visibleDialogs(); // shared visible-filter (matches captureSig)
-        const busy = [...document.querySelectorAll('[aria-busy="true"],[role="progressbar"],progress:not([value])')].filter(isVisible).length;
+        const busy = queryDeepAll('[aria-busy="true"],[role="progressbar"],progress:not([value])').filter(isVisible).length;
 
         // Rendering probe. A page that reports itself visible gets an animation
         // frame within a few frames; none means Chrome stopped painting this
@@ -2156,7 +2196,7 @@ export async function bcpDomRuntime(
         // That is fine for the short labels truncate exists for, and wrong here.
         // Keep the line breaks innerText already computed; only squeeze runs of
         // spaces within a line and long blank stretches.
-        const raw = (document.body?.innerText ?? "")
+        const raw = pageText()
           .replace(/[^\S\n]+/g, " ")
           .replace(/\n{3,}/g, "\n\n")
           .trim();
@@ -2165,7 +2205,7 @@ export async function bcpDomRuntime(
         // is intentionally much larger than the historical 8K cap, while
         // pagination still makes arbitrarily long pages readable without
         // attempting one unbounded RPC response.
-        const headings = [...document.querySelectorAll("h1, h2, h3, h4, h5, h6")]
+        const headings = queryDeepAll("h1, h2, h3, h4, h5, h6")
           .filter(isVisible)
           .map((el) => (el.textContent ?? "").replace(/\s+/g, " ").trim())
           .filter(Boolean);
@@ -2216,7 +2256,7 @@ export async function bcpDomRuntime(
             const vis = !!el && isVisible(el);
             return params.state === "hidden" ? !vis : vis; // default: wait until visible
           }
-          if (params.waitText) return (document.body?.innerText ?? "").includes(params.waitText);
+          if (params.waitText) return pageText().includes(params.waitText);
           return null; // no condition -> fixed delay
         };
         if (check() === null) {

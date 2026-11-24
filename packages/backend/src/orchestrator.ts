@@ -875,9 +875,11 @@ export class PlanRunner {
         // Only requests since this step began (netBaseline), so a stale prior 2xx
         // to the same URL can't false-pass.
         const matched = requests.filter((r) => r.url.includes(want.urlIncludes) && r.ts > netBaseline);
-        const ok = matched.find((r) =>
-          want.status != null ? r.status === want.status : r.status != null && r.status >= 200 && r.status < 300,
-        );
+        // One meaning of "succeeded" for the request and for its body: a body is evidence only when the response it
+        // came with succeeded — a GET 200 to the same address plus a POST 500's body is not a successful save.
+        const succeeded = (status: number | null | undefined): boolean =>
+          want.status != null ? status === want.status : status != null && status >= 200 && status < 300;
+        const ok = matched.find((r) => succeeded(r.status));
         if (!ok) {
           const seen = matched.length
             ? `saw status ${matched.map((r) => r.status ?? "pending").join(", ")}`
@@ -887,7 +889,7 @@ export class PlanRunner {
           // Status OK — now check the captured response BODY (MAIN-world capture,
           // enabled at step entry). Only bodies since the step began (seq baseline).
           const { bodies } = this.evidence.networkBodies(planId, bodySeqBaseline, page);
-          const hit = bodies.some((b) => b.url.includes(want.urlIncludes) && b.body.includes(want.bodyIncludes!));
+          const hit = bodies.some((b) => b.url.includes(want.urlIncludes) && succeeded(b.status) && b.body.includes(want.bodyIncludes!));
           if (!hit) {
             const n = bodies.filter((b) => b.url.includes(want.urlIncludes)).length;
             failed.push(
