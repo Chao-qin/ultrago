@@ -1,0 +1,107 @@
+{
+  "about": "Fixed tasks for scripts/snapshot-task-bench.mjs. Public pages only, read-only: no sign-in, no form submit, no posting. Cold start: a prompt states only the goal — it never names a control, its label or its state, and never says which way to go. Naming the control hands the agent the perception the snapshot is supposed to provide (a first version did, and every snapshot call was a query for the named label; the default view was never read). `hidden: true` marks tasks whose answer sits behind collapsed UI (closed menu, dropdown, <details>, native <select>) on the start page. Checks are deterministic: `url` = some open tab's URL must match; `forbidNavigate` = fails the task when a navigate / new_tab / new_window / eval call contains it (the answer must be reached through the page); `tabState` = JS run in the tabs matching `url`, one must return true; `answerFrom` = JS run on `url` in a separate clean browser after the task (and before it too when `sampleBefore`), returning the accepted answer(s) — the agent's `ANSWER:` line must contain one, compared case-insensitively without whitespace or commas; `urlHasAnswer` = the matching tab URL must also contain that answer.",
+  "needsLogin": [
+    "抖店: find a given product in 商品管理 and open its edit form — needs a seller login; run it locally, never commit its results.",
+    "1688: read the price of the first SKU on a product page — needs a buyer login for prices; same."
+  ],
+  "tasks": [
+    {
+      "id": "gh-trending-language",
+      "hidden": true,
+      "startUrl": "https://github.com/trending",
+      "prompt": "Which repository is the top trending Rust repository on GitHub today? Report it as owner/name, and leave the browser showing the list you read it from.",
+      "check": {
+        "url": "^https://github\\.com/trending/rust(?:[?#/].*)?$",
+        "forbidNavigate": "trending/rust",
+        "answerFrom": {
+          "url": "https://github.com/trending/rust",
+          "js": "document.querySelector('article h2 a').getAttribute('href').replace(/^\\//, '')"
+        }
+      }
+    },
+    {
+      "id": "mdn-sidebar-section",
+      "hidden": true,
+      "startUrl": "https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/select",
+      "prompt": "Open MDN's reference page for the HTML inputmode global attribute.",
+      "check": {
+        "url": "^https://developer\\.mozilla\\.org/en-US/docs/Web/HTML/Reference/Global_attributes/inputmode/?(?:[?#].*)?$",
+        "forbidNavigate": "Global_attributes"
+      }
+    },
+    {
+      "id": "mdn-language-switch",
+      "hidden": true,
+      "startUrl": "https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/select",
+      "prompt": "Open the Japanese version of this same MDN page.",
+      "check": {
+        "url": "^https://developer\\.mozilla\\.org/ja/docs/Web/HTML/Reference/Elements/select/?(?:[?#].*)?$",
+        "forbidNavigate": "mozilla\\.org/ja/"
+      }
+    },
+    {
+      "id": "wiki-language-menu",
+      "hidden": true,
+      "startUrl": "https://en.wikipedia.org/wiki/Cuckoo_clock",
+      "prompt": "Open the German Wikipedia article that corresponds to this article, and report its title.",
+      "check": {
+        "url": "^https://de\\.(?:m\\.)?wikipedia\\.org/wiki/",
+        "forbidNavigate": "de\\.(?:m\\.)?wikipedia\\.org",
+        "answerFrom": {
+          "url": "https://en.wikipedia.org/wiki/Cuckoo_clock",
+          "js": "decodeURIComponent(new URL(document.querySelector('a[lang=\"de\"]').href).pathname.split('/').pop()).replace(/_/g, ' ')"
+        }
+      }
+    },
+    {
+      "id": "gh-release-assets",
+      "hidden": true,
+      "startUrl": "https://github.com/BurntSushi/ripgrep/releases",
+      "prompt": "For the second release listed on this page, what is the exact file name of its .tar.gz build for aarch64-apple-darwin?",
+      "check": {
+        "forbidNavigate": "expanded_assets|releases/download",
+        "answerFrom": {
+          "url": "https://github.com/BurntSushi/ripgrep/releases",
+          "js": "(async () => { const tags = [...new Set([...document.querySelectorAll('a[href*=\"/releases/tag/\"]')].map((a) => a.getAttribute('href').split('/releases/tag/')[1]))]; const html = await (await fetch('/BurntSushi/ripgrep/releases/expanded_assets/' + tags[1])).text(); return [...new Set(html.match(/[\\w.-]*aarch64-apple-darwin\\.tar\\.gz(?![\\w.])/g) ?? [])]; })()"
+        }
+      }
+    },
+    {
+      "id": "python-docs-version",
+      "hidden": true,
+      "startUrl": "https://docs.python.org/3/library/json.html",
+      "prompt": "Open the Python 3.12 version of this same documentation page.",
+      "check": {
+        "url": "^https://docs\\.python\\.org/3\\.12/library/json\\.html(?:[?#].*)?$",
+        "forbidNavigate": "docs\\.python\\.org/3\\.12"
+      }
+    },
+    {
+      "id": "wiki-list-value",
+      "hidden": false,
+      "startUrl": "https://en.wikipedia.org/wiki/List_of_countries_and_dependencies_by_population",
+      "prompt": "What population figure does the table on this page give for Iceland? Answer with the number exactly as the table writes it.",
+      "check": {
+        "answerFrom": {
+          "url": "https://en.wikipedia.org/wiki/List_of_countries_and_dependencies_by_population",
+          "js": "[...document.querySelectorAll('table.wikitable tr')].find((r) => /\\bIceland\\b/.test(r.cells[0]?.innerText ?? '') || /\\bIceland\\b/.test(r.cells[1]?.innerText ?? '')).innerText.match(/\\d{1,3}(?:,\\d{3})+/)[0]"
+        }
+      }
+    },
+    {
+      "id": "hn-nth-comments",
+      "hidden": false,
+      "startUrl": "https://news.ycombinator.com/",
+      "prompt": "Open the discussion of the 3rd story on this front page. Report that story's item id.",
+      "check": {
+        "url": "^https://news\\.ycombinator\\.com/item\\?id=\\d+",
+        "urlHasAnswer": true,
+        "sampleBefore": true,
+        "answerFrom": {
+          "url": "https://news.ycombinator.com/",
+          "js": "document.querySelectorAll('tr.athing')[2].id"
+        }
+      }
+    }
+  ]
+}
