@@ -49,6 +49,10 @@ export interface NetIdleTracker {
   onRequestStart(d: RequestStart): void;
   onRequestDone(d: { tabId: number; requestId: string }): void;
   onTabRemoved(tabId: number): void;
+  /** Requests still open right now (hung ones excluded), with the oldest — what a read reports instead of quietly
+   *  treating a request past `streamAfterMs` as a stream: it may be a slow search the page is still waiting on.
+   *  Null when the view is not trustworthy. */
+  openRequests(tabId: number): { count: number; oldestMs: number; oldestUrl: string } | null;
   /** In-flight count, or null when the view is not trustworthy. */
   inflightCount(tabId: number): number | null;
   waitIdle(tabId: number, timeoutMs?: number): Promise<void>;
@@ -62,8 +66,8 @@ export function createNetIdleTracker(opts: NetIdleOptions = {}): NetIdleTracker 
   const now = opts.now ?? (() => Date.now());
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
 
-  /** tabId -> (requestId -> startedAt) */
-  const inflight = new Map<number, Map<string, number>>();
+  /** tabId -> (requestId -> startedAt, url) */
+  const inflight = new Map<number, Map<string, { at: number; url: string }>>();
   /** Tabs whose in-flight view we actually hold (watched from main_frame). */
   const seen = new Set<number>();
   /** Last time anything started or finished, so a long-quiet page need not pay
@@ -84,7 +88,7 @@ export function createNetIdleTracker(opts: NetIdleOptions = {}): NetIdleTracker 
       if (/\/favicon\.ico(\?|$)/.test(url)) return; // phantom request on every navigation
       let m = inflight.get(tabId);
       if (!m) inflight.set(tabId, (m = new Map()));
-      m.set(requestId, now());
+      m.set(requestId, { at: now(), url });
     },
 
     onRequestDone({ tabId, requestId }) {
@@ -107,7 +111,7 @@ export function createNetIdleTracker(opts: NetIdleOptions = {}): NetIdleTracker 
       const drop = t - maxAgeMs;
       const stream = t - streamAfterMs;
       let live = 0;
-      for (const [id, at] of m) {
+      for (const [id, { at }] of m) {
         if (at < drop) {
           m.delete(id); // hung: forget it entirely
           continue;
@@ -115,6 +119,19 @@ export function createNetIdleTracker(opts: NetIdleOptions = {}): NetIdleTracker 
         if (at >= stream) live++; // older than that is a stream, not a pending load
       }
       return live;
+    },
+
+    openRequests(tabId) {
+      if (!seen.has(tabId)) return null;
+      const t = now();
+      let count = 0;
+      let oldest: { at: number; url: string } | undefined;
+      for (const r of inflight.get(tabId)?.values() ?? []) {
+        if (r.at < t - maxAgeMs) continue; // hung: inflightCount forgets it
+        count++;
+        if (!oldest || r.at < oldest.at) oldest = r;
+      }
+      return oldest ? { count, oldestMs: t - oldest.at, oldestUrl: oldest.url } : { count: 0, oldestMs: 0, oldestUrl: "" };
     },
 
     async waitIdle(tabId, timeoutMs = waitMs) {

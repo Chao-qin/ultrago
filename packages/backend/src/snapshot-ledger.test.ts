@@ -291,7 +291,7 @@ test("全是隐藏元素时如实说没有可见的，并点名隐藏的；续�
 test("viewportOnly 下视口里只有隐藏元素时，说的是这个过滤条件下没有，不说整页没有可见的", () => {
   const page = [el("e1", { inViewport: false }), el("e2", { hidden: true, inViewport: true })];
   const text = renderSnapshotView(page, { viewportOnly: true }).text;
-  assert.match(text, /\(nothing to show for viewportOnly — widen the query or drop `after`\)/);
+  assert.match(text, /\(nothing to show for viewportOnly\)/);
   assert.doesNotMatch(text, /no visible interactable elements right now/);
   assert.match(text, /Hidden right now \(1/);
 });
@@ -321,4 +321,35 @@ test("摘要按预算点名：组按大小排在前，落单的按文档顺序�
   assert.ok(named < 265, "200 个落单的超出了摘要预算");
   assert.match(text, new RegExp(`^ {2}… ${265 - named} more hidden, counted but not named here — query searches them`, "m"));
   assert.match(text, new RegExp(`^Coverage: .* · 265 hidden: ${named} named by ref under "Hidden right now" below, ${265 - named} only counted there`), "覆盖行不能说全都点了名");
+});
+
+test("query 只按元素自己的名字找：包住它的 (group) 与隐藏分组不跟着命中，覆盖行与正文一致", () => {
+  const page = [
+    el("g1", { role: "generic", tag: "div", container: true, name: "首页 Deutsch 设置" }),
+    el("e1", { name: "首页", parentRef: "g1" }),
+    el("e2", { name: "Deutsch", parentRef: "g1" }),
+    el("h1", { role: "generic", tag: "ul", container: true, hiddenGroup: true, hidden: true, name: "العربية Deutsch Dansk" }),
+    el("e3", { name: "العربية", hidden: true, parentRef: "h1" }),
+  ];
+  assert.deepEqual(renderSnapshotView(page, { query: "deutsch" }).shown, ["e2"], "不返回包住它的分组");
+  const inGroup = renderSnapshotView(page, { within: "h1", query: "deutsch" });
+  assert.deepEqual(inGroup.shown, []);
+  assert.match(inGroup.text, /^Coverage: 0 of the page's 4 elements listed here \(none of 0 elements matching within \[h1\] query="deutsch"\)/);
+  assert.doesNotMatch(inGroup.text, /^\[h1\]/m, "正文不能印出覆盖行说没列的分组");
+});
+
+test("query 一个元素也没命中时，回复给出这段文字在页面上的事实：在哪个元素里、在正文里、是否隐藏；根本不在页面上也如实说", () => {
+  const page = [el("e64", { name: "Liste der Länder – German" }), el("e2", { name: "首页" })];
+  const hits = { count: 3, samples: [{ text: "Deutsch", ref: "e64" }, { text: "Iceland 387,758", hidden: true }] };
+  const text = renderSnapshotView(page, { query: "Deutsch" }, hits).text;
+  assert.match(text, /\(no element's role, name, value or options contain "Deutsch"\)\nThe words occur 3 time\(s\) in the page's text:\n {2}inside \[e64\]: "Deutsch"\n {2}in page text \(hidden\): "Iceland 387,758"\n {2}… 1 more\nAct on the element they are inside/);
+  assert.match(renderSnapshotView(page, { query: "zz" }, { count: 0, samples: [] }).text, /The words do not occur in the page's text either\. snapshot/);
+});
+
+test("范围收窄后 query 为空：页面别处有命中时说在别处、有几个，不说「没有元素包含」", () => {
+  const page = [el("e1", { name: "Save", inViewport: false }), el("e2", { name: "首页", inViewport: true })];
+  const off = renderSnapshotView(page, { query: "save", viewportOnly: true }).text;
+  assert.match(off, /\(1 element\(s\) on the page match "save", none of them in the viewport — drop that filter to list them\)/);
+  assert.doesNotMatch(off, /no element's role, name/);
+  assert.match(renderSnapshotView(page, { query: "zz", viewportOnly: true }).text, /no element's role, name, value or options contain "zz"/, "整页都没有时照实说没有");
 });

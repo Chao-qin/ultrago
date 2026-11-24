@@ -23,8 +23,28 @@ test("pick_option 只在展开后新出现/新显示的元素里找选项，不�
   const r = await pickOption(call, { css: ".city-select", option: "北京" });
   assert.equal(r.ref, "e7");
   assert.equal(r.fromRevealedList, true);
-  assert.deepEqual(calls.at(-1), { method: RpcMethod.Click, params: { ref: "e7", tabId: undefined } });
+  assert.deepEqual(calls.at(-1), { method: RpcMethod.Click, params: { ref: "e7", tabId: undefined, expectDoc: "doc" } }, "点在自己读到的那份文档上");
   assert.equal(calls[1]!.params.css, ".city-select", "触发器按描述定位");
+});
+
+test("pick_option 全程用第一次读到的标签页：没给 tabId 时不再每一步各自取「当前标签页」", async () => {
+  const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+  let snaps = 0;
+  const opt = { ref: "e7", tag: "li", role: "option", name: "北京" };
+  const call = async (method: string, params: Record<string, unknown>) => {
+    calls.push({ method, params });
+    if (method === RpcMethod.Snapshot) return { tabId: 4, elements: snaps++ === 0 ? [] : [opt], docs: { "0": "doc4" } };
+    return { ok: true };
+  };
+  await pickOption(call, { ref: "e0", option: "北京" });
+  assert.deepEqual(calls.slice(1).map((c) => c.params.tabId), [4, 4, 4, 4], "展开、等待、再读、点选都在标签页 4");
+  assert.equal(calls.at(-1)!.params.expectDoc, "doc4");
+});
+
+test("pick_option 不把散落的词当作选项名：「I agree」不会选中「I don't agree」", async () => {
+  const { call, calls } = page([], [{ ref: "e8", tag: "li", role: "option", name: "I don't agree" }]);
+  await assert.rejects(() => pickOption(call, { ref: "e0", option: "I agree" }));
+  assert.ok(!calls.some((c) => c.method === RpcMethod.Click && c.params.ref === "e8"), "没有点它");
 });
 
 test("pick_option 新出现的选项里有多个匹配时报错列出，不静默取第一个", async () => {

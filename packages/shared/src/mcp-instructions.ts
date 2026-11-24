@@ -77,7 +77,7 @@ export const LOCATOR_DOCS = {
   ref: "[ref] from snapshot. Takes precedence over x,y and the description fields",
   text: "Visible text; matches the innermost element containing it",
   role: 'ARIA role, explicit or implied by the tag (a <button> is "button")',
-  name: "Accessible name: aria-label, <label>, placeholder, alt or title",
+  name: "Accessible name: aria-label, <label>, the text a link/button/tab/option shows, placeholder, alt or title",
   css: "CSS selector",
   near: "Keep candidates within ~200px of the element whose text matches this, closest first — picks a control in one row or card of a repeated list",
   exact: "Match text, name and near as whole strings (still case-insensitive) instead of substrings",
@@ -177,7 +177,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
       "List the page's interactable elements with [ref] handles, each with its state ([disabled], [checked], [expanded], [invalid: …] …), viewport box (x,y w×h) and visual layer (@dialog:…, @fixed-…). Covers iframes (frame-prefixed refs; elements in cross-origin frames have no box) and open shadow roots. Hidden elements are named by [ref] instead of listed. A ref stays valid while its element exists, and the reply names the refs new to you or changed. Large pages are paged: narrow with query or viewportOnly, or continue with after. " +
       "It has no page text (read_content), pixels (screenshot) or readiness and form state (page_state); analyze_page returns all of them.",
     params: {
-      query: "Only elements whose role, name, value or options contain this text (case-insensitive), e.g. \"登录\" or \"textbox\"",
+      query: "Only elements whose role, name, value or options contain this text (case and spacing ignored; several words match in any order; exact names first), e.g. \"登录\" or \"textbox\"",
       viewportOnly: "Only elements inside the visible viewport",
       limit: "Maximum number of elements in this reply, after query/viewportOnly",
       after: "Continue a paged reply after this [ref] (the reply names it)",
@@ -231,11 +231,11 @@ export const MCP_TOOL_INSTRUCTIONS = {
     name: "wait_for",
     annotations: TOOL_HINTS.read,
     description:
-      "Wait until `text` appears (top frame, case-sensitive), until a CSS `selector`'s element is visible or hidden, or — with neither — for a fixed `ms`. Give text or selector, not both. " +
+      "Wait until `text` appears (top frame and its open shadow roots; case and spacing ignored; the text as one piece, not scattered words), until a CSS `selector`'s element is visible or hidden, or — with neither — for a fixed `ms`. Give text or selector, not both. " +
       `When waiting on a condition, \`ms\` is the timeout (default ${WAIT_FOR_DEFAULT_MS}ms, max ${WAIT_FOR_MAX_MS}ms) and the reply says whether it was met. ` +
       "For page loads and browser events use wait_for_event; for any other condition, bcpWait.until inside eval.",
     params: {
-      text: "Text to wait for in the top frame's visible text (case-sensitive substring)",
+      text: "Text to wait for in the top frame's visible text (substring; case and spacing ignored)",
       selector: "CSS selector to wait on; pierces open shadow roots",
       state: 'With selector: "visible" (default) or "hidden"',
       ms: `Timeout for text/selector (default ${WAIT_FOR_DEFAULT_MS}, max ${WAIT_FOR_MAX_MS}); the delay itself when neither is given`,
@@ -351,7 +351,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
       ref: "[ref] of the file input, or of a <label> around it. Prefer a description when the page re-renders between uploads",
       text: "Visible text of the upload slot",
       role: 'ARIA role, explicit or implied — e.g. "button" for a styled upload slot',
-      name: "Accessible name of the upload slot: aria-label, <label>, placeholder, alt or title",
+      name: "Accessible name of the upload slot: aria-label, <label>, the text it shows, placeholder, alt or title",
       css: LOCATOR_DOCS.css,
       near: LOCATOR_DOCS.near,
       nth: "0-based index among the matches. A filled slot often loses its label, so nth:0 usually names the next empty one",
@@ -431,7 +431,7 @@ export const MCP_TOOL_INSTRUCTIONS = {
     name: "page_state",
     annotations: TOOL_HINTS.read,
     description:
-      "One consistent read of a tab's state: url and title, loading, element count, scroll position, the focused control, a form summary (filled / required-empty / invalid / dirty), open dialogs, overlay or scroll lock, busy regions, visible errors, and `changed` since your last page_state on this tab. Cheap enough to call after every action to confirm it landed. No elements, text or pixels (snapshot, read_content, screenshot).",
+      "One consistent read of a tab's state: url and title, loading, element count, scroll position, the focused control, a form summary (filled / required-empty / invalid / dirty), open dialogs, overlay or scroll lock, busy regions, invalid fields (marked aria-invalid, with the message they point to), and `changed` since your last page_state on this tab. Cheap enough to call after every action to confirm it landed. No elements, text or pixels (snapshot, read_content, screenshot).",
     params: {
       verbosity: '"detail" adds dialog names, error texts and the fields blocking submit; default "summary"',
       resetDelta: "Reset the `changed` baseline without reporting changes",

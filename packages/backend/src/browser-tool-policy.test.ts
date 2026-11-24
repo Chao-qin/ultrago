@@ -123,7 +123,8 @@ test("a huge page pages under the budget by ref cursor, and query / viewportOnly
   assert.match(renderSnapshotView(page, { viewportOnly: true }).text, /\(all 40 elements matching viewportOnly\)/);
   const none = renderSnapshotView(page, { query: "不存在" }).text;
   assert.match(none, /^Coverage: 0 of the page's 2581 elements listed here \(none of 0 elements matching query="不存在"\)/);
-  assert.match(none, /nothing to show for query="不存在"/);
+  assert.match(none, /\(no element's role, name, value or options contain "不存在"\)/);
+  assert.doesNotMatch(none, /widen the query/, "不再叫读者换词再猜");
   const small = elements(3);
   assert.equal(renderSnapshotView(small).shown.length, 3, "the reply reports exactly the refs it listed");
   assert.doesNotMatch(renderSnapshotView(small).text, /next page/);
@@ -217,4 +218,26 @@ test("微信桥默认关闭，只有 BCP_WECLAW_ENABLE 打开它，BCP_WECLAW_DI
     process.env.BCP_WECLAW_DISABLE = "1";
     assert.equal(await fresh(), true);
   } finally { restore(); }
+});
+
+test("必须先验证由观察到的事实推导：导航、页面自己的对话框、新标签页都算；回答了取消的 confirm 要写明它守护的动作没有执行", async () => {
+  const { deltaGate, renderDelta, renderHistoryNav, mergeDeltas } = await import("./browser-mcp-render.js");
+  assert.equal(deltaGate({ urlChanged: "https://x/" }), "the page navigated");
+  assert.equal(deltaGate({ tabsOpened: [{ tabId: 7 }] }), "a new tab opened");
+  assert.equal(deltaGate({ pageDialogs: [{ kind: "alert", message: "保存失败" }] }), "the page opened its own dialog");
+  assert.equal(deltaGate({ dispatchedTo: "a" }), null, "没有变化就不拦");
+  const line = renderDelta({ pageDialogs: [{ kind: "confirm", message: "确定删除?", answered: "Cancel" }], tabsOpened: [{ tabId: 7, url: "https://n/" }] });
+  assert.match(line, /page confirm\("确定删除\?"\) answered Cancel — what it guarded did not proceed/);
+  assert.match(line, /opened tab 7 \(https:\/\/n\/\)/);
+  assert.match(renderHistoryNav("back", { navigated: true, url: "https://a/" }), /⚠ Verify gate — the page navigated/);
+  assert.doesNotMatch(renderHistoryNav("back", { navigated: false }), /Verify gate/, "没动就不拦");
+  const merged = mergeDeltas({ newErrors: ["文件过大"], elementDelta: 1 }, { elementDelta: 2 });
+  assert.deepEqual([merged?.newErrors, merged?.elementDelta], [["文件过大"], 3], "后一个文件的回执不能抹掉前一个的报错");
+});
+
+test("读取时还有请求开着：回复说出几个、最久多久、哪个地址（主机加路径，不带查询参数）", async () => {
+  const { renderPendingRequests } = await import("./browser-mcp-render.js");
+  assert.match(renderPendingRequests({ count: 2, oldestMs: 4100, oldestUrl: "https://shop.x/api/search?token=secret" }),
+    /⏳ 2 request\(s\) were still open when this was read \(oldest 4\.1s: shop\.x\/api\/search\) — .* read again/);
+  assert.equal(renderPendingRequests({ count: 0, oldestMs: 0, oldestUrl: "" }), "");
 });

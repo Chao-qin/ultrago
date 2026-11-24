@@ -10,7 +10,7 @@
  * libraries keep a closed list mounted). Searching the whole page instead is
  * how a breadcrumb or another row carrying the same text got picked.
  */
-import { RpcMethod, type ActionDelta, type PickOptionParams, type SnapshotElement } from "@bcp/shared";
+import { RpcMethod, matchGrade, type ActionDelta, type PickOptionParams, type SnapshotElement } from "@bcp/shared";
 import { listedByDefault } from "./browser-mcp-render.js";
 import { frameOf, ShownLedger } from "./snapshot-ledger.js";
 
@@ -33,16 +33,17 @@ export interface PickOptionResult {
 /** How long to let the list render after the opening click. */
 const LIST_RENDER_MS = 500;
 
-const norm = (s: string): string => s.replace(/\s+/g, " ").trim().toLowerCase();
 
 export async function pickOption(call: PickOptionCall, params: PickOptionParams): Promise<PickOptionResult> {
   const { option, tabId, ...trigger } = params;
   if (!option?.trim()) throw new Error("pick_option needs the `option` text to choose");
-  type Snap = { url?: string; elements: SnapshotElement[]; docs?: Record<string, string> };
+  type Snap = { url?: string; tabId?: number; elements: SnapshotElement[]; docs?: Record<string, string> };
   const before = (await call(RpcMethod.Snapshot, { tabId })) as Snap;
-  const open = (await call(RpcMethod.Click, { ...trigger, tabId })) as { delta?: ActionDelta };
-  await call(RpcMethod.WaitFor, { ms: LIST_RENDER_MS, tabId });
-  const after = (await call(RpcMethod.Snapshot, { tabId })) as Snap;
+  // One tab for the whole pick: the one read first. Without a tabId every call resolved "the active tab" on its own.
+  const tab = tabId ?? before.tabId;
+  const open = (await call(RpcMethod.Click, { ...trigger, tabId: tab })) as { delta?: ActionDelta };
+  await call(RpcMethod.WaitFor, { ms: LIST_RENDER_MS, tabId: tab });
+  const after = (await call(RpcMethod.Snapshot, { tabId: tab })) as Snap;
 
   // The list the trigger opened = what is visible now and was not visible before: newly mounted, or rendered up
   // front and merely hidden. Same question the agent's snapshot answers, so the same ledger answers it — and the
@@ -64,9 +65,10 @@ export async function pickOption(call: PickOptionCall, params: PickOptionParams)
   const named = after.elements.filter((e) => e.name && listedByDefault(e));
   const fromRevealedList = named.some((e) => revealed.has(e.ref));
   const pool = fromRevealedList ? named.filter((e) => revealed.has(e.ref)) : named;
-  const want = norm(option);
-  const exact = pool.filter((e) => norm(e.name) === want);
-  const cands = exact.length ? exact : pool.filter((e) => norm(e.name).includes(want));
+  // Compared the way query and the verifiers compare names (text-match.ts).
+  const exact = pool.filter((e) => matchGrade(e.name, option) === "exact");
+  // The option's text as one piece; scattered words ("I agree" in "I don't agree") would pick the wrong option.
+  const cands = exact.length ? exact : pool.filter((e) => matchGrade(e.name, option) === "substring");
 
   if (!cands.length) {
     const shown = pool.slice(0, 30).map((e) => e.name).join(" | ");
@@ -96,6 +98,8 @@ export async function pickOption(call: PickOptionCall, params: PickOptionParams)
     .filter(Boolean)
     .join(" ");
 
-  const r = (await call(RpcMethod.Click, { ref: match.ref, tabId })) as { delta?: ActionDelta };
+  // Clicked where it was read — this pick's own snapshot's tab and document, not the agent's last read.
+  const frame = /^(\d+)_/.exec(match.ref)?.[1] ?? "0";
+  const r = (await call(RpcMethod.Click, { ref: match.ref, tabId: tab, ...(after.docs?.[frame] ? { expectDoc: after.docs[frame] } : {}) })) as { delta?: ActionDelta };
   return { ok: true, picked: match.name, ref: match.ref, where, fromRevealedList, openDelta: open.delta, delta: r.delta };
 }

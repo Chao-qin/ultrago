@@ -28,6 +28,10 @@ export async function bcpDomRuntime(
      toRef?: string; dragMethod?: "html5" | "pointer"; filename?: string; mimeType?: string; dataBase64?: string; dataBase64s?: string[];
     exact?: boolean; nth?: number;
     verbosity?: "summary" | "detail"; resetDelta?: boolean; deltaKey?: string;
+    /** The document this call's [ref] was read in (the snapshot's docId for this frame). */
+    expectDoc?: string;
+    /** snapshot: also report where this text occurs in the page's text. */
+    query?: string;
   },
 ): Promise<{ value?: unknown; error?: string }> {
   try {
@@ -201,13 +205,21 @@ export async function bcpDomRuntime(
       if (el.getAttribute("contenteditable") !== null) return "textbox";
       return "generic";
     };
+    /** Roles whose accessible name comes from what they show (WAI-ARIA "name from content"; HTML-AAM gives
+     *  links, buttons and summary the same order). For these the visible text comes before a `title`, which is
+     *  only a tooltip — a link showing "Deutsch" with title "… – German" is named "Deutsch", the words on screen. */
+    const NAME_FROM_CONTENT = new Set([
+      "button", "link", "tab", "menuitem", "menuitemcheckbox", "menuitemradio", "option", "checkbox", "radio",
+      "switch", "treeitem", "cell", "gridcell", "columnheader", "rowheader", "row", "heading", "tooltip",
+    ]);
     const accessibleName = (el: Element): string => {
       const aria = el.getAttribute("aria-label");
       if (aria) return aria;
       const labelledby = el.getAttribute("aria-labelledby");
       if (labelledby) {
-        const ref = document.getElementById(labelledby);
-        if (ref?.textContent) return ref.textContent;
+        // A space-separated list of ids, each contributing its text in order.
+        const text = labelledby.split(/\s+/).map((id) => document.getElementById(id)?.textContent?.trim() ?? "").filter(Boolean).join(" ");
+        if (text) return text;
       }
       // A form control is usually named by its associated <label> — either via
       // for=, or by being nested inside one. Without this step a labelled field
@@ -218,12 +230,31 @@ export async function bcpDomRuntime(
         const viaLabel = [...labels].map((l) => l.textContent ?? "").join(" ").trim();
         if (viaLabel) return viaLabel;
       }
+      // A form field's text is its value, never its name: fields keep the order below.
+      if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) && NAME_FROM_CONTENT.has(inferRole(el))) {
+        const shown = ((el as HTMLElement).innerText ?? "").trim();
+        // Content with no letter or digit in any script ("×", "›", an icon font's private-use glyph) names nothing
+        // a reader could ask for; the author's alt / title below does. Measured: <button title="Close">×</button>
+        // was named "×", and an icon-font link titled 删除 had no name at all.
+        if (/[\p{L}\p{N}]/u.test(shown)) return shown;
+        // An icon-only control: what its images and labelled children say.
+        const inner = [...el.querySelectorAll("img[alt], [aria-label]")].map((c) => c.getAttribute("alt") || c.getAttribute("aria-label") || "").filter(Boolean).join(" ").trim();
+        if (inner) return inner;
+      }
       const input = el as HTMLInputElement;
       if (input.placeholder) return input.placeholder;
       if (el.getAttribute("alt")) return el.getAttribute("alt")!;
       if (el.getAttribute("title")) return el.getAttribute("title")!;
       return (el as HTMLElement).innerText || el.textContent || "";
     };
+    /** Disabled as the platform and the page declare it: `:disabled` (a control inside a disabled <fieldset>
+     *  included) or aria-disabled. One predicate for the snapshot's [disabled] and for whether an action waits —
+     *  they disagreed, so a control the snapshot showed as usable was refused, and a fieldset-disabled one was
+     *  "clicked" successfully. */
+    const isDisabled = (el: Element): boolean => el.matches(":disabled") || el.getAttribute("aria-disabled") === "true";
+    /** An ARIA tri-state attribute as the snapshot reports it; absent or any other value says nothing. */
+    const ariaState = (v: string | null): boolean | "mixed" | undefined =>
+      v === "true" ? true : v === "false" ? false : v === "mixed" ? "mixed" : undefined;
 
     const resolve = (ref: string): HTMLElement => {
       // Read through the store rather than a captured binding: snapshot() swaps
@@ -236,22 +267,30 @@ export async function bcpDomRuntime(
 
     // ---- Action delta: capture a compact page signature before/after a mutating
     // action so the tool can report what changed without a full re-snapshot. ----
-    // NOTE: bare [role="alert"] is deliberately NOT here. That role means "announce
-    // this promptly", not "this is an error" — a version-update banner, a save
-    // confirmation and a cookie notice all legitimately carry it. Including it made
-    // page_state report a standing "1 error(s)" on an ordinary page, which both
-    // buried real errors and actively misled a session into investigating a click
-    // that was fine. Component libraries put their real validation errors behind
-    // the class selectors below (which usually ALSO carry role=alert), so nothing
-    // is lost; genuine alerts remain visible in the snapshot as `alert` elements.
-    const ERROR_SELECTOR =
-      '[aria-invalid="true"], [aria-errormessage], .error, .ant-form-item-explain-error, .arco-form-message-error, .el-form-item__error';
-    const collectErrors = (): string[] => {
+    // An error is what the page DECLARES invalid: a field marked aria-invalid, with the message it points to through
+    // aria-errormessage (else aria-describedby), or its name when it points to none. No component library's class
+    // names — what counts as an error is the page's own statement, not a list of libraries we happen to know.
+    // The cost, measured: a library that marks nothing (Element Plus 2.9 renders its message as a bare
+    // div.el-form-item__error, with no aria-invalid on the field) reports no error here; the agent sees the message
+    // by reading the page.
+    // NOTE: bare [role="alert"] is deliberately NOT an error. That role means "announce this promptly", not "this is
+    // an error" — a version-update banner, a save confirmation and a cookie notice all legitimately carry it.
+    // Counting it made page_state report a standing "1 error(s)" on an ordinary page, which both buried real errors
+    // and actively misled a session into investigating a click that was fine.
+    const collectErrors = (roots?: (Document | ShadowRoot)[]): string[] => {
       const out: string[] = [];
-      for (const el of document.querySelectorAll(ERROR_SELECTOR)) {
-        if (!isVisible(el)) continue;
-        const t = (el as HTMLElement).innerText?.trim();
-        if (t) out.push(truncate(t, 80));
+      for (const field of queryDeepAll('[aria-invalid="true"]', roots)) {
+        if (!isVisible(field)) continue;
+        const root = field.getRootNode() as Document | ShadowRoot;
+        const ids = (field.getAttribute("aria-errormessage") || field.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean);
+        const message = ids
+          .map((id) => root.getElementById(id))
+          .filter((m): m is HTMLElement => !!m && isVisible(m))
+          .map((m) => m.innerText.trim())
+          .filter(Boolean)
+          .join(" ");
+        const text = truncate(message || `${accessibleName(field) || field.tagName.toLowerCase()} is invalid`, 80);
+        if (!out.includes(text)) out.push(text);
         if (out.length >= 10) break;
       }
       return out;
@@ -271,16 +310,16 @@ export async function bcpDomRuntime(
     // mounted (display:none). Shared by captureSig (→ delta's dialogsOpened) and
     // page_state's `dialogs` field so the two never disagree. A native
     // <dialog open> is open by definition, so trust the attribute.
-    const visibleDialogs = (): Element[] =>
-      [...document.querySelectorAll('[role="dialog"],[role="alertdialog"],dialog[open]')].filter(
+    const visibleDialogs = (roots?: (Document | ShadowRoot)[]): Element[] =>
+      queryDeepAll('[role="dialog"],[role="alertdialog"],dialog[open]', roots).filter(
         (d) => (d as HTMLElement).matches("dialog[open]") || isVisible(d),
       );
     type Sig = { url: string; count: number; dialogs: number; errors: string[]; locked: boolean; overlay: boolean };
-    const captureSig = (): Sig => ({
+    const captureSig = (roots = [...pageRoots(true)]): Sig => ({
       url: location.href,
-      count: document.querySelectorAll(SNAP_SELECTOR).length,
-      dialogs: visibleDialogs().length,
-      errors: collectErrors(),
+      count: queryDeepAll(SNAP_SELECTOR, roots).length,
+      dialogs: visibleDialogs(roots).length,
+      errors: collectErrors(roots),
       locked: scrollLocked(),
       overlay: centerOverlay(),
     });
@@ -425,6 +464,46 @@ export async function bcpDomRuntime(
     };
 
     // Shadow-piercing querySelector (first match across document + open shadow roots).
+    /** Every root that renders part of this page: the document, each open shadow root and — with `frames` — each
+     *  same-origin iframe's document, depth first. Whatever judges the page (errors, dialogs, form fields, busy
+     *  markers, headings, text) runs over all of them, as the snapshot does: a document-only query cannot see what a
+     *  web component renders, so a check built on it passes on a page it never read. Cross-origin frames are out of
+     *  reach here; the dispatcher reads them by injecting into each frame. */
+    function* pageRoots(frames: boolean, root: Document | ShadowRoot = document): Generator<Document | ShadowRoot> {
+      yield root;
+      for (const host of root.querySelectorAll("*")) {
+        const sr = (host as HTMLElement).shadowRoot;
+        if (sr) yield* pageRoots(frames, sr);
+        if (frames && host instanceof HTMLIFrameElement) {
+          try {
+            const doc = host.contentDocument; // same-origin only; cross-origin throws
+            if (doc) yield* pageRoots(frames, doc);
+          } catch {
+            /* cross-origin iframe — out of reach */
+          }
+        }
+      }
+    }
+    /** querySelectorAll over every root of the page (see pageRoots). Collecting the roots walks the whole document,
+     *  so a caller running several queries over one moment of the page passes the roots it collected once. */
+    function queryDeepAll<E extends Element = Element>(sel: string, roots: (Document | ShadowRoot)[] = [...pageRoots(true)]): E[] {
+      return roots.flatMap((r) => [...r.querySelectorAll<E>(sel)]);
+    }
+    /** The page's visible text: the document's, then each open shadow root's — innerText stops at a shadow boundary,
+     *  so a message a web component shows (an error toast) was absent from every read. Text a shadow root holds but
+     *  does not show is left out, as innerText leaves out hidden light-DOM text. Placed after the document's text:
+     *  where it sits on screen is not recoverable from here; that it is on the page is. */
+    function pageText(): string {
+      const parts = [document.body?.innerText ?? ""];
+      for (const r of pageRoots(false)) {
+        if (!(r instanceof ShadowRoot)) continue;
+        for (const c of r.children) {
+          const t = isVisible(c) ? (c as HTMLElement).innerText?.trim() : "";
+          if (t) parts.push(t);
+        }
+      }
+      return parts.join("\n\n");
+    }
     const queryDeep = (sel: string): Element | null => {
       const search = (root: Document | ShadowRoot): Element | null => {
         const m = root.querySelector(sel);
@@ -495,7 +574,7 @@ export async function bcpDomRuntime(
     const whyNotActionable = (el: HTMLElement, waitedMs: number): string => {
       if (!el.isConnected)
         return "it was removed from the DOM mid-wait — re-locate it (take a fresh snapshot, or address it by description instead of by [ref])";
-      if ((el as HTMLInputElement).disabled || el.getAttribute("aria-disabled") === "true")
+      if (isDisabled(el))
         return `${describeEl(el)} was still disabled after ${waitedMs}ms — page_state {verbosity:"detail"} names the form fields that block submission`;
       const cause = hiddenCause(el);
       if (cause === el) {
@@ -517,7 +596,7 @@ export async function bcpDomRuntime(
     const waitActionable = async (el: HTMLElement, ms = 5000): Promise<void> => {
       const deadline = Date.now() + ms;
       for (;;) {
-        const enabled = !(el as HTMLInputElement).disabled && el.getAttribute("aria-disabled") !== "true";
+        const enabled = !isDisabled(el);
         if (el.isConnected && isVisible(el) && enabled) return;
         if (Date.now() > deadline) throw new Error(`not actionable within ${ms}ms: ${whyNotActionable(el, ms)}`);
         await sleep(100);
@@ -623,6 +702,9 @@ export async function bcpDomRuntime(
     const readState = (el: Element): Map<string, string> => {
       const m = new Map<string, string>();
       let n: Element | null = el;
+      // A native checkbox or radio keeps its state in a property, not an attribute: clicking one moves none of
+      // the attributes below, so a successful toggle read as "nothing changed" and invited a second click.
+      if (el instanceof HTMLInputElement && (el.type === "checkbox" || el.type === "radio")) m.set("0|checked", String(el.checked));
       for (let d = 0; n && d < 4; d++) {
         for (const a of STATE_ATTRS) m.set(`${d}|${a}`, n.getAttribute(a) ?? "");
         n = n.parentElement;
@@ -1162,7 +1244,63 @@ export async function bcpDomRuntime(
       }
     };
 
-    const snapshot = () => {
+    /** Where `want` occurs in the page's text — this frame's document and its open shadow roots: every text node
+     *  holding it (case, spacing and invisible characters folded, as text is compared everywhere — shared
+     *  text-match.ts), counted; the first few with their surrounding words, the [ref] of the element they sit inside
+     *  if any, and whether they show. What a "nothing matched" reply owes its reader instead of "try other words": the
+     *  words may be inside a control named otherwise, in plain text that read_content reads, hidden, or absent. */
+    const textFacts = (want: string, refOf: (el: Element) => string | undefined): { count: number; samples: { text: string; ref?: string; hidden?: boolean }[] } => {
+      const w = normText(want).toLowerCase();
+      const out = { count: 0, samples: [] as { text: string; ref?: string; hidden?: boolean }[] };
+      if (!w) return out;
+      const record = (holder: Element, t: string) => {
+        const at = t.toLowerCase().indexOf(w);
+        if (at < 0) return;
+        out.count++;
+        if (out.samples.length >= 5) return;
+        let ref: string | undefined;
+        for (let host: Element | null = holder; host && !ref; host = climbOut(host)) ref = refOf(host);
+        out.samples.push({
+          text: truncate(t.slice(Math.max(0, at - 30), at + w.length + 30), 90),
+          ...(ref ? { ref } : {}),
+          ...(isVisible(holder) ? {} : { hidden: true }),
+        });
+      };
+      for (const root of pageRoots(false)) {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+          const parent = n.parentElement;
+          if (!parent || SKIP_TEXT_TAGS.has(parent.tagName) || parent.closest("head")) continue;
+          record(parent, normText(n.nodeValue ?? ""));
+        }
+      }
+      // Text split across elements ("Add to <b>cart</b>") is in no single text node: then the innermost elements
+      // whose SHOWN text contains it within one line — innerText leaves out script source and display:none parts
+      // and breaks lines at block boundaries, so words from two paragraphs are not read as one phrase. textContent
+      // only prunes the descent (a superset). Only searched on a miss.
+      if (!out.count) {
+        const has = (el: Element) => !SKIP_TEXT_TAGS.has(el.tagName) && normText(el.textContent ?? "").toLowerCase().includes(w);
+        const shownLines = (el: Element): string[] => {
+          if (isVisible(el)) return ((el as HTMLElement).innerText ?? "").split(/\n+/);
+          // Not rendered: innerText would be textContent. Its text nodes outside script and style, as one line.
+          const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+          let t = "";
+          for (let n = walker.nextNode(); n; n = walker.nextNode()) if (!SKIP_TEXT_TAGS.has(n.parentElement?.tagName ?? "")) t += n.nodeValue;
+          return [t];
+        };
+        const visit = (el: Element): void => {
+          const inner = [...el.children].filter(has);
+          if (inner.length) inner.forEach(visit);
+          else for (const line of shownLines(el)) record(el, normText(line));
+        };
+        for (const root of pageRoots(false)) {
+          const top = root instanceof Document ? root.body : root;
+          for (const c of top?.children ?? []) if (has(c)) visit(c);
+        }
+      }
+      return out;
+    };
+    const snapshot = (query?: string) => {
       const topView = frameOffset();
       const newRefs = new Map<string, Element>();
       const elements: SnapshotElement[] = [];
@@ -1181,8 +1319,20 @@ export async function bcpDomRuntime(
       // walk at no extra cost, so zoneOf can find a control's layer by walking
       // ancestors instead of reading style per ancestor on demand.
       const fixedLayers = new Set<Element>();
+      // What deciding "is this box cut off by an ancestor" needs, per node, gathered in the same walk (absent =
+      // static, clips nothing, holds no fixed box). An ancestor cuts a box off only along an axis it clips, and
+      // only when it lies on the box's containing-block chain: a fixed box escapes every ancestor but one that holds
+      // fixed boxes (transform, filter, contain…), an absolute box every static one, and the top layer (modal
+      // dialog, open popover, fullscreen) escapes them all. Measured: without this a modal dialog inside a small
+      // card, a dropdown positioned outside its scroll box, or a fixed popup in a zero-height wrapper all read as
+      // off screen while the user saw them.
+      const boxes = new Map<Element, { pos: string; clipX: boolean; clipY: boolean; holdsFixed: boolean }>();
+      const topLayer = new Set<Element>();
       const collect = (root: Document | ShadowRoot) => {
         for (const el of root.querySelectorAll(SNAP_SELECTOR)) collected.add(el);
+        for (const sel of [":modal", ":popover-open", ":fullscreen"]) {
+          try { for (const t of root.querySelectorAll(sel)) topLayer.add(t); } catch { /* selector unsupported here */ }
+        }
         for (const host of root.querySelectorAll("*")) {
           const sr = (host as HTMLElement).shadowRoot;
           if (sr) collect(sr); // open shadow root only; closed roots are unreachable (no CDP)
@@ -1191,6 +1341,19 @@ export async function bcpDomRuntime(
           // the layer probe in here is free.
           const st = getComputedStyle(host);
           pointerCache.set(host, st.cursor === "pointer");
+          // <html>/<body> overflow applies to the viewport, which inViewport already measures against.
+          const viewportOwned = host === document.documentElement || host === document.body;
+          // contain:paint (and content-visibility:auto, which implies it) clips like overflow does.
+          const paints = /paint|strict|content/.test(st.contain) || st.contentVisibility === "auto";
+          const clipX = !viewportOwned && (st.overflowX !== "visible" || paints);
+          const clipY = !viewportOwned && (st.overflowY !== "visible" || paints);
+          // The individual transform properties (translate / rotate / scale — what Tailwind v4 emits) are not part
+          // of the computed `transform`, and hold fixed boxes all the same. A browser without them reads undefined,
+          // which must not count as "set" (every node would then hold fixed boxes).
+          const holdsFixed = st.transform !== "none" || (st.translate || "none") !== "none" || (st.rotate || "none") !== "none" || (st.scale || "none") !== "none" ||
+            st.perspective !== "none" || st.filter !== "none" || (st.backdropFilter ?? "none") !== "none" ||
+            paints || /layout/.test(st.contain) || /transform|translate|rotate|scale|perspective|filter/.test(st.willChange);
+          if (clipX || clipY || holdsFixed || st.position !== "static") boxes.set(host, { pos: st.position, clipX, clipY, holdsFixed });
           if (st.position === "fixed") fixedLayers.add(host);
           else if (st.position === "sticky") {
             // A sticky element that has not stuck yet is ordinary in-flow
@@ -1203,7 +1366,12 @@ export async function bcpDomRuntime(
           // that (its inherited icon/text descendants are skipped) so <div> buttons aren't invisible.
           if (collected.has(host) || st.cursor !== "pointer") continue;
           const par = host.parentElement;
-          if (par && pointerCache.get(par)) continue; // parent is pointer too → not outermost
+          // Parent is pointer too → not the outermost clickable, so it is part of that one — unless the author named
+          // it (aria-label / title) AND it sits in no element collected as a control in its own right: an edit icon
+          // inside a row that is clickable only by its cursor is a control of its own, while a titled arrow inside a
+          // link or an <abbr> inside a button is part of that link or button (measured: listing them added 30 copies
+          // of hn's vote links and 237 of MDN's compatibility-table buttons).
+          if (par && pointerCache.get(par) && !((host.hasAttribute("aria-label") || host.hasAttribute("title")) && !par.closest(SNAP_SELECTOR))) continue;
           collected.add(host);
           customClickable.add(host);
         }
@@ -1362,6 +1530,7 @@ export async function bcpDomRuntime(
         !(el as HTMLInputElement).placeholder && !el.getAttribute("alt") && !el.getAttribute("title");
 
       // Pass 2: build each element with geometry, parent link and visual zone.
+      const clipRects = new Map<Element, DOMRect>();
       for (const el of collected) {
         // One rect + one style read per element, shared by the scrollable probe
         // and the viewport test below. (Visibility used to share them too; it now
@@ -1380,10 +1549,14 @@ export async function bcpDomRuntime(
         // Never drop an element — a hidden/disabled node is still worth perceiving
         // (e.g. a file <input> concealed behind a styled button). Mark state instead.
         const hidden = !visible || undefined;
-        const disabled = (el as HTMLInputElement).disabled || undefined;
+        const disabled = isDisabled(el) || undefined;
         const clickable = customClickable.has(el) || undefined;
         const ref = elToRef.get(el)!;
-        const value = (el as HTMLInputElement).value;
+        // A <select>'s value is the chosen option's text, as `options` lists them; its `.value` is an attribute
+        // the reader cannot map back to anything shown.
+        const value = el instanceof HTMLSelectElement
+          ? [...el.selectedOptions].map((o) => (o.textContent ?? "").trim()).filter(Boolean).join(", ")
+          : (el as HTMLInputElement).value;
         const input = el as HTMLInputElement;
         const isCheck = el.tagName === "INPUT" && (input.type === "checkbox" || input.type === "radio");
         const sel = el instanceof HTMLSelectElement
@@ -1410,15 +1583,40 @@ export async function bcpDomRuntime(
         const name = truncate(accessibleName(el), 120);
         // Judged in the TOP viewport: inside a frame, the frame's own viewport says nothing about what the user
         // sees, and a frame-local box does not line up with a screenshot or click({x,y}).
-        const box = topView ? { left: rct.left + topView.x, top: rct.top + topView.y, right: rct.right + topView.x, bottom: rct.bottom + topView.y } : null;
+        // What of the box actually shows: cut by every overflow-clipping ancestor, so a button scrolled out of its
+        // list is not "in the viewport" with a box that, clicked or matched against a screenshot, lands on whatever
+        // covers that spot now.
+        let vis = { left: rct.left, top: rct.top, right: rct.right, bottom: rct.bottom };
+        let pos = boxes.get(el)?.pos ?? "static";
+        // Nothing above a top-layer element reaches what it contains.
+        for (let a = topLayer.has(el) ? null : el.parentElement; a; a = topLayer.has(a) ? null : a.parentElement) {
+          const b = boxes.get(a);
+          const holds = pos === "fixed" ? !!b?.holdsFixed : pos === "absolute" ? !!b && (b.pos !== "static" || b.holdsFixed) : true;
+          if (!holds) continue; // not on the containing-block chain: its overflow does not reach this box
+          if (b?.clipX || b?.clipY) {
+            let c = clipRects.get(a);
+            if (!c) clipRects.set(a, (c = a.getBoundingClientRect()));
+            if (b.clipX) vis = { ...vis, left: Math.max(vis.left, c.left), right: Math.min(vis.right, c.right) };
+            if (b.clipY) vis = { ...vis, top: Math.max(vis.top, c.top), bottom: Math.min(vis.bottom, c.bottom) };
+          }
+          pos = b?.pos ?? "static";
+        }
+        const shows = vis.right > vis.left && vis.bottom > vis.top;
+        const box = topView ? { left: vis.left + topView.x, top: vis.top + topView.y, right: vis.right + topView.x, bottom: vis.bottom + topView.y } : null;
         const inViewport = box
-          ? rct.bottom > 0 && rct.right > 0 && rct.top < innerHeight && rct.left < innerWidth &&
+          ? shows && vis.bottom > 0 && vis.right > 0 && vis.top < innerHeight && vis.left < innerWidth &&
             box.bottom > 0 && box.right > 0 && box.top < topView!.height && box.left < topView!.width
           : undefined;
         elements.push({
           ref, tag: el.tagName.toLowerCase(), role,
           name, value: value ? truncate(value, 60) : undefined,
-          checked: isCheck ? input.checked : undefined,
+          // The ARIA states a widget declares, alongside the native ones: a role=switch / checkbox / radio /
+          // menuitemcheckbox says whether it is on, a toggle button whether it is pressed, a tab or option whether
+          // it is selected — without them an agent asked to turn something on cannot tell it already is.
+          // A native checkbox set indeterminate shows neither state: "mixed", as aria-checked="mixed" reads.
+          checked: isCheck ? (input.type === "checkbox" && input.indeterminate ? "mixed" : input.checked) : ariaState(el.getAttribute("aria-checked")),
+          pressed: ariaState(el.getAttribute("aria-pressed")),
+          selected: el.getAttribute("aria-selected") === "true" || undefined,
           options: sel,
           scrollable,
           expanded, invalid, invalidMessage, busy, hidden, disabled, clickable,
@@ -1427,7 +1625,7 @@ export async function bcpDomRuntime(
           // that looks authoritative and means nothing. This is what lets an
           // agent tie something it SAW in a screenshot to a ref it can act on.
           rect: inViewport && box
-            ? [Math.round(box.left), Math.round(box.top), Math.round(rct.width), Math.round(rct.height)]
+            ? [Math.round(box.left), Math.round(box.top), Math.round(vis.right - vis.left), Math.round(vis.bottom - vis.top)]
             : undefined,
           zone: zoneOf(el),
           // Only a role-less, non-clickable node can be a pure grouping wrapper.
@@ -1466,7 +1664,10 @@ export async function bcpDomRuntime(
 
       const se = document.scrollingElement ?? document.documentElement;
       const moreBelow = se.scrollTop + se.clientHeight < se.scrollHeight - 4;
-      return { url: location.href, title: document.title, elements, moreBelow, docId: store.__bcpDocId };
+      return {
+        url: location.href, title: document.title, elements, moreBelow, docId: store.__bcpDocId,
+        ...(query?.trim() ? { textHits: textFacts(query, (el) => elToRef.get(el)) } : {}),
+      };
     };
 
     // ---- Descriptive locators -------------------------------------------
@@ -1484,7 +1685,8 @@ export async function bcpDomRuntime(
     const SKIP_TEXT_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "HEAD", "TEMPLATE"]);
     // Zero-width space and soft hyphen show up in real UI labels and would
     // silently defeat an exact match.
-    const normText = (s: string): string => s.replace(/[​­]/g, "").replace(/\s+/g, " ").trim();
+    // Kept equal to the shared normalizeText (text-match.ts) minus case folding; check:dom runs the shared cases.
+    const normText = (s: string): string => s.replace(/[\u200b-\u200d\ufeff\u00ad]/g, "").replace(/\s+/g, " ").trim();
 
     /** Text as a user perceives it, memoized per call.
      *  Not textContent (drags in <script>/<style>), not innerText (forces a
@@ -1814,11 +2016,22 @@ export async function bcpDomRuntime(
       // id, a description has nowhere to put one. Only VISIBLE iframes are counted:
       // a 0×0 analytics beacon sits on most pages and would fire this line
       // everywhere. snapshot pierces frames and hands back "42_e7"-style refs.
+      // What the page's text says about the words, as a zero-hit snapshot query reports it: inside which element
+      // they are (one named otherwise), in plain text, hidden, or absent — where nothing more used to be said.
+      // For a name too: whether the words are in the page's text is a fact either way (they may be a heading or a
+      // value, read with read_content); nothing beyond that fact is claimed.
+      const words = q.text || q.name;
+      const f = words ? textFacts(words, (el) => store.__bcpRefOf?.get(el)) : undefined;
+      const facts = !f
+        ? ""
+        : f.count
+          ? `\n  → the words occur ${f.count} time(s) in this frame's text: ${f.samples.slice(0, 3).map((h) => `${h.ref ? `inside [${h.ref}]` : "in page text"}${h.hidden ? " (hidden)" : ""} ${JSON.stringify(h.text)}`).join("; ")} — act on that [ref], or read the text with read_content`
+          : `\n  → the words do not occur in this frame's text; a snapshot shows what is there`;
       const frames = [...document.querySelectorAll("iframe")].filter((f) => isVisible(f)).length;
       if (frames)
-        return `\n  → nothing in this frame matches, and ${frames} visible iframe(s) here were NOT searched:` +
+        return facts + `\n  → nothing in this frame matches, and ${frames} visible iframe(s) here were NOT searched:` +
           ` a description resolves in the main frame only. snapshot covers every frame and returns sub-frame refs like "42_e7" — act by [ref] instead`;
-      return "";
+      return facts;
     };
 
     /** Resolve to exactly one element, or fail with the candidates listed.
@@ -1929,10 +2142,16 @@ export async function bcpDomRuntime(
       return locateOne(params, opName);
     };
 
+    // A ref only means something in the document it was read in: after a navigation or reload this frame numbers
+    // its elements afresh, and the old "e5" would name whatever the new page's e5 is.
+    if (params.expectDoc && params.expectDoc !== store.__bcpDocId)
+      throw new Error(
+        `[${params.ref}] was read from a document this frame no longer shows — the page navigated or reloaded since. Nothing was done; take a snapshot for current refs.`,
+      );
     switch (op) {
       case "snapshot":
         await settleDom();
-        return { value: snapshot() };
+        return { value: snapshot(params.query) };
       case "state": {
         await settleDom();
         const detail = params.verbosity === "detail";
@@ -1984,7 +2203,7 @@ export async function bcpDomRuntime(
         const blockers: Array<Record<string, unknown>> = [];
         const countedGroups = new Set<string>();
         const refOf = (c: Element): string | undefined => store.__bcpRefOf?.get(c);
-        for (const c of document.querySelectorAll("input, select, textarea")) {
+        for (const c of queryDeepAll("input, select, textarea")) {
           if (!isVisible(c)) continue;
           const el = c as HTMLInputElement;
           const type = (el.getAttribute("type") ?? "").toLowerCase();
@@ -1997,7 +2216,7 @@ export async function bcpDomRuntime(
           if (gkey) countedGroups.add(gkey);
           const isCheck = type === "checkbox" || isRadio;
           const radios = gkey
-            ? ([...document.querySelectorAll(`input[type="radio"][name="${CSS.escape(el.name)}"]`)] as HTMLInputElement[])
+            ? ([...(el.getRootNode() as Document | ShadowRoot).querySelectorAll(`input[type="radio"][name="${CSS.escape(el.name)}"]`)] as HTMLInputElement[])
             : [el];
           const empty = isRadio
             ? !radios.some((r) => r.checked)
@@ -2063,7 +2282,7 @@ export async function bcpDomRuntime(
         sigStore.__bcpStateSig[key] = nowSig;
 
         const dialogEls = visibleDialogs(); // shared visible-filter (matches captureSig)
-        const busy = [...document.querySelectorAll('[aria-busy="true"],[role="progressbar"],progress:not([value])')].filter(isVisible).length;
+        const busy = queryDeepAll('[aria-busy="true"],[role="progressbar"],progress:not([value])').filter(isVisible).length;
 
         // Rendering probe. A page that reports itself visible gets an animation
         // frame within a few frames; none means Chrome stopped painting this
@@ -2148,7 +2367,11 @@ export async function bcpDomRuntime(
         // That is fine for the short labels truncate exists for, and wrong here.
         // Keep the line breaks innerText already computed; only squeeze runs of
         // spaces within a line and long blank stretches.
-        const raw = (document.body?.innerText ?? "")
+        // A frame with no viewport (its <iframe> is display:none or zero-sized) shows nothing: its innerText falls
+        // back to textContent, script source included, and merged into the page read it made a textAbsent check
+        // fail on words no one could see.
+        const shown = window === window.top || (innerWidth > 0 && innerHeight > 0);
+        const raw = (shown ? pageText() : "")
           .replace(/[^\S\n]+/g, " ")
           .replace(/\n{3,}/g, "\n\n")
           .trim();
@@ -2157,7 +2380,7 @@ export async function bcpDomRuntime(
         // is intentionally much larger than the historical 8K cap, while
         // pagination still makes arbitrarily long pages readable without
         // attempting one unbounded RPC response.
-        const headings = [...document.querySelectorAll("h1, h2, h3, h4, h5, h6")]
+        const headings = queryDeepAll("h1, h2, h3, h4, h5, h6")
           .filter(isVisible)
           .map((el) => (el.textContent ?? "").replace(/\s+/g, " ").trim())
           .filter(Boolean);
@@ -2208,7 +2431,9 @@ export async function bcpDomRuntime(
             const vis = !!el && isVisible(el);
             return params.state === "hidden" ? !vis : vis; // default: wait until visible
           }
-          if (params.waitText) return (document.body?.innerText ?? "").includes(params.waitText);
+          // Compared the way locators and the backend compare text (shared text-match.ts): case, whitespace and
+          // invisible formatting characters folded. A case-sensitive wait timed out on text a query had just found.
+          if (params.waitText) return normText(pageText()).toLowerCase().includes(normText(params.waitText).toLowerCase());
           return null; // no condition -> fixed delay
         };
         if (check() === null) {
@@ -2219,7 +2444,9 @@ export async function bcpDomRuntime(
           if (check()) return { value: { matched: true } };
           await sleep(200);
         }
-        return { value: { matched: false } };
+        // A wait that ran out says why, in facts: the text is on the page but hidden (in what), or nowhere on it —
+        // "timed out" alone was answered by waiting again for the same thing.
+        return { value: { matched: false, ...(params.waitText ? { textHits: textFacts(params.waitText, (el) => store.__bcpRefOf?.get(el)) } : {}) } };
       }
       case "select": {
         const el = followLabel(resolve(params.ref!));
@@ -2585,32 +2812,46 @@ export function bcpOverlay(show: boolean): void {
 }
 
 /**
- * Injected into the page's MAIN world before interaction ops so a page dialog
- * (alert/confirm/prompt) fired from a click handler can't block our synthetic
- * dispatch. Idempotent. Destructive confirms are already gated upstream by the
- * risky-click classifier, so auto-accepting here is safe.
+ * Injected into the page's MAIN world before every in-page action so a page dialog
+ * (alert/confirm/prompt) fired from a handler can't block our synthetic dispatch.
+ * Idempotent. Each dialog is answered on the spot (confirm/prompt: Cancel unless the
+ * caller passed confirm) AND recorded, so the action's reply can say what the page
+ * asked and how it was answered — a confirm answered Cancel cancels what it guarded,
+ * and an alert is often the only place a failure is announced.
  */
 type NativeDialogs = { a: typeof window.alert; c: typeof window.confirm; p: typeof window.prompt };
+type PageDialog = { kind: "alert" | "confirm" | "prompt"; message: string; answered?: "OK" | "Cancel" };
 
 export function bcpDialogShim(accept: boolean): void {
-  const w = window as unknown as { __bcpNative?: NativeDialogs };
+  const w = window as unknown as { __bcpNative?: NativeDialogs; __bcpDialogs?: PageDialog[] };
   if (!w.__bcpNative) w.__bcpNative = { a: window.alert, c: window.confirm, p: window.prompt };
-  window.alert = () => undefined;
-  // Tie the dialog response to the caller's explicit confirm intent — fail-safe
-  // CANCEL by default so an unexpected confirm() can't auto-proceed a destructive action.
-  window.confirm = () => accept;
-  window.prompt = () => (accept ? "" : null);
+  w.__bcpDialogs = [];
+  const seen = w.__bcpDialogs;
+  const text = (m: unknown): string => String(m ?? "").slice(0, 300);
+  window.alert = (m?: unknown) => void seen.push({ kind: "alert", message: text(m) });
+  window.confirm = (m?: unknown) => {
+    seen.push({ kind: "confirm", message: text(m), answered: accept ? "OK" : "Cancel" });
+    return accept;
+  };
+  window.prompt = (m?: unknown) => {
+    seen.push({ kind: "prompt", message: text(m), answered: accept ? "OK" : "Cancel" });
+    return accept ? "" : null;
+  };
 }
 
-/** Restore native dialogs after the op so real user interaction isn't affected. */
-export function bcpDialogRestore(): void {
-  const w = window as unknown as { __bcpNative?: NativeDialogs };
+/** Restore native dialogs after the op so real user interaction isn't affected, and hand back the dialogs the page
+ *  opened meanwhile. */
+export function bcpDialogRestore(): PageDialog[] {
+  const w = window as unknown as { __bcpNative?: NativeDialogs; __bcpDialogs?: PageDialog[] };
   if (w.__bcpNative) {
     window.alert = w.__bcpNative.a;
     window.confirm = w.__bcpNative.c;
     window.prompt = w.__bcpNative.p;
     w.__bcpNative = undefined;
   }
+  const seen = w.__bcpDialogs ?? [];
+  w.__bcpDialogs = undefined;
+  return seen;
 }
 
 /**
@@ -3092,7 +3333,9 @@ export function bcpSignalWait(
   const pageStateNow = () => ({
     readyState: document.readyState,
     loading: document.readyState !== "complete" || !hasContent(),
-    errorCount: document.querySelectorAll('[role="alert"], [aria-live="assertive"]').length,
+    // The same meaning of "error" as everywhere else (collectErrors in bcpDomRuntime): fields the page marks
+    // aria-invalid. A role=alert / assertive live region announces, it does not declare an error.
+    errorCount: document.querySelectorAll('[aria-invalid="true"]').length,
   });
   /** Same definition as bcpDomRuntime's isVisible and bcpDomHelpersFactory's
    *  `visible` — see the long note on the former for why it is this and not

@@ -59,7 +59,7 @@ export const verifyShape = z
       })
       .optional()
       .describe("Like evalCheck, but the code may act and is run again on every advance and retry until it holds, so a step can drive the page one round per attempt. Keep it safe to repeat; it is not behind the confirm gate. Runs after every other check. Refused when the backend runs with BCP_EVAL=off"),
-    noErrors: looseBool.optional().describe("The page shows no visible error messages"),
+    noErrors: looseBool.optional().describe("No visible field is marked invalid (aria-invalid). A message the page shows without marking its field is not counted — check that one with textAbsent"),
     settled: looseBool.optional().describe("The page has finished loading and rendering"),
     dialogOpen: looseBool.optional().describe("A dialog or modal is open"),
     formSubmittable: looseBool.optional().describe("The page has form controls and none is required-empty or invalid"),

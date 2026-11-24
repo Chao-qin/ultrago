@@ -13,6 +13,9 @@
 import {
   PROTOCOL_VERSION,
   RpcMethod,
+  DOM_OP,
+  RPC_TRAITS,
+  UNSAFE_TO_REPEAT_METHODS,
   EVAL_TIMEOUT_MS,
   EVAL_SAFE_BUDGET_MS,
   type BrowserEvent,
@@ -548,13 +551,7 @@ export default defineBackground(() => {
   /** Methods whose double-execution has a real side effect (a second click/submit/
    * navigate). Only these need cross-recycle dedup: re-running a read (snapshot/
    * screenshot) is harmless, so we don't persist those. */
-  const MUTATING = new Set<RpcMethod>([
-    RpcMethod.Click, RpcMethod.Type, RpcMethod.SelectOption, RpcMethod.PressKey,
-    RpcMethod.Drag, RpcMethod.Upload, RpcMethod.Navigate, RpcMethod.NewTab,
-    RpcMethod.CloseTab, RpcMethod.NewWindow, RpcMethod.CloseWindow, RpcMethod.GoBack,
-    RpcMethod.GoForward, RpcMethod.Reload, RpcMethod.Download, RpcMethod.ClickText,
-    RpcMethod.SetNetworkCapture,
-  ]);
+  const MUTATING = new Set<RpcMethod>(UNSAFE_TO_REPEAT_METHODS);
 
   /** Dedup mechanism lives in rpc-dedup.ts so it can be tested without a
    *  browser; the MUTATING policy above stays here, next to the RPC surface it
@@ -579,24 +576,7 @@ export default defineBackground(() => {
     return tabId != null ? cx.tabs.get(tabId) : getActiveTab();
   }
 
-  /** RpcMethod -> the injected runtime's op name. */
-  const DOM_OP: Partial<Record<RpcMethod, "snapshot" | "click" | "type" | "read" | "wait" | "select" | "key" | "scroll" | "drag" | "upload" | "hover" | "clickText" | "contextmenu" | "dblclick" | "paste">> = {
-    [RpcMethod.Snapshot]: "snapshot",
-    [RpcMethod.Click]: "click",
-    [RpcMethod.ContextMenu]: "contextmenu",
-    [RpcMethod.DblClick]: "dblclick",
-    [RpcMethod.Paste]: "paste",
-    [RpcMethod.Type]: "type",
-    [RpcMethod.ReadContent]: "read",
-    [RpcMethod.WaitFor]: "wait",
-    [RpcMethod.SelectOption]: "select",
-    [RpcMethod.PressKey]: "key",
-    [RpcMethod.Scroll]: "scroll",
-    [RpcMethod.Drag]: "drag",
-    [RpcMethod.Upload]: "upload",
-    [RpcMethod.Hover]: "hover",
-    [RpcMethod.ClickText]: "clickText",
-  };
+
 
   /**
    * Run a DOM operation by INJECTING a self-contained runtime function on demand
@@ -624,8 +604,10 @@ export default defineBackground(() => {
     scripting: cx.scripting as unknown as InjectDeps["scripting"],
     webNavigation: cx.webNavigation as unknown as InjectDeps["webNavigation"],
     tabs: cx.tabs as unknown as InjectDeps["tabs"],
+    tabCreated: cx.tabs.onCreated as unknown as InjectDeps["tabCreated"],
     resolveTab,
     waitNetworkIdle,
+    openRequests: (t) => netIdle.openRequests(t),
     waitTabComplete,
     liveFrames,
     injectEventProbes: (t) => void injectEventProbes(t),
@@ -636,6 +618,9 @@ export default defineBackground(() => {
   });
 
   async function runRpc(method: RpcMethod, params: unknown): Promise<unknown> {
+    // Every in-page RPC runs through the one injection pipeline; which ones are in-page is RPC_TRAITS's to say. A
+    // hand-kept case list here missed right_click and double_click, so both tools failed outright.
+    if (RPC_TRAITS[method].domOp) return viaInject(method, params);
     switch (method) {
       case RpcMethod.Navigate: {
         const { url, tabId } = params as RpcContracts[typeof RpcMethod.Navigate]["params"];
@@ -1060,20 +1045,6 @@ export default defineBackground(() => {
         try { lastFocusedWindowId = (await cx.windows.getLastFocused({ windowTypes: ["normal"] })).id ?? null; } catch { /* no normal window */ }
         return { windows, focusedWindowId: wins.find((w) => w.focused)?.id ?? null, lastFocusedWindowId };
       }
-      case RpcMethod.Snapshot:
-      case RpcMethod.Click:
-      case RpcMethod.Paste:
-      case RpcMethod.Type:
-      case RpcMethod.ReadContent:
-      case RpcMethod.WaitFor:
-      case RpcMethod.SelectOption:
-      case RpcMethod.PressKey:
-      case RpcMethod.Scroll:
-      case RpcMethod.Drag:
-      case RpcMethod.Upload:
-      case RpcMethod.Hover:
-      case RpcMethod.ClickText:
-        return viaInject(method, params);
       case RpcMethod.ReadNetwork: {
         const { tabId, limit } = params as RpcContracts[typeof RpcMethod.ReadNetwork]["params"];
         const t = await resolveTab(tabId);

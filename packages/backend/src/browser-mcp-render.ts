@@ -7,7 +7,7 @@
  * closure — so they are the part of that file that can be read, and tested,
  * on its own.
  */
-import { CHROME_RENDERING_FLAGS, RpcMethod, toolNameOf, type ActionDelta, type PageState, type SnapshotElement, type StepVerify, type TabInfo } from "@bcp/shared";
+import { CHROME_RENDERING_FLAGS, RpcMethod, bestGrade, gradeRank, matchGrade, toolNameOf, type MatchGrade, type SnapshotTextHits, type PendingRequests, type ActionDelta, type PageState, type SnapshotElement, type StepVerify, type TabInfo } from "@bcp/shared";
 import type { RecordingNote } from "./orchestrator.js";
 import type { ReadDump } from "./browser-read-dump.js";
 import type { ShownDiff } from "./snapshot-ledger.js";
@@ -72,13 +72,39 @@ export function gateNote(reason: string | null): string {
     : "";
 }
 
-/** Gate ③/④: the action's own delta reported a modal, a selector-free
- * interruption (scroll lock / center overlay), or new errors. */
+/** Several actions taken as one (a multi-file upload): what any of them did is what the whole did — a later file's
+ *  reply must not erase the error or navigation an earlier one caused. */
+export function mergeDeltas(a: ActionDelta | undefined, b: ActionDelta | undefined): ActionDelta | undefined {
+  if (!a || !b) return a ?? b;
+  const list = <T>(x?: T[], y?: T[]): T[] | undefined => (x?.length || y?.length ? [...(x ?? []), ...(y ?? [])] : undefined);
+  const sum = (x?: number, y?: number): number | undefined => (x || y ? (x ?? 0) + (y ?? 0) : undefined);
+  return {
+    ...a,
+    ...b,
+    elementDelta: sum(a.elementDelta, b.elementDelta),
+    dialogsOpened: sum(a.dialogsOpened, b.dialogsOpened),
+    scrollLocked: a.scrollLocked || b.scrollLocked || undefined,
+    overlay: a.overlay || b.overlay || undefined,
+    newErrors: list(a.newErrors, b.newErrors),
+    stateChanged: list(a.stateChanged, b.stateChanged),
+    pageDialogs: list(a.pageDialogs, b.pageDialogs),
+    tabsOpened: list(a.tabsOpened, b.tabsOpened),
+  };
+}
+
+/** Whether what an action was OBSERVED to do means the page the agent read is no longer the page it is on: a new
+ *  document, a dialog (in the page or the page's own alert/confirm), a new tab, a selector-free interruption (scroll
+ *  lock / center overlay), or new errors. The one rule every action reply and batch applies — a navigation counts
+ *  like any of them, whichever action caused it. */
 export function deltaGate(delta?: ActionDelta): string | null {
   if (!delta) return null;
-  if (delta.dialogsOpened || delta.scrollLocked || delta.overlay || delta.newErrors?.length)
-    return "a dialog/overlay appeared or new errors showed up";
-  return null;
+  const why: string[] = [];
+  if (delta.urlChanged) why.push("the page navigated");
+  if (delta.pageDialogs?.length) why.push("the page opened its own dialog");
+  if (delta.tabsOpened?.length) why.push("a new tab opened");
+  if (delta.dialogsOpened || delta.scrollLocked || delta.overlay) why.push("a dialog/overlay appeared");
+  if (delta.newErrors?.length) why.push("new errors showed up");
+  return why.length ? why.join(", ") : null;
 }
 
 /** One line naming what this reply lists that the caller has not been shown before (see ShownLedger).
@@ -151,7 +177,9 @@ export function elementLine(e: SnapshotElement, opts: { geometry?: boolean } = {
   if (e.name) parts.push(`"${e.container && e.name.length > 30 ? `${e.name.slice(0, 30)}…` : e.name}"`);
   if (e.container) parts.push("(group)");
   if (e.value) parts.push(`value="${e.value}"`);
-  if (e.checked !== undefined) parts.push(e.checked ? "[checked]" : "[unchecked]");
+  if (e.checked !== undefined) parts.push(e.checked === "mixed" ? "[mixed]" : e.checked ? "[checked]" : "[unchecked]");
+  if (e.pressed !== undefined) parts.push(e.pressed === "mixed" ? "[partly pressed]" : e.pressed ? "[pressed]" : "[not pressed]");
+  if (e.selected) parts.push("[selected]");
   if (e.options) parts.push(`options=[${e.options.join(" | ")}]`);
   if (e.expanded !== undefined) parts.push(e.expanded ? "[expanded]" : "[collapsed]");
   // Right after expanded, because together they are one statement: THAT a
@@ -276,6 +304,35 @@ function renderHiddenSummary(folded: SnapshotElement[], all: SnapshotElement[]):
 
 const WHOLE_PAGE = "snapshot({full: true}) lists every element, page by page";
 
+/** One line for a read taken while the tab still had requests open — the content may still be arriving. */
+export function renderPendingRequests(p?: PendingRequests): string {
+  if (!p?.count) return "";
+  let where = p.oldestUrl;
+  try {
+    const u = new URL(p.oldestUrl);
+    where = u.host + u.pathname;
+  } catch {
+    /* not a URL — show as is */
+  }
+  return `\n\n⏳ ${p.count} request(s) were still open when this was read (oldest ${(p.oldestMs / 1000).toFixed(1)}s: ${where.slice(0, 80)}) — if what you need looks missing or partial, it may still be loading: read again.`;
+}
+
+/** A query that matched no element: what the page's TEXT says about the words instead — inside which element they
+ *  appear (one named otherwise, e.g. by a title), in plain text that read_content reads, hidden, or nowhere. Facts the
+ *  reader can act on, where "try other words" sent it guessing. */
+function noElementMatches(query: string, hits: SnapshotTextHits | undefined, elsewhere: number, scope: string): string {
+  // Matches outside the narrowed view are not "no match": say where they are instead.
+  if (elsewhere)
+    return `(${elsewhere} element(s) on the page match ${JSON.stringify(query)}, none of them ${scope} — drop that filter to list them)`;
+  const head = `(no element's role, name, value or options contain ${JSON.stringify(query)})`;
+  if (!hits) return head;
+  if (!hits.count)
+    return `${head}\nThe words do not occur in the page's text either. snapshot({full: true}) lists every element.`;
+  const lines = hits.samples.map((h) => `  ${h.ref ? `inside [${h.ref}]` : "in page text"}${h.hidden ? " (hidden)" : ""}: ${JSON.stringify(h.text)}`);
+  const more = hits.count > hits.samples.length ? `\n  … ${hits.count - hits.samples.length} more` : "";
+  return `${head}\nThe words occur ${hits.count} time(s) in the page's text:\n${lines.join("\n")}${more}\nAct on the element they are inside (snapshot({within: ref}) shows it), or read the text with read_content.`;
+}
+
 /** Renders a snapshot reply (snapshot, or analyze_page's snapshot section), and returns the refs it listed — what
  *  the caller records as shown — and whether it continued an earlier page (`continued`: it started past the first
  *  element, so everything on it is unread by construction).
@@ -287,6 +344,7 @@ const WHOLE_PAGE = "snapshot({full: true}) lists every element, page by page";
 export function renderSnapshotView(
   els: SnapshotElement[],
   view: SnapshotView = {},
+  textHits?: SnapshotTextHits,
 ): { text: string; shown: string[]; continued: boolean } {
   const total = countElements(els);
   const coverage = (bits: string[]): string => `Coverage: ${bits.join(" · ")}.`;
@@ -303,7 +361,19 @@ export function renderSnapshotView(
       };
     matched = sub;
   }
-  if (query) matched = matched.filter((e) => [e.role, e.name, e.value, ...(e.options ?? [])].some((v) => v?.toLowerCase().includes(query)));
+  // A (group) wrapper and a hidden group are named by all the text they hold, so their "name" matches whatever one
+  // of their elements matches: the search would return the element and every container around it, and a group that
+  // is not one of the page's elements. A query asks for elements by their own name, role, value or options.
+  // Graded the way every other text comparison is (text-match.ts): case and whitespace folded, the words of a
+  // several-word query found in any order. Ordered best grade first — an element named exactly what was asked
+  // before the hundreds that merely contain it — and in document order within a grade. Nothing is dropped.
+  const byQuery = (list: SnapshotElement[]): SnapshotElement[] =>
+    list
+      .map((e, i) => ({ e, i, g: e.container || e.hiddenGroup ? undefined : [e.role, e.name, e.value, ...(e.options ?? [])].reduce<MatchGrade | undefined>((best, v) => bestGrade(best, matchGrade(v, query!)), undefined) }))
+      .filter((x): x is { e: SnapshotElement; i: number; g: MatchGrade } => !!x.g)
+      .sort((a, b) => gradeRank(a.g) - gradeRank(b.g) || a.i - b.i)
+      .map((x) => x.e);
+  if (query) matched = byQuery(matched);
   if (view.viewportOnly) matched = matched.filter((e) => e.inViewport === true);
   const narrowed = !!query || !!view.viewportOnly || !!view.within;
   const filter = [view.within ? `within [${view.within}]` : "", query ? `query=${JSON.stringify(view.query)}` : "", view.viewportOnly ? "viewportOnly" : ""].filter(Boolean).join(" ");
@@ -332,9 +402,12 @@ export function renderSnapshotView(
   }
   const end = start + page.length;
   if (!page.length)
-    body = narrowed || start
-      ? `(nothing to show${filter ? ` for ${filter}` : ""}${start ? ` after [${view.after}]` : ""} — widen the query or drop \`after\`)`
-      : "(no visible interactable elements right now)";
+    body = query && !start
+      ? noElementMatches(view.query!, textHits, (view.within || view.viewportOnly) ? byQuery(els).length : 0,
+          [view.within ? `within [${view.within}]` : "", view.viewportOnly ? "in the viewport" : ""].filter(Boolean).join(" and "))
+      : narrowed || start
+        ? `(nothing to show${filter ? ` for ${filter}` : ""}${start ? ` after [${view.after}]` : ""})`
+        : "(no visible interactable elements right now)";
 
   // ---- Coverage ----
   const listed = countElements(page);
@@ -377,7 +450,7 @@ export function renderHistoryNav(
   r: { navigated: boolean; url?: string; title?: string },
 ): string {
   const verb = kind === "reload" ? "Reloaded" : kind === "back" ? "Went back" : "Went forward";
-  if (r.navigated) return `${verb} → ${r.title ? `${r.title} — ` : ""}${r.url ?? "(url unknown)"}`;
+  if (r.navigated) return `${verb} → ${r.title ? `${r.title} — ` : ""}${r.url ?? "(url unknown)"}${gateNote("the page navigated")}`;
   const why = kind === "reload"
     ? "no new document committed — the reload may have been cancelled by a beforeunload handler"
     : `nothing committed — this tab has no ${kind} history, or a beforeunload handler cancelled the move`;
@@ -388,6 +461,11 @@ export function renderDelta(delta?: ActionDelta): string {
   if (!delta) return "";
   const bits: string[] = [];
   if (delta.urlChanged) bits.push(`navigated → ${delta.urlChanged}`);
+  // The page's own alert/confirm/prompt: nobody can see it while an agent drives, so it was answered on the spot —
+  // and the answer can be what decided the outcome.
+  for (const d of delta.pageDialogs ?? [])
+    bits.push(`page ${d.kind}(${JSON.stringify(d.message)})${d.answered ? ` answered ${d.answered}${d.kind !== "alert" && d.answered === "Cancel" ? " — what it guarded did not proceed" : ""}` : ""}`);
+  for (const t of delta.tabsOpened ?? []) bits.push(`opened tab ${t.tabId}${t.url ? ` (${t.url})` : ""}`);
   if (delta.elementDelta) bits.push(`${delta.elementDelta > 0 ? "+" : ""}${delta.elementDelta} elements`);
   if (delta.dialogsOpened) bits.push(`${delta.dialogsOpened} dialog(s) opened`);
   if (delta.scrollLocked) bits.push("page scroll locked (a modal/overlay likely opened)");

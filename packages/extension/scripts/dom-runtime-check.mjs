@@ -56,7 +56,7 @@ async function main() {
     process.exit(2);
   }
 
-  const { bcpDomRuntime, bcpSignalWait, bcpWaitFactory, bcpEventProbes, bcpDomHelpersFactory, bcpReadOnlyGuard } = await bundleRuntime(esbuild);
+  const { bcpDomRuntime, bcpSignalWait, bcpWaitFactory, bcpEventProbes, bcpDomHelpersFactory, bcpReadOnlyGuard, bcpDialogShim, bcpDialogRestore } = await bundleRuntime(esbuild);
   const runtimeSource = bcpDomRuntime.toString();
   const probesSource = bcpEventProbes.toString();
   const signalSource = bcpSignalWait.toString();
@@ -319,28 +319,25 @@ async function main() {
     },
   );
 
-  // role="alert" means "announce this promptly", NOT "this is an error". A
-  // version banner carrying it used to make every page report a standing error,
-  // which buried real ones and misled a real session.
+  // An error is what the page declares invalid (aria-invalid), with the message
+  // the field points to. role="alert" means "announce this promptly", NOT "this
+  // is an error" — a version banner carrying it used to make every page report a
+  // standing error. And a class name is no declaration: no library's classes are
+  // known here.
   await withPage(
     `<div role="alert">新版本可用，请刷新页面</div>
-     <div class="error">用户名不能为空</div>
-     <input id="bad" aria-invalid="true">`,
+     <div class="error el-form-item__error">只有类名的提示</div>
+     <input id="bad" aria-invalid="true" aria-describedby="bad-msg"><div id="bad-msg">用户名不能为空</div>
+     <input id="bare" aria-label="手机号" aria-invalid="true">`,
     async (t) => {
       const st = await t.call("state", {});
-      // Only the real validation message counts; the banner does not.
-      eq(st.value.errorCount, 1, "role=alert banner is not counted as an error");
+      eq(st.value.errorCount, 2, "the two declared-invalid fields; neither the banner nor a bare class counts");
       eq(st.value.errors?.[0], undefined, "errors are only listed in detail mode");
       const detail = await t.call("state", { verbosity: "detail", resetDelta: true });
-      eq(detail.value.errors?.length, 1, "detail mode lists exactly the real error");
-      match(detail.value.errors[0], /用户名不能为空/, "the listed error is the validation message");
-
-      // Division of labour: a control's invalid STATE rides on the snapshot
-      // element, not on errorCount — errorCount counts messages with text, and
-      // an <input> carries none.
+      eq(JSON.stringify(detail.value.errors), JSON.stringify(["用户名不能为空", "手机号 is invalid"]),
+        "each error is the message its field points to, or the field's name when it points to none");
       const snap = await t.call("snapshot", {});
-      const bad = snap.value.elements.find((e) => e.tag === "input");
-      eq(bad?.invalid, true, "an aria-invalid input is flagged in the snapshot instead");
+      eq(snap.value.elements.find((e) => e.ref === t.ref("bad"))?.invalid, true, "the field itself is flagged in the snapshot too");
     },
   );
 
@@ -1215,6 +1212,197 @@ async function main() {
       await page.evaluate(() => { document.getElementById("outer").style.display = "none"; });
       const closedAgain = (await t.call("snapshot", {})).value.elements;
       eq(closedAgain.find((e) => e.hiddenGroup && e.name?.includes("首页"))?.ref, refOfEl.outer, "closed again, the group gets its own ref back: the agent's ref did not go stale while the node existed");
+    },
+  );
+
+  // ---- Where a query's words are, when no element is named by them: the
+  // facts a zero-hit reply gives instead of "try other words".
+  await withPage(
+    `<button id="named" aria-label="提交订单">去 Deutsch 版</button>
+     <table><tr><td>Iceland</td><td>387,758</td></tr></table>
+     <div style="display:none">Iceland (hidden copy)</div>
+     <span id="sh"></span>
+     <script>document.getElementById("sh").attachShadow({ mode: "open" }).innerHTML = "<p>iceland in a component</p>";</script>`,
+    async (t) => {
+      const de = (await t.call("snapshot", { query: "deutsch" })).value.textHits;
+      eq(de?.count, 1, "the words inside a control named otherwise are found");
+      eq(de?.samples[0]?.ref, t.ref("named"), "with the ref of the control they are inside");
+      const ice = (await t.call("snapshot", { query: "ICELAND" })).value.textHits;
+      eq(ice?.count, 3, "case folded; table text, hidden text and a shadow root's text all count");
+      eq(ice?.samples.filter((h) => h.hidden).length, 1, "the hidden copy says it is hidden");
+      eq(ice?.samples.some((h) => h.ref), false, "plain text carries no ref");
+      eq((await t.call("snapshot", { query: "不在页面上" })).value.textHits?.count, 0, "absent words count zero");
+      eq((await t.call("snapshot", {})).value.textHits, undefined, "no query, no text search");
+      const miss = await t.call("click", { name: "387,758" });
+      match(miss.error ?? "", /nothing matches .*the words occur 1 time\(s\) in this frame's text: in page text "387,758"/s,
+        "a locator that finds no control says where the words are instead");
+      const gone = await t.call("click", { name: "不在页面上" });
+      match(gone.error ?? "", /the words do not occur in this frame's text; a snapshot shows what is there$/, "or that they are nowhere");
+      const waited = await t.call("wait", { waitText: "hidden copy", ms: 100 });
+      eq(waited.value?.matched, false);
+      eq(waited.value?.textHits?.samples?.[0]?.hidden, true, "a wait that ran out reports the text is there but hidden");
+    },
+  );
+
+  // ---- Names and states as the platform defines them, one predicate each,
+  // shared by the snapshot and the actions.
+  await withPage(
+    `<a href="#" id="de" title="Kuckucksuhr – German">Deutsch</a>
+     <a href="#" id="icon"><img alt="首页图标" src="data:,"></a>
+     <a href="#" id="tip" title="只有提示"></a>
+     <span id="l1">保存</span><span id="l2">草稿</span><button id="lb" aria-labelledby="l1 l2"></button>
+     <button id="sw" role="switch" aria-checked="true">通知</button>
+     <button id="tg" aria-pressed="false">加粗</button>
+     <div role="tablist"><div role="tab" id="tab" aria-selected="true">概览</div></div>
+     <fieldset disabled><button id="fs">提交表单</button></fieldset>
+     <input type="checkbox" id="cb">
+     <div id="box" style="height:40px;overflow:auto"><div style="height:400px"></div><button id="below">底部</button></div>
+     <div id="row" style="cursor:pointer">订单 123 <span id="edit" title="编辑">✎</span></div>
+     <a href="#" id="vote"><div id="arrow" title="upvote" style="width:10px;height:10px"></div></a>
+     <select id="size"><option value="1">Small</option><option value="2" selected>Large</option></select>`,
+    async (t) => {
+      const els = (await t.call("snapshot", {})).value.elements;
+      const of = (id) => els.find((e) => e.ref === t.ref(id));
+      eq(of("de")?.name, "Deutsch", "a link is named by the words it shows, not by its title tooltip");
+      eq(of("icon")?.name, "首页图标", "an image-only link is named by its image's alt");
+      eq(of("tip")?.name, "只有提示", "an empty link still falls back to its title");
+      eq(of("lb")?.name, "保存 草稿", "aria-labelledby with several ids joins their text");
+      eq(of("sw")?.checked, true, "a switch's aria-checked is its state");
+      eq(of("tg")?.pressed, false, "a toggle button's aria-pressed is its state");
+      eq(of("tab")?.selected, true, "the selected tab says so");
+      eq(of("fs")?.disabled, true, "a button inside a disabled fieldset is disabled");
+      const refused = await t.call("click", { ref: t.ref("fs"), timeoutMs: 200, confirm: true });
+      eq(typeof refused.error, "string", "and the action does not click it as if it were usable");
+      eq(of("below")?.inViewport, false, "a button scrolled out of its own list is not in the viewport");
+      eq(of("below")?.rect, undefined, "and gets no box that would land on whatever covers that spot");
+      eq(typeof t.ref("edit"), "string", "an icon its author named inside a clickable row is a control of its own");
+      eq(of("edit")?.name, "编辑");
+      eq(t.ref("arrow"), undefined, "but a titled part of a link is the link, not a second control");
+      eq(of("size")?.value, "Large", "a <select> reports the chosen option's text, as its options are listed");
+      const toggled = await t.call("click", { ref: t.ref("cb") });
+      match((toggled.value?.delta?.stateChanged ?? []).join(" | "), /target checked: false → true/, "a native checkbox click reports the flip");
+    },
+  );
+
+  // ---- What the user sees, as the snapshot reports it: an ancestor's overflow cuts a box off only when it is on
+  // the box's containing-block chain and along the axis it clips; the top layer escapes all of it. Names from
+  // content need a letter or digit; text split across elements is still found; a hidden frame shows no text.
+  await withPage(
+    `<style>body{margin:0}</style>
+     <div style="height:20px;overflow:hidden;translate:0 0"><div style="height:20px"></div><button id="tr" style="position:absolute;top:40px">平移裁剪</button></div>
+     <div style="height:0;overflow:hidden;rotate:0deg"><button id="rot" style="position:fixed;top:5px;left:300px">旋转裁剪</button></div>
+     <div style="height:20px;contain:paint"><div style="height:20px"></div><button id="cp">绘制裁剪</button></div>
+     <div><script>var s="Proceed to checkout"</script><button>Buy</button></div>
+     <div><span>Order</span> <span style="display:none">confirmed</span></div>
+     <div><p>do not</p><p>agree</p></div>
+     <div style="height:0;overflow:hidden"><div style="position:fixed;top:20px;left:20px"><button id="p1">固定弹窗</button></div></div>
+     <div style="position:relative;margin-top:100px"><div style="height:20px;overflow:hidden"><div style="position:absolute;top:30px;left:0"><button id="p2">下拉项</button></div></div></div>
+     <div style="height:20px;overflow-x:clip;overflow-y:visible;margin-top:60px"><div style="height:20px"></div><button id="p3">纵向溢出</button></div>
+     <div style="width:50px;height:50px;overflow:hidden;transform:translateZ(0);margin-top:40px"><dialog id="dlg"><button id="p4">对话框按钮</button></dialog></div>
+     <div style="height:40px;overflow:auto"><div style="height:400px"></div><button id="gone">滚出列表</button></div>
+     <button id="x" title="Close">×</button>
+     <a href="#" id="ico" title="删除"><i>\ue62b</i></a>
+     <button id="plus">+</button>
+     <p id="split">Add to <b>cart</b></p>
+     <input type="checkbox" id="half">
+     <iframe id="hf" style="display:none" srcdoc="<p>SecretHiddenText</p><script>var x='scriptbody'</script>"></iframe>`,
+    async (t) => {
+      await page.evaluate(() => { document.getElementById("dlg").showModal(); document.getElementById("half").indeterminate = true; });
+      const els = (await t.call("snapshot", {})).value.elements;
+      const of = (id) => els.find((e) => e.ref === t.ref(id));
+      eq(of("p1")?.inViewport, true, "a fixed popup in a zero-height clipping wrapper is seen: fixed boxes escape that overflow");
+      eq(of("p2")?.inViewport, true, "an absolute dropdown whose containing block is outside the clipping box is seen");
+      eq(of("p3")?.inViewport, true, "overflow-x:clip does not cut along y");
+      eq(of("p4")?.inViewport, true, "a modal dialog is in the top layer: a small clipping card around it hides nothing, even one that holds fixed boxes (transform)");
+      eq(of("gone")?.inViewport, false, "a button scrolled out of its own list is still off screen");
+      eq(of("tr")?.inViewport, false, "translate (not part of computed transform) makes the clipping box hold an absolute child");
+      eq(of("rot")?.inViewport, false, "rotate makes it hold a fixed child too, so its zero height hides it");
+      eq(of("cp")?.inViewport, false, "contain:paint clips like overflow");
+      for (const q of ["Proceed to checkout", "Order confirmed", "do not agree"])
+        eq((await t.call("snapshot", { query: q })).value.textHits?.count, 0, `"${q}" is not shown text: script source, a display:none part, two paragraphs`);
+      eq(of("x")?.name, "Close", "content with no letter or digit (×) does not name it; the title does");
+      eq(of("ico")?.name, "删除", "an icon-font glyph does not name it either");
+      eq(of("plus")?.name, "+", "with nothing else to go by the symbol is still its name");
+      eq(of("half")?.checked, "mixed", "a native indeterminate checkbox reads mixed");
+      const split = (await t.call("snapshot", { query: "Add to cart" })).value.textHits;
+      eq(split?.count, 1, "text split across elements (Add to <b>cart</b>) is found in the element holding all of it");
+      match(split?.samples?.[0]?.text ?? "", /Add to cart/);
+      const miss = await t.call("click", { name: "Add to cart", timeoutMs: 200 });
+      match(miss.error ?? "", /the words occur 1 time\(s\) in this frame's text: in page text "Add to cart"/, "a name miss reports where the words are, split across elements too");
+      eq(/loaded yet|words it differently/.test(miss.error ?? ""), false, "and claims nothing it did not observe");
+      const frame = page.frames().find((f) => f !== page.mainFrame());
+      await frame.evaluate((src) => { globalThis.__bcpRun = eval(`(${src})`); }, runtimeSource);
+      const hidden = await frame.evaluate(() => globalThis.__bcpRun("read", {}));
+      eq(hidden.value?.text, "", "a frame with no viewport (display:none iframe) shows no text — not its script source either");
+    },
+  );
+
+  // ---- The page runtime's copy of the text rule agrees with the shared one
+  // (packages/shared/src/text-match.ts): wait_for finds text written with
+  // other case, spacing or invisible characters exactly when the backend's
+  // normalization says the two are the same.
+  {
+    const { normalizeText, TEXT_MATCH_CASES } = await import("../../shared/dist/text-match.js");
+    for (const [raw, norm] of TEXT_MATCH_CASES) {
+      eq(normalizeText(raw), norm, `shared rule: ${JSON.stringify(raw)}`);
+      await withPage(`<p id="p">${raw.replace(/</g, "&lt;")}</p>`, async (t) => {
+        const r = await t.call("wait", { waitText: norm.toUpperCase(), ms: 300 });
+        eq(r.value?.matched, true, `wait_for matches ${JSON.stringify(raw)} as ${JSON.stringify(norm)}`);
+        const absent = await t.call("wait", { waitText: `${norm} 不在页面上`, ms: 100 });
+        eq(absent.value?.matched, false, "and does not match text the page does not show");
+      });
+    }
+  }
+
+  // ---- What judges the page sees what the snapshot sees: text, errors and
+  // waits reach into open shadow roots (a web component's error toast used to
+  // be invisible to textAbsent, noErrors and the action's newErrors).
+  await withPage(
+    `<button id="go">继续</button><span id="toast-host"></span><span id="hidden-host" style="display:none"></span>
+     <script>
+       document.getElementById("hidden-host").attachShadow({ mode: "open" }).innerHTML = '<p>隐藏的提示</p>';
+       document.getElementById("go").onclick = () => {
+         document.getElementById("toast-host").attachShadow({ mode: "open" }).innerHTML = '<input aria-invalid="true" aria-describedby="m"><p id="m">提交失败</p>';
+       };
+     </script>`,
+    async (t) => {
+      const acted = await t.call("click", { ref: t.ref("go") });
+      eq(JSON.stringify(acted.value?.delta?.newErrors ?? []), JSON.stringify(["提交失败"]), "an error shown inside a shadow root is a new error of the action");
+      const read = (await t.call("read", { full: true })).value.text;
+      match(read, /提交失败/, "the page text includes what a shadow root shows");
+      eq(read.includes("隐藏的提示"), false, "but not what it holds hidden");
+      const waited = await t.call("wait", { waitText: "提交失败", ms: 500 });
+      eq(waited.error, undefined, "wait_for finds text a shadow root shows");
+    },
+  );
+
+  // ---- A ref acts only in the document it was read in. The backend sends the
+  // docId of the read along with the ref; a document that was replaced since
+  // (navigation, reload) numbers its elements afresh, so its e1 is not the e1
+  // the caller saw.
+  await withPage(`<button id="b" onclick="document.body.dataset.hit = '1'">保存</button>`, async (t) => {
+    const docId = (await t.call("snapshot", {})).value.docId;
+    const stale = await t.call("click", { ref: t.ref("b"), expectDoc: "another-document" });
+    match(stale.error ?? "", /was read from a document this frame no longer shows .* Nothing was done/, "a ref from another document is refused, and says why");
+    eq(await page.evaluate(() => document.body.dataset.hit ?? null), null, "and nothing was clicked");
+    const ok = await t.call("click", { ref: t.ref("b"), expectDoc: docId });
+    eq(ok.error, undefined, "the same document acts normally");
+    eq(await page.evaluate(() => document.body.dataset.hit ?? null), "1");
+  });
+
+  // ---- Page dialogs during an action are answered AND reported. The shim runs in
+  // the page's MAIN world around every in-page action (the extension installs it
+  // and calls the restore afterwards); here both run in the page the same way.
+  await withPage(
+    `<button id="del" onclick="if (confirm('确定删除?')) document.body.dataset.deleted = '1'; alert('保存失败')">删除</button>`,
+    async (t) => {
+      await page.evaluate(([shim]) => { (0, eval)(`(${shim})`)(false); }, [bcpDialogShim.toString()]);
+      await t.call("click", { ref: t.ref("del"), confirm: true });
+      const seen = await page.evaluate(([restore]) => (0, eval)(`(${restore})`)(), [bcpDialogRestore.toString()]);
+      eq(JSON.stringify(seen), JSON.stringify([{ kind: "confirm", message: "确定删除?", answered: "Cancel" }, { kind: "alert", message: "保存失败" }]),
+        "the restore hands back what the page asked and how it was answered");
+      eq(await page.evaluate(() => document.body.dataset.deleted ?? null), null, "and the confirm answered Cancel really cancelled what it guarded");
+      eq(await page.evaluate(() => window.confirm.toString().includes("native code")), true, "native dialogs are back");
     },
   );
 

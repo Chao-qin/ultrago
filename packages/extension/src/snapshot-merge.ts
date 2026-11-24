@@ -13,12 +13,14 @@ interface FrameSnapshot {
   url: string; title: string; moreBelow: boolean;
   elements: { ref: string; parentRef?: string; controls?: string[] }[];
   docId?: string;
+  textHits?: { count: number; samples: { text: string; ref?: string; hidden?: boolean }[] };
 }
 
 export function mergeFrameSnapshots(tabId: number, results: FrameSnapshotResult[]) {
   const merged = {
     tabId, url: "", title: "", elements: [] as unknown[], moreBelow: false,
     docs: {} as Record<string, string>,
+    textHits: undefined as FrameSnapshot["textHits"],
   };
   for (const res of results) {
     const r = res.result as { value?: FrameSnapshot } | undefined;
@@ -41,6 +43,36 @@ export function mergeFrameSnapshots(tabId: number, results: FrameSnapshotResult[
     // same way its refs are prefixed, so a frame that navigated on its own
     // can be told apart from the rest of the page.
     if (r.value.docId) merged.docs[String(res.frameId)] = r.value.docId;
+    // Where a query's words occur, summed over frames; a sample's ref carries its frame's prefix like every ref.
+    if (r.value.textHits) {
+      merged.textHits ??= { count: 0, samples: [] };
+      merged.textHits.count += r.value.textHits.count;
+      for (const h of r.value.textHits.samples)
+        if (merged.textHits.samples.length < 5) merged.textHits.samples.push(h.ref ? { ...h, ref: pfx(h.ref) } : h);
+    }
   }
+  if (!merged.textHits) delete (merged as { textHits?: unknown }).textHits;
   return merged;
+}
+
+interface FrameRead {
+  url: string; title: string; text: string; offset: number; totalChars: number; truncated: boolean;
+  overview?: unknown;
+}
+
+/** One whole-page read out of per-frame reads: the top frame's text, then each other frame's, marked with its
+ *  address. Verification reads the page through this (textPresent / textAbsent), so a message an iframe shows — a
+ *  payment form's error, an embedded editor — must be in it, as it is in the snapshot. Returns undefined when the top
+ *  frame produced no read, so the caller fails the way a top-frame-only read would. */
+export function mergeFrameReads(results: FrameSnapshotResult[]): FrameRead | undefined {
+  const reads = results
+    .map((res) => ({ frameId: res.frameId, value: (res.result as { value?: FrameRead } | undefined)?.value }))
+    .filter((r): r is { frameId: number; value: FrameRead } => !!r.value)
+    .sort((a, b) => a.frameId - b.frameId);
+  const top = reads.find((r) => r.frameId === 0)?.value;
+  if (!top) return undefined;
+  const rest = reads.filter((r) => r.frameId !== 0 && r.value.text.trim());
+  if (!rest.length) return top;
+  const text = [top.text, ...rest.map((r) => `[frame ${r.value.url}]\n${r.value.text}`)].join("\n\n");
+  return { ...top, text, totalChars: text.length };
 }

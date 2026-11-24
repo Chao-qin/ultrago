@@ -115,6 +115,8 @@ import type { Delivery } from "./deliveries.js";
 import type { BrowserKind } from "./browser-lifecycle.js";
 import type { SignalCondition, SignalGate, BookPageDefinition } from "./book-signals.js";
 export { RpcMethod, LocalMethod } from "./methods.js";
+export { normalizeText, matchGrade, bestGrade, gradeRank, TEXT_MATCH_CASES, type MatchGrade } from "./text-match.js";
+export { RPC_TRAITS, DOM_OP, isPageAction, MUTATING_METHODS, UNSAFE_TO_REPEAT_METHODS, TAB_SCOPED_METHODS, type DomOp, type RpcTraits } from "./rpc-traits.js";
 
 /* ------------------------------------------------------------------ *
  * Browser RPC surface — the methods Claude can invoke via MCP tools.  *
@@ -301,7 +303,9 @@ export interface RpcContracts {
     result: { dataUrl: string; warning?: string; activated?: boolean; keptInFront?: boolean };
   };
   [RpcMethod.Snapshot]: {
-    params: TabTarget;
+    /** `query`: also report where this text occurs in the page's text (`textHits`), so a reply whose query matches
+     *  no element's name can say whether the words are on the page at all, and inside which element. */
+    params: TabTarget & { query?: string };
     /** Compact interactable-element tree with stable refs for this snapshot.
      * `moreBelow` flags that the page can still scroll down (content below the
      * fold / lazy-loaded) so the agent knows to scroll rather than assume it saw all. */
@@ -312,6 +316,9 @@ export interface RpcContracts {
     result: {
       tabId: number; url: string; title: string; elements: SnapshotElement[]; moreBelow: boolean;
       docs?: Record<string, string>;
+      /** With `query`: text nodes containing it (case-insensitive), across frames and open shadow roots. */
+      textHits?: SnapshotTextHits;
+      pendingRequests?: PendingRequests;
     };
   };
   [RpcMethod.Click]: {
@@ -343,6 +350,7 @@ export interface RpcContracts {
       url: string;
       title: string;
       text: string;
+      pendingRequests?: PendingRequests;
       /** Offset of this chunk in the normalized page text. */
       offset: number;
       /** Total length of the normalized page text. */
@@ -358,7 +366,8 @@ export interface RpcContracts {
   [RpcMethod.WaitFor]: {
     /** Wait until: text appears, OR a selector's element is visible/hidden, OR a fixed delay. */
     params: TabTarget & { text?: string; selector?: string; state?: "visible" | "hidden"; ms?: number };
-    result: { matched: boolean };
+    /** `textHits`: when a wait for text ran out, where those words are in the page's text (hidden, or nowhere). */
+    result: { matched: boolean; textHits?: SnapshotTextHits };
   };
   [RpcMethod.WaitSignal]: {
     /** Event-driven wait for a declarative Book v2 signal condition in this tab:
@@ -578,8 +587,15 @@ export interface CaptchaSignal {
  * agent can verify an outcome without a full re-snapshot. Fields are omitted
  * when nothing changed on that axis. Best-effort signal, not authoritative. */
 export interface ActionDelta {
-  /** New URL, set only when the action caused navigation. */
+  /** New URL, set only when the action caused navigation: the document this frame COMMITTED while the action ran
+   *  (a link or submit whose new page commits after the injection returned included). */
   urlChanged?: string;
+  /** Page dialogs (alert / confirm / prompt) the page opened during the action. They cannot be shown while an agent
+   *  drives the page, so each was answered on the spot — `answered` says how, which can be what decided the
+   *  outcome (a confirm answered Cancel cancels what it guarded). */
+  pageDialogs?: { kind: "alert" | "confirm" | "prompt"; message: string; answered?: "OK" | "Cancel" }[];
+  /** Tabs this tab opened during the action (target=_blank, window.open). */
+  tabsOpened?: { tabId: number; url?: string }[];
   /** Net change in interactable-element count (positive = elements appeared,
    * e.g. a dropdown/panel opened or lazy content loaded). */
   elementDelta?: number;
@@ -788,8 +804,13 @@ export interface SnapshotElement {
   name: string;
   /** For inputs. */
   value?: string;
-  /** For checkbox/radio: current checked state (so the agent can reach a desired state). */
-  checked?: boolean;
+  /** Whether it is on: a native checkbox/radio, or what a widget declares through aria-checked (a switch, a
+   *  menuitemcheckbox) — "mixed" for a partly checked one. Lets the agent reach a desired state instead of toggling. */
+  checked?: boolean | "mixed";
+  /** aria-pressed of a toggle button. */
+  pressed?: boolean | "mixed";
+  /** aria-selected: the selected tab, option or row. */
+  selected?: boolean;
   /** For <select>: the visible option labels, so the agent knows valid choices. */
   options?: string[];
   /** True if this element is a scrollable container with more content than fits. */
@@ -853,6 +874,19 @@ export interface SnapshotElement {
    * whole group. `hidden` is its own visibility: a closed <details> still shows
    * its summary while hiding the rest. */
   hiddenGroup?: boolean;
+}
+
+/** Where a query's words occur in the page's text. `count` is every text node containing them; `samples` are the
+ *  first few, each with its surrounding words, the [ref] of the element it sits inside (absent when it is in no
+ *  element the snapshot lists — plain page text) and whether it is hidden. */
+/** Requests the tab still had open when it was read (hung ones excluded): the readiness wait stops counting one that
+ *  stays open long (a long poll would hold every read to the ceiling), so the read reports them rather than deciding
+ *  they do not matter — a slow search the page is still waiting on looks the same. */
+export interface PendingRequests { count: number; oldestMs: number; oldestUrl: string }
+
+export interface SnapshotTextHits {
+  count: number;
+  samples: { text: string; ref?: string; hidden?: boolean }[];
 }
 
 /* ------------------------------------------------------------------ *

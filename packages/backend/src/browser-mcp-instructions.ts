@@ -29,7 +29,7 @@ Perceive — use the cheapest read that answers the question:
 - When a read says "more content below the fold" or the item is not there yet, \`scroll\` (the window, or the list's (scrollable) container) and read again. Never conclude "not found" from one unscrolled view.
 
 Reading a snapshot:
-- State: [expanded]/[collapsed], [checked]/[unchecked], [invalid: …], [busy], [disabled], [hidden], (scrollable), and [clickable] for a custom element found by its pointer cursor — click it like any control. Disabled elements are listed but will not respond normally.
+- State: [expanded]/[collapsed], [checked]/[unchecked]/[mixed], [pressed]/[not pressed]/[partly pressed], [selected], [invalid: …], [busy], [disabled], [hidden], (scrollable), and [clickable] for a custom element found by its pointer cursor — click it like any control. Disabled elements are listed but will not respond normally.
 - The first line (Coverage) says what the reply lists and gives the call for the rest: read it before concluding something is not on the page.
 - Hidden elements cannot be acted on until they show, so "Hidden right now" names them by [ref] instead of listing them: a closed menu is one line, its container. A [hidden] file input named there is still \`upload_file\`'s target.
 - Layer: @dialog:<name> (or bare @dialog) marks a control inside an open modal — act on those; the rest is behind it. @fixed-top / @fixed-bottom / @fixed-left / @fixed mark pinned bars, toolbars and banners. No marker means normal page content.
@@ -52,15 +52,15 @@ Act:
 - Waiting: \`wait_for\` for the page (text, selector or a fixed delay), \`wait_for_event\` for browser events (a page load, a dialog, a browser connecting, a tab released), bcpWait inside \`eval\` for anything else. Never write sleep loops.
 
 Verify every action:
-- Action replies end with a \`↳ changed:\` line (URL change, ±elements, N dialog(s) opened, NEW errors). Read it; it often saves a re-read.
+- Action replies end with a \`↳ changed:\` line (URL change, ±elements, N dialog(s) opened, a page alert/confirm/prompt and how it was answered, a tab the action opened, NEW invalid fields). Read it; it often saves a re-read.
 - The same line reports what the action did to its target: "state — target aria-expanded: false → true" or "target class changed" proves a toggle flipped even when nothing else moved; "a handler called preventDefault" proves the page reacted; "event landed on <…>" only names the child that received it. No "state —" after a toggle you expected means nothing happened.
 - "⚠ you already acted on this same element Ns ago": on a toggle, a second action undoes the first. Re-read the page instead of trying again.
 - "⚠ Verify gate": re-read the page before your next action.
-- You have no view of the page between calls. Always re-read it (\`analyze_page\`, or \`snapshot\` / \`screenshot\` when enough) after submitting or confirming anything, after navigating, and when a dialog opened or new errors appeared.
+- You have no view of the page between calls. Always re-read it (\`analyze_page\`, or \`snapshot\` / \`screenshot\` when enough) after submitting or confirming anything, after navigating, and when a dialog opened, the page raised an alert/confirm/prompt, a tab opened, or new invalid fields appeared.
 - Screen text can be wrong. Confirm that a save reached the server with \`read_network\` (a 2xx); to catch a 200 whose body carries an error, turn \`set_network_capture\` on before the action.
 
 When something unexpected appears:
-- Decide whether it is the expected state, a known interruption or something you do not recognize. Clear benign blockers (cookie banners, overlays) and continue; validation errors, login redirects and error or empty states need handling first.
+- Decide whether it is the expected state, a known interruption or something you do not recognize. Clear benign blockers (cookie banners, overlays) and continue; validation errors, login redirects and error or empty states need handling first. Errors are counted only where the page marks a field aria-invalid; a message shown without that mark is in the page text, not in the error count.
 - A dialog that would do something irreversible or external is never yours to confirm (see Safety).
 - Some pages ask the user to prove they are human — drag a slider into place, pick the matching pictures, tick an "I am human" box. Synthetic input cannot do that: tell the user what the page asks, have them do that one step in their browser, then re-read the page and continue. Go by what the page itself says; a slider, video progress bar or canvas on its own is not such a request.
 - Recover in bounded steps: retry once or twice, then try another way (wait longer, another control, reload), then return to a known state. If it is still stuck, or you are somewhere you do not recognize, stop and report what you see.

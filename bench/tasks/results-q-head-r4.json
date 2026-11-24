@@ -1,0 +1,369 @@
+{
+  "label": "q-head-r4",
+  "checkout": "/home/project/wt-query-bench",
+  "commit": "2419a62d7cecba837f02f41acbfea2b525b0f6f5",
+  "dirty": true,
+  "ranAt": "2026-11-24T11:51:27.533Z",
+  "claude": "2.1.327 (Claude Code)",
+  "model": "claude-sonnet-5-5",
+  "maxTurns": 25,
+  "timeoutSec": 300,
+  "budgetUsd": 0.5,
+  "totals": {
+    "tasks": 8,
+    "ok": 7,
+    "okHidden": "5/6",
+    "turns": 77,
+    "toolCalls": 69,
+    "inputTokens": 1960472,
+    "snapshotChars": 21047,
+    "defaultSnapshots": 0,
+    "seconds": 173,
+    "costUsd": 0.6
+  },
+  "results": [
+    {
+      "task": "gh-trending-language",
+      "hidden": true,
+      "ok": true,
+      "reasons": [],
+      "turns": 9,
+      "toolCalls": 8,
+      "byTool": {
+        "navigate": 1,
+        "snapshot": 2,
+        "click": 2,
+        "type_text": 1,
+        "eval": 1,
+        "screenshot": 1
+      },
+      "snapshotViews": {
+        "default": 0,
+        "query": 2,
+        "within": 0,
+        "full": 0,
+        "after": 0,
+        "viewportOnly": 1
+      },
+      "inputTokens": 216025,
+      "usage": {
+        "input": 16,
+        "cacheCreate": 7960,
+        "cacheRead": 208049,
+        "output": 658
+      },
+      "toolResultChars": 3921,
+      "snapshotChars": 2794,
+      "seconds": 22.5,
+      "costUsd": 0.0592569,
+      "stop": "success",
+      "answer": "janhq/jan",
+      "expected": [
+        "janhq/jan"
+      ],
+      "tabUrls": [
+        "https://github.com/trending/rust?since=daily"
+      ],
+      "model": "claude-sonnet-5-5"
+    },
+    {
+      "task": "mdn-sidebar-section",
+      "hidden": true,
+      "ok": false,
+      "reasons": [
+        "bypassed the UI: mcp__bcp__eval {\"code\":\"const a=document.querySelector('a[href$=\\\"/Global_attributes/inputmode\\\"]');a.click();return a.href\"}"
+      ],
+      "turns": 11,
+      "toolCalls": 10,
+      "byTool": {
+        "navigate": 1,
+        "snapshot": 3,
+        "eval": 1,
+        "click": 4,
+        "page_state": 1
+      },
+      "snapshotViews": {
+        "default": 0,
+        "query": 3,
+        "within": 0,
+        "full": 0,
+        "after": 0,
+        "viewportOnly": 0
+      },
+      "inputTokens": 260727,
+      "usage": {
+        "input": 18,
+        "cacheCreate": 7822,
+        "cacheRead": 252887,
+        "output": 825
+      },
+      "toolResultChars": 7959,
+      "snapshotChars": 5214,
+      "seconds": 28.6,
+      "costUsd": 0.06486270000000001,
+      "stop": "success",
+      "answer": "done",
+      "expected": [],
+      "tabUrls": [
+        "https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Global_attributes/inputmode"
+      ],
+      "model": "claude-sonnet-5-5"
+    },
+    {
+      "task": "mdn-language-switch",
+      "hidden": true,
+      "ok": true,
+      "reasons": [],
+      "turns": 8,
+      "toolCalls": 7,
+      "byTool": {
+        "navigate": 1,
+        "snapshot": 3,
+        "click": 2,
+        "page_state": 1
+      },
+      "snapshotViews": {
+        "default": 0,
+        "query": 3,
+        "within": 0,
+        "full": 1,
+        "after": 0,
+        "viewportOnly": 0
+      },
+      "inputTokens": 173533,
+      "usage": {
+        "input": 12,
+        "cacheCreate": 9755,
+        "cacheRead": 163766,
+        "output": 466
+      },
+      "toolResultChars": 10363,
+      "snapshotChars": 4690,
+      "seconds": 16.2,
+      "costUsd": 0.060080600000000005,
+      "stop": "success",
+      "answer": "done",
+      "expected": [],
+      "tabUrls": [
+        "https://developer.mozilla.org/ja/docs/Web/HTML/Reference/Elements/select"
+      ],
+      "model": "claude-sonnet-5-5"
+    },
+    {
+      "task": "wiki-language-menu",
+      "hidden": true,
+      "ok": true,
+      "reasons": [],
+      "turns": 11,
+      "toolCalls": 10,
+      "byTool": {
+        "navigate": 1,
+        "snapshot": 2,
+        "click": 5,
+        "eval": 1,
+        "page_state": 1
+      },
+      "snapshotViews": {
+        "default": 0,
+        "query": 2,
+        "within": 0,
+        "full": 0,
+        "after": 0,
+        "viewportOnly": 0
+      },
+      "inputTokens": 245231,
+      "usage": {
+        "input": 18,
+        "cacheCreate": 5920,
+        "cacheRead": 239293,
+        "output": 823
+      },
+      "toolResultChars": 5254,
+      "snapshotChars": 2013,
+      "seconds": 25.1,
+      "costUsd": 0.055875299999999996,
+      "stop": "success",
+      "answer": "Kuckucksuhr",
+      "expected": [
+        "Kuckucksuhr"
+      ],
+      "tabUrls": [
+        "https://de.wikipedia.org/wiki/Kuckucksuhr"
+      ],
+      "model": "claude-sonnet-5-5"
+    },
+    {
+      "task": "gh-release-assets",
+      "hidden": true,
+      "ok": true,
+      "reasons": [],
+      "turns": 10,
+      "toolCalls": 9,
+      "byTool": {
+        "navigate": 1,
+        "snapshot": 5,
+        "eval": 1,
+        "read_content": 1,
+        "click": 1
+      },
+      "snapshotViews": {
+        "default": 0,
+        "query": 5,
+        "within": 0,
+        "full": 0,
+        "after": 0,
+        "viewportOnly": 0
+      },
+      "inputTokens": 271833,
+      "usage": {
+        "input": 20,
+        "cacheCreate": 6432,
+        "cacheRead": 265381,
+        "output": 865
+      },
+      "toolResultChars": 6601,
+      "snapshotChars": 4076,
+      "seconds": 26.1,
+      "costUsd": 0.060956100000000006,
+      "stop": "success",
+      "answer": "ripgrep-15.2.0-aarch64-apple-darwin.tar.gz",
+      "expected": [
+        "ripgrep-15.2.0-aarch64-apple-darwin.tar.gz"
+      ],
+      "tabUrls": [
+        "https://github.com/BurntSushi/ripgrep/releases"
+      ],
+      "model": "claude-sonnet-5-5"
+    },
+    {
+      "task": "python-docs-version",
+      "hidden": true,
+      "ok": true,
+      "reasons": [],
+      "turns": 5,
+      "toolCalls": 4,
+      "byTool": {
+        "navigate": 1,
+        "snapshot": 1,
+        "select_option": 1,
+        "page_state": 1
+      },
+      "snapshotViews": {
+        "default": 0,
+        "query": 1,
+        "within": 0,
+        "full": 0,
+        "after": 0,
+        "viewportOnly": 0
+      },
+      "inputTokens": 104956,
+      "usage": {
+        "input": 8,
+        "cacheCreate": 5610,
+        "cacheRead": 99338,
+        "output": 347
+      },
+      "toolResultChars": 2282,
+      "snapshotChars": 1047,
+      "seconds": 10.7,
+      "costUsd": 0.035859800000000004,
+      "stop": "success",
+      "answer": "https://docs.python.org/3.12/library/json.html",
+      "expected": [],
+      "tabUrls": [
+        "https://docs.python.org/3.12/library/json.html"
+      ],
+      "model": "claude-sonnet-5-5"
+    },
+    {
+      "task": "wiki-list-value",
+      "hidden": false,
+      "ok": true,
+      "reasons": [],
+      "turns": 18,
+      "toolCalls": 17,
+      "byTool": {
+        "navigate": 2,
+        "eval": 1,
+        "snapshot": 1,
+        "click": 1,
+        "go_back": 2,
+        "list_windows": 1,
+        "scroll": 1,
+        "screenshot": 1,
+        "read_content": 1,
+        "read_content_dump": 6
+      },
+      "snapshotViews": {
+        "default": 0,
+        "query": 1,
+        "within": 0,
+        "full": 0,
+        "after": 0,
+        "viewportOnly": 0
+      },
+      "inputTokens": 558776,
+      "usage": {
+        "input": 34,
+        "cacheCreate": 40320,
+        "cacheRead": 518422,
+        "output": 1772
+      },
+      "toolResultChars": 74646,
+      "snapshotChars": 543,
+      "seconds": 31.6,
+      "costUsd": 0.2309102,
+      "stop": "success",
+      "answer": "397,710",
+      "expected": [
+        "397,710"
+      ],
+      "tabUrls": [
+        "https://en.wikipedia.org/wiki/List_of_countries_and_dependencies_by_population"
+      ],
+      "model": "claude-sonnet-5-5"
+    },
+    {
+      "task": "hn-nth-comments",
+      "hidden": false,
+      "ok": true,
+      "reasons": [],
+      "turns": 5,
+      "toolCalls": 4,
+      "byTool": {
+        "navigate": 1,
+        "snapshot": 1,
+        "click": 1,
+        "page_state": 1
+      },
+      "snapshotViews": {
+        "default": 0,
+        "query": 1,
+        "within": 0,
+        "full": 0,
+        "after": 0,
+        "viewportOnly": 0
+      },
+      "inputTokens": 129391,
+      "usage": {
+        "input": 10,
+        "cacheCreate": 3598,
+        "cacheRead": 125783,
+        "output": 354
+      },
+      "toolResultChars": 2076,
+      "snapshotChars": 670,
+      "seconds": 12,
+      "costUsd": 0.0305303,
+      "stop": "success",
+      "answer": "50614249",
+      "expected": [
+        "50614249"
+      ],
+      "tabUrls": [
+        "https://news.ycombinator.com/item?id=50614249"
+      ],
+      "model": "claude-sonnet-5-5"
+    }
+  ]
+}

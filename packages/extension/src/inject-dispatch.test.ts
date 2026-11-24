@@ -321,3 +321,120 @@ test("每个 DOM 操作都报回它实际操作的标签页 —— 后端据此�
   assert.equal((await h.dispatch(RpcMethod.Click, { ref: "e1" }) as { tabId?: number }).tabId, 1, "不传 tabId：报回当时解析出的活动页");
   assert.equal((await h.dispatch(RpcMethod.Click, { ref: "e1", tabId: 7 }) as { tabId?: number }).tabId, 7, "传了 tabId：报回所传的那个");
 });
+
+test("每一个页面内的动作都装对话框观察并过导航等待，读取都不装 —— 由 RPC_TRAITS 决定，不靠手写清单", async () => {
+  const { DOM_OP, RPC_TRAITS } = await import("@bcp/shared");
+  const inPage = (Object.keys(DOM_OP) as RpcMethod[]);
+  assert.ok(inPage.includes(RpcMethod.DblClick) && inPage.includes(RpcMethod.Paste), "双击、粘贴也在页面内执行");
+  for (const m of inPage) {
+    const h = harness({ domOp: DOM_OP });
+    h.setExec(async (o: { world?: string }) => [{ frameId: 0, result: { value: o.world === "MAIN" ? undefined : { ok: true, elements: [] } } }]);
+    await h.dispatch(m, { ref: "e1", toRef: "e2" });
+    const shimmed = h.execCalls.some((c) => (c as { func?: unknown }).func === "SHIM");
+    const isAction = !RPC_TRAITS[m].readOnly;
+    assert.equal(shimmed, isAction, `${m}: ${isAction ? "动作要" : "读取不"}装对话框观察`);
+    assert.equal(h.listenerCount, 0, `${m}: 导航监听用完即撤`);
+  }
+});
+
+test("会改页面的页面内动作都不能被重发再执行一次", async () => {
+  const { RPC_TRAITS } = await import("@bcp/shared");
+  for (const [m, t] of Object.entries(RPC_TRAITS)) {
+    if (t.domOp && t.mutating) assert.equal(t.unsafeToRepeat, true, `${m} 重发会再执行一次`);
+  }
+});
+
+test("链接点击：注入正常返回、新文档稍后才提交，回执照样报出跳转 —— 以本帧提交为准，不靠 runtime 50ms 时读的地址", async () => {
+  let commitLater: () => void = () => {};
+  const h = harness({ waitTabComplete: async () => commitLater() });
+  commitLater = () => h.commit(1, 0, "https://after/");
+  h.setExec(async (o: { world?: string }) => {
+    if (o.world === "MAIN") return [{ frameId: 0, result: undefined }];
+    h.announce();
+    return [{ frameId: 0, result: { value: { ok: true, delta: { dispatchedTo: "a" } } } }];
+  });
+  const r = (await h.dispatch(RpcMethod.Click, { ref: "e1" })) as { delta?: { urlChanged?: string; dispatchedTo?: string } };
+  assert.equal(r.delta?.urlChanged, "https://after/");
+  assert.equal(r.delta?.dispatchedTo, "a", "页面自己报的事实保留");
+});
+
+test("页面在动作里弹的 alert / confirm 写进回执：说了什么、怎么应答的", async () => {
+  const h = harness();
+  const dialogs = [{ kind: "confirm", message: "确定删除?", answered: "Cancel" }, { kind: "alert", message: "保存失败" }];
+  h.setExec(async (o: { world?: string; func?: unknown }) =>
+    o.func === "RESTORE" ? [{ frameId: 0, result: dialogs }] : [{ frameId: 0, result: o.world === "MAIN" ? undefined : { value: { ok: true } } }],
+  );
+  const r = (await h.dispatch(RpcMethod.Click, { ref: "e1" })) as { delta?: { pageDialogs?: unknown } };
+  assert.deepEqual(r.delta?.pageDialogs, dialogs);
+});
+
+test("动作里由本标签页打开的新标签页写进回执；别的标签页打开的不算", async () => {
+  const listeners = new Set<(t: { id?: number; openerTabId?: number; pendingUrl?: string }) => void>();
+  const h = harness({ tabCreated: { addListener: (l) => void listeners.add(l), removeListener: (l) => void listeners.delete(l) } });
+  h.setExec(async (o: { world?: string }) => {
+    if (o.world === "MAIN") return [{ frameId: 0, result: undefined }];
+    listeners.forEach((l) => { l({ id: 7, openerTabId: 1, pendingUrl: "https://new/" }); l({ id: 8, openerTabId: 99 }); });
+    return [{ frameId: 0, result: { value: { ok: true } } }];
+  });
+  const r = (await h.dispatch(RpcMethod.Click, { ref: "e1" })) as { delta?: { tabsOpened?: unknown } };
+  assert.deepEqual(r.delta?.tabsOpened, [{ tabId: 7, url: "https://new/" }]);
+  assert.equal(listeners.size, 0, "监听用完即撤");
+});
+
+test("整页读取覆盖每一帧：iframe 里显示的报错也在验证读到的正文里", async () => {
+  const h = harness();
+  h.setExec(async () => [
+    { frameId: 0, result: { value: { url: "https://top/", title: "t", text: "表单", offset: 0, totalChars: 2, truncated: false } } },
+    { frameId: 9, result: { value: { url: "https://pay/", title: "", text: "支付失败", offset: 0, totalChars: 4, truncated: false } } },
+  ]);
+  const r = (await h.dispatch(RpcMethod.ReadContent, { full: true })) as { text: string; totalChars: number };
+  assert.equal(r.text, "表单\n\n[frame https://pay/]\n支付失败");
+  assert.equal(r.totalChars, r.text.length);
+  assert.equal((h.execCalls[0] as { target: { allFrames?: boolean } }).target.allFrames, true);
+});
+
+test("query 的文字出现位置按帧合并：次数相加，子帧样本里的 ref 带帧前缀", async () => {
+  const h = harness();
+  h.setExec(async () => [
+    { frameId: 0, result: { value: { url: "u", title: "t", moreBelow: false, elements: [], docId: "a", textHits: { count: 1, samples: [{ text: "Deutsch", ref: "e64" }] } } } },
+    { frameId: 7, result: { value: { url: "f", title: "", moreBelow: false, elements: [], docId: "b", textHits: { count: 2, samples: [{ text: "Deutsch", ref: "e1" }, { text: "Deutsch x" }] } } } },
+  ]);
+  const r = (await h.dispatch(RpcMethod.Snapshot, { query: "deutsch" })) as { textHits?: { count: number; samples: { ref?: string }[] } };
+  assert.equal(r.textHits?.count, 3);
+  assert.deepEqual(r.textHits?.samples.map((s) => s.ref), ["e64", "7_e1", undefined]);
+});
+
+test("快照与整页读取附上读取那一刻还开着的请求；没有开着的就不附", async () => {
+  let open = { count: 1, oldestMs: 4000, oldestUrl: "https://x/api/search" };
+  const h = harness({ openRequests: () => open });
+  h.setExec(async () => [{ frameId: 0, result: { value: { url: "u", title: "t", text: "", offset: 0, totalChars: 0, truncated: false, moreBelow: false, elements: [] } } }]);
+  assert.deepEqual(((await h.dispatch(RpcMethod.Snapshot, {})) as { pendingRequests?: unknown }).pendingRequests, open);
+  assert.deepEqual(((await h.dispatch(RpcMethod.ReadContent, { full: true })) as { pendingRequests?: unknown }).pendingRequests, open);
+  open = { count: 0, oldestMs: 0, oldestUrl: "" };
+  assert.equal(((await h.dispatch(RpcMethod.Snapshot, {})) as { pendingRequests?: unknown }).pendingRequests, undefined);
+});
+
+test("动作返回之后、导航等待期间页面才打开的标签页不算这次动作的（与导航同一个归因口径）", async () => {
+  const listeners = new Set<(t: { id?: number; openerTabId?: number; pendingUrl?: string }) => void>();
+  const h = harness({
+    tabCreated: { addListener: (l) => void listeners.add(l), removeListener: (l) => void listeners.delete(l) },
+    waitTabComplete: async () => listeners.forEach((l) => l({ id: 9, openerTabId: 1, pendingUrl: "https://later/" })),
+  });
+  h.setTabStatus("loading");
+  h.setExec(async (o: { world?: string }) => [{ frameId: 0, result: o.world === "MAIN" ? undefined : { value: { ok: true } } }]);
+  const r = (await h.dispatch(RpcMethod.Click, { ref: "e1" })) as { delta?: { tabsOpened?: unknown } };
+  assert.equal(r.delta?.tabsOpened, undefined);
+});
+
+test("对话框垫片的还原立即注入、有时限：新文档迟迟加载不完，动作的回执也不被它卡住", async () => {
+  const h = harness();
+  h.setExec(async (o: { func?: unknown; world?: string }) =>
+    o.func === "RESTORE" ? new Promise<never>(() => {}) : [{ frameId: 0, result: o.world === "MAIN" ? undefined : { value: { ok: true } } }],
+  );
+  const t0 = Date.now();
+  const r = (await h.dispatch(RpcMethod.Click, { ref: "e1" })) as { ok?: boolean };
+  assert.ok(Date.now() - t0 < 5000, "有时限");
+  assert.ok(r);
+  const restore = h.execCalls.find((c) => (c as { func?: unknown }).func === "RESTORE") as { injectImmediately?: boolean };
+  assert.equal(restore.injectImmediately, true, "不等新文档加载完再注入");
+});

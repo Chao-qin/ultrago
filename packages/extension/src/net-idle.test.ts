@@ -154,3 +154,16 @@ test("一直忙的页面在超时处放行，不会被无限阻塞", async () =>
   assert.ok(h.now - t0 >= 1000, `应推进到 1000ms 超时后放行，实际 ${h.now - t0}ms`);
   assert.equal(h.tracker.inflightCount(7), 1, "放行不等于页面已就绪 —— 只是不再等了");
 });
+
+test("等待不再算开太久的请求，但「还开着的请求」照实报出 —— 慢搜索和长轮询看起来一样，由读者凭地址判断；挂死的不报", () => {
+  const h = harness({ streamAfterMs: 2500, maxAgeMs: 60_000 });
+  h.watch(1);
+  h.tracker.onRequestStart(req(1, "slow", "xmlhttprequest", "https://x/api/search?q=1"));
+  h.advance(4000);
+  assert.equal(h.tracker.inflightCount(1), 0, "等待把它当成长连接，不再等它");
+  assert.deepEqual(h.tracker.openRequests(1), { count: 1, oldestMs: 4000, oldestUrl: "https://x/api/search?q=1" });
+  h.advance(60_000);
+  h.tracker.inflightCount(1);
+  assert.deepEqual(h.tracker.openRequests(1)?.count, 0, "挂死的已被遗忘，不报");
+  assert.equal(h.tracker.openRequests(2), null, "没看着的标签页：未知");
+});

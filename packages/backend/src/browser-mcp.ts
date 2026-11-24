@@ -5,7 +5,7 @@ import { resolve, dirname, relative, isAbsolute } from "node:path";
 import { tmpdir } from "node:os";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { LocalMethod, RpcMethod, browserLabel, isAgentHiddenEvent, isTopologyEvent, type ActionDelta, type BrowserEvent, type BrowserStatus, type BrowserTarget, type PageState, type ParamMap, type Playbook, type PlanStep, type RpcContracts, type SnapshotElement, type StepVerify, type TabInfo } from "@bcp/shared";
+import { LocalMethod, RPC_TRAITS, RpcMethod, browserLabel, isAgentHiddenEvent, isTopologyEvent, type ActionDelta, type BrowserEvent, type BrowserStatus, type BrowserTarget, type PageState, type ParamMap, type Playbook, type PlanStep, type RpcContracts, type SnapshotElement, type StepVerify, type TabInfo } from "@bcp/shared";
 import { MCP_TOOL_INSTRUCTIONS, validateBookV2, EVAL_TIMEOUT_MS } from "@bcp/shared";
 import { config, domainAllowed, EVAL_DISABLED } from "./config.js";
 import { PlanRunner, type RecordingNote } from "./orchestrator.js";
@@ -25,7 +25,7 @@ import type { BrowserSetupService } from "./browser-setup-service.js";
 import type { BrowserCall, BrowserLifecycle, BrowserRegistry, RawBrowserCall, ReadSnapshot } from "./browser-mcp-types.js";
 export type { BrowserCall, BrowserLifecycle, BrowserRegistry, RawBrowserCall } from "./browser-mcp-types.js";
 import { BROWSER_INSTRUCTIONS } from "./browser-mcp-instructions.js";
-import { deltaGate, describeRecording, describeVerify, fail, gateNote, renderDelta, renderHistoryNav, renderPageState, renderSnapshot, renderShownDelta, renderSnapshotView, renderTabsByWindow, text } from "./browser-mcp-render.js";
+import { deltaGate, mergeDeltas, renderPendingRequests, describeRecording, describeVerify, fail, gateNote, renderDelta, renderHistoryNav, renderPageState, renderSnapshot, renderShownDelta, renderSnapshotView, renderTabsByWindow, text } from "./browser-mcp-render.js";
 import { looseBool, stepShape, tabId, verifyShape } from "./browser-mcp-shapes.js";
 import { registerPlanTools } from "./browser-mcp-tools-plan.js";
 import { registerDomTools } from "./browser-mcp-tools-dom.js";
@@ -64,10 +64,36 @@ export function createBrowserMcpServer(
   // tool calls that overlap in one session never read each other's.
   const inbox = new EventInbox(events);
   const toolCall = new AsyncLocalStorage<{ window: CallWindow; actedTab?: number }>();
+  // One session's tool calls run in the order they arrived. A client sends several calls in one turn (click +
+  // snapshot, navigate + snapshot, click + click) and the transport delivers them concurrently: the snapshot read
+  // the page before the click landed, and two clicks interleaved — with a claimed tab or an explicit tabId nothing
+  // else ordered them. Every call that is not declared read-only runs after the previous one finished; a read runs
+  // after every such call that arrived before it, so it sees what they did. An action does not wait for reads that
+  // arrived earlier, so "wait_for_event, then click what fires it" in one turn does not block on itself.
+  // A call the client gave up on (timed out, cancelled) while it waited its turn is not run when its turn comes: the
+  // agent was told it failed, and would do it again. A tool that cancels work in progress cannot wait behind that
+  // work, so it runs at once.
+  let lastAction: Promise<unknown> = Promise.resolve();
+  const CANCELS_WORK = new Set(["plan_abort"]);
+  const inArrivalOrder = (readOnly: boolean, signal: AbortSignal | undefined, run: () => unknown): Promise<unknown> => {
+    const p = lastAction.then(() =>
+      signal?.aborted
+        ? { isError: true, content: [{ type: "text" as const, text: "Cancelled before it ran — nothing was done." }] }
+        : run(),
+    );
+    if (!readOnly) lastAction = p.catch(() => {});
+    return p;
+  };
   const registerTool = server.registerTool.bind(server);
-  server.registerTool = ((name: string, toolConfig: unknown, cb: (...args: unknown[]) => unknown) =>
-    registerTool(name, toolConfig as never, ((...args: unknown[]) =>
-      toolCall.run({ window: inbox.beginCall() }, () => cb(...args))) as never)) as typeof server.registerTool;
+  server.registerTool = ((name: string, toolConfig: unknown, cb: (...args: unknown[]) => unknown) => {
+    const readOnly = (toolConfig as { annotations?: { readOnlyHint?: boolean } } | undefined)?.annotations?.readOnlyHint === true;
+    return registerTool(name, toolConfig as never, ((...args: unknown[]) => {
+      const go = () => toolCall.run({ window: inbox.beginCall() }, () => cb(...args));
+      if (CANCELS_WORK.has(name)) return go();
+      const extra = args[args.length - 1] as { signal?: AbortSignal } | undefined;
+      return inArrivalOrder(readOnly, extra?.signal, go);
+    }) as never);
+  }) as typeof server.registerTool;
 
   // ── Per-MCP-session routing state (this closure IS the session) ──────────
   /** Target this session drives; null = follow the backend's global default. */
@@ -84,6 +110,13 @@ export function createBrowserMcpServer(
   /** Stable per-session key so page_state's change baseline is observer-scoped.
    * Process-prefixed so a backend restart never reads a stale in-page baseline. */
   const deltaKey = `${PROCESS_KEY}.s${++sessionSeq}`;
+
+  /** What this session last perceived: the browser and tab of its latest delivered snapshot, and the documents each
+   *  tab's frames held at its latest delivered read. Refs are numbered per document and only mean something where
+   *  they were read, so an action by ref goes to the tab it was read in — not to whatever tab is active by then —
+   *  and only while that tab still holds the same document. */
+  let lastRead: { instanceId?: string; tabId: number } | null = null;
+  const readDocs = new Map<string, Record<string, string>>();
 
   /** The target this session's calls actually land on right now. */
   const resolvedTarget = (): BrowserTarget | null => sessionTarget ?? browsers?.current() ?? null;
@@ -157,6 +190,29 @@ export function createBrowserMcpServer(
     const claimTab = claimFor(resolved);
     if (!resolved) {
       throw new Error("no browser target — call launch_browser / use_browser first (or wait for one to connect)");
+    }
+    // The session's browser changed under it (the claimed browser went offline and the default moved on): a call
+    // that would have gone to the claimed tab must not land on another browser's active tab instead.
+    if (claimed && claimed.target && claimed.target.instanceId !== resolved.instanceId && TAB_SCOPED.has(method) && p?.tabId == null) {
+      throw new Error(
+        `this session's claimed tab ${claimed.tabId} is in browser "${browserLabel(claimed.target)}", but calls now go to "${browserLabel(resolved)}" (the claimed browser went offline or another became the default). Nothing was done. use_browser to go back to it, or claim_tab / new_tab here.`,
+      );
+    }
+    // An action by [ref] acts where that ref was read.
+    const ref = typeof p?.ref === "string" ? p.ref : undefined;
+    if (ref && RPC_TRAITS[method].domOp && !RPC_TRAITS[method].readOnly) {
+      if (p.tabId == null && claimTab == null && lastRead) {
+        if (lastRead.instanceId !== resolved.instanceId)
+          throw new Error(
+            `[${ref}] was read in another browser than the one this session now drives ("${browserLabel(resolved)}"). Nothing was done. Take a snapshot here for its refs, or use_browser to go back.`,
+          );
+        p = { ...p, tabId: lastRead.tabId };
+      }
+      const docs = readDocs.get(`${resolved.instanceId}:${p.tabId ?? claimTab}`);
+      const frame = /^(\d+)_/.exec(ref)?.[1] ?? "0";
+      // A caller that read the ref itself (pick_option's own snapshot) names its document; the session's record is
+      // only for refs the agent read.
+      if (docs?.[frame] && (p as { expectDoc?: string }).expectDoc === undefined) p = { ...p, expectDoc: docs[frame] };
     }
     if (claimTab != null && TAB_SCOPED.has(method) && p?.tabId == null) {
       p = { ...p, tabId: claimTab };
@@ -252,7 +308,7 @@ export function createBrowserMcpServer(
             dataBase64s: sources.map((source) => source.dataBase64),
           } as never, route);
           files.push(...uploaded.files);
-          delta = uploaded.delta ?? delta;
+          delta = mergeDeltas(delta, uploaded.delta);
         } else {
           for (const source of sources) {
             const uploaded = await rawCall(RpcMethod.Upload, {
@@ -262,7 +318,7 @@ export function createBrowserMcpServer(
               dataBase64: source.dataBase64,
             } as never, route);
             files.push(...uploaded.files);
-            delta = uploaded.delta ?? delta;
+            delta = mergeDeltas(delta, uploaded.delta);
           }
         }
       }
@@ -384,18 +440,24 @@ export function createBrowserMcpServer(
   const shownLedger = new ShownLedger();
   const readSnapshot: ReadSnapshot = async (tabId, view) => {
     const target = resolvedTarget() ?? undefined;
-    const r = await call(RpcMethod.Snapshot, { tabId }, target);
-    const rendered = renderSnapshotView(r.elements, view);
+    const r = await call(RpcMethod.Snapshot, view.query?.trim() ? { tabId, query: view.query } : { tabId }, target);
+    const rendered = renderSnapshotView(r.elements, view, r.textHits);
     // A `full` read of the whole page starts the record over: on its first page only, or paging through it would
     // keep just the last; and not when narrowed, or the record would shrink to what one search matched.
     const reset = !!view.full && !view.after && !view.query && !view.within && !view.viewportOnly;
     const seen = shownLedger.read(`${target?.instanceId}:${r.tabId}`, r.docs, r.elements, rendered.shown, { reset });
-    return { ...r, text: rendered.text + renderShownDelta(seen.diff, { continuation: rendered.continued }), commit: seen.commit };
+    const commit = (): void => {
+      seen.commit();
+      lastRead = { instanceId: target?.instanceId, tabId: r.tabId };
+      if (r.docs) readDocs.set(`${target?.instanceId}:${r.tabId}`, r.docs);
+    };
+    return { ...r, text: rendered.text + renderShownDelta(seen.diff, { continuation: rendered.continued }) + renderPendingRequests(r.pendingRequests), commit };
   };
   registerDomTools({ server, call, deltaKey, drainEvents, readDumps, readSnapshot });
   registerCaptureTools({ server, call, deltaKey, drainEvents, captureWithLease, readDumps, readSnapshot });
   registerIoTools({
     server, call, events, evLine, inbox, sessionSees, callWindow: () => toolCall.getStore()?.window,
+    lastReadTab: () => (lastRead && lastRead.instanceId === resolvedTarget()?.instanceId ? lastRead.tabId : undefined),
     recordAsOne: (action, run) => (planRunner ? planRunner.asOneAction(action, run) : run()),
   });
 
@@ -410,6 +472,8 @@ export function createBrowserMcpServer(
   /** Frozen parameter snapshots for paused auto-playback. A resume must not
    * re-render dynamic defaults or accept a second params map. */
   const playbackParams = new Map<string, ParamMap>();
+  /** Per plan: the tab its last network read was taken in (see networkBodies below). */
+  const netTabOfPlan = new Map<string, number>();
   const routePlaybackEvidence = (planId: string, method: RpcMethod, params: Record<string, unknown>, page?: string) => {
     const context = playbackContexts.get(planId);
     return context ? context.route(method, params, page) : params;
@@ -417,7 +481,11 @@ export function createBrowserMcpServer(
   const runner = new PlanRunner({
     pageState: (planId, page) => call(RpcMethod.PageState, routePlaybackEvidence(planId, RpcMethod.PageState, { deltaKey: `${deltaKey}.rnr` }, page)),
     readContent: (planId, page) => call(RpcMethod.ReadContent, routePlaybackEvidence(planId, RpcMethod.ReadContent, { full: true }, page)),
-    readNetwork: (planId, page) => call(RpcMethod.ReadNetwork, routePlaybackEvidence(planId, RpcMethod.ReadNetwork, {}, page)),
+    readNetwork: async (planId, page) => {
+      const r = await call(RpcMethod.ReadNetwork, routePlaybackEvidence(planId, RpcMethod.ReadNetwork, {}, page));
+      netTabOfPlan.set(planId, r.tabId);
+      return r;
+    },
     snapshot: (planId, page) => call(RpcMethod.Snapshot, routePlaybackEvidence(planId, RpcMethod.Snapshot, {}, page)),
     evalJs: (planId, code, readOnly, page) => {
       // Gate the runner's own eval on policy — call() reaches RpcMethod.Eval
@@ -427,9 +495,14 @@ export function createBrowserMcpServer(
     },
     setNetworkCapture: (planId, enabled, page) => call(RpcMethod.SetNetworkCapture, routePlaybackEvidence(planId, RpcMethod.SetNetworkCapture, { enabled }, page) as unknown as RpcContracts[typeof RpcMethod.SetNetworkCapture]["params"]).then(() => undefined),
     networkBodies: (planId, sinceSeq, page) => {
-      const { events: evs, maxSeq } = events.since(sinceSeq, playbackContexts.get(planId)?.currentTabId(page));
+      // The bodies of the tab whose requests the status check just read, in this session's browser — one tab for
+      // both halves of the check. With no tab the store hands back every tab's, every browser's and every session's
+      // bodies: another session's success then confirmed this one's save.
+      const tab = playbackContexts.get(planId)?.currentTabId(page) ?? netTabOfPlan.get(planId);
+      const { events: evs, maxSeq } = events.since(sinceSeq, tab);
+      const sees = sessionSees();
       const bodies = evs
-        .filter((e) => e.kind === "network_body")
+        .filter((e) => e.kind === "network_body" && sees(e))
         .map((e) => {
           const d = (e.detail ?? {}) as { url?: string; status?: number; body?: string };
           return { url: String(d.url ?? ""), status: Number(d.status ?? 0), body: String(d.body ?? "") };
